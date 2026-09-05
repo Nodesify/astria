@@ -1,6 +1,6 @@
 [package]
 name = "graphify-semantic"
-version = "0.6.1"
+version = "0.8.0"
 edition = "2021"
 
 [dependencies]

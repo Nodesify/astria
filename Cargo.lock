@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-analyze"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-core",
  "graphify-paths",
@@ -779,7 +779,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-build"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-core",
  "graphify-extract",
@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-cluster"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-core",
  "petgraph",
@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-core"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "petgraph",
  "rusqlite",
@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-detect"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-core",
  "graphify-paths",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-embed"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "fastembed",
  "graphify-core",
@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-extract"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-core",
  "graphify-paths",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-ingest"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-core",
  "serde",
@@ -884,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-mcp"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-analyze",
  "graphify-core",
@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-napi"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-analyze",
  "graphify-build",
@@ -926,14 +926,14 @@ dependencies = [
 
 [[package]]
 name = "graphify-paths"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "graphify-pdf"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-core",
  "pdf-extract",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-query"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-core",
  "graphify-paths",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-report"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "graphify-analyze",
  "graphify-core",
@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "graphify-semantic"
-version = "0.6.1"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "graphify-core",
