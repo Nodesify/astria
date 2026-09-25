@@ -473,7 +473,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
             let type_field_node = node.child_by_field_name("type");
             let name_node = node
                 .child_by_field_name(state.cfg.name_field)
-                .or_else(|| type_field_node.clone());
+                .or(type_field_node);
             let name_node = match name_node {
                 Some(n) => Some(n),
                 None if !state.cfg.class_call_names.is_empty() => second_child(node),
