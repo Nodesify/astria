@@ -47,8 +47,13 @@ export const PROJECT_MD_SECTION = `## graphify
 
 This project has an optional nodesify-graphify knowledge graph at .graphify/.
 The graph is maintained automatically after edits when the platform supports PostToolUse hooks.
-Use /graphify when you want graph-backed architecture lookup, mapping, or export; ordinary file search remains supported.`;
+Use /graphify when you want graph-backed architecture lookup, mapping, or export; ordinary file search remains supported.
 
+Always-on behaviors:
+1. Before running grep/ripgrep to locate code, try nodesify-graphify query first --
+   it answers with file:line provenance in one call against the already-built graph.
+2. After modifying code, run nodesify-graphify update . (AST-only, no API cost) so the
+   graph stays fresh; queries then report accurate staleness metadata.`;
 export const SKILL_REGISTRATION = `
 # graphify
 - **graphify** (\`~/.claude/skills/graphify/SKILL.md\`) - any input to knowledge graph. Trigger: \`/graphify\`

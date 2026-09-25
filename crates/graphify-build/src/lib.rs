@@ -1,7 +1,9 @@
 // graphify-build: merge extractions into SQLite graph
 
 pub mod dedup;
+pub mod hyperedges;
 pub mod minhash;
+pub mod validate;
 
 use graphify_core::Result;
 use graphify_extract::Extraction;
@@ -16,6 +18,9 @@ pub struct BuildResult {
 }
 
 pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult> {
+    // Fail loud on corrupted extractions before anything touches the DB.
+    validate::assert_valid(extractions)?;
+
     let mut nodes_added = 0;
     let mut edges_added = 0;
     let mut duplicates_merged = 0;
@@ -61,7 +66,8 @@ pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult>
 
             let file_type = match node.node_type.as_str() {
                 "rationale" => "rationale",
-                "concept" | "entity" | "pattern" | "module" | "reference" => {
+                "concept" | "entity" | "pattern" | "module" | "reference" | "package"
+                | "mcp_config" | "mcp_server" | "mcp_command" | "mcp_package" | "env_var" => {
                     node.node_type.as_str()
                 }
                 _ => {

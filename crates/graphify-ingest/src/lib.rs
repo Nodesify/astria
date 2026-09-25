@@ -3,6 +3,9 @@
 // webpages → annotated markdown, arXiv → abstract paper notes,
 // tweets → oEmbed text, images/PDFs → binary downloads.
 
+pub mod postgres;
+pub mod scip;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 graphify-core = { workspace = true }
+graphify-build = { workspace = true }
 graphify-paths = { workspace = true }
 graphify-analyze = { workspace = true }
 rusqlite = { workspace = true }

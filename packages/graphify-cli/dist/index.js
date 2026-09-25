@@ -16,6 +16,10 @@ const tree_1 = require("./commands/tree");
 const wiki_1 = require("./commands/wiki");
 const prs_1 = require("./commands/prs");
 const add_1 = require("./commands/add");
+const diagnose_1 = require("./commands/diagnose");
+const feedback_1 = require("./commands/feedback");
+const global_1 = require("./commands/global");
+const hook_guard_1 = require("./commands/hook-guard");
 const update_1 = require("./commands/update");
 const watch_1 = require("./commands/watch");
 const cluster_1 = require("./commands/cluster");
@@ -40,7 +44,9 @@ program
     .option('--model <name>', 'Semantic LLM model name (backend-specific)')
     .option('--wiki', 'Also export a markdown wiki to .graphify/wiki')
     .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
-    .action(run_1.runCommand);
+    .option('--global', 'After building, merge this repo into the cross-repo global graph')
+    .option('--as <tag>', 'Repo tag for --global (defaults to the directory name)')
+    .action((path, opts) => (0, run_1.runCommand)(path, { ...opts, global: opts.global, as: opts.as }));
 program
     .command('update')
     .description('Run incremental AST-only rebuild')
@@ -165,10 +171,12 @@ program
 program
     .command('add')
     .description('Fetch a URL (arXiv paper, tweet, webpage, image, PDF) into ./raw and update the graph')
-    .argument('<url>', 'URL to fetch')
+    .argument('[url]', 'URL to fetch (required unless --scip/--postgres is given)')
     .option('--graph <path>', 'Path to project root', '.')
     .option('--author <name>', 'Author recorded in the saved metadata')
     .option('--contributor <name>', 'Contributor recorded in the saved metadata')
+    .option('--scip <file>', 'Ingest a simplified SCIP JSON index instead of fetching a URL')
+    .option('--postgres <dsn>', 'Introspect a live PostgreSQL schema (requires psql on PATH) instead of fetching a URL')
     .action(add_1.addCommand);
 program
     .command('status')
@@ -177,6 +185,60 @@ program
     .action(status_1.statusCommand);
 (0, install_1.registerInstallCommand)(program);
 (0, hook_1.registerHookCommand)(program);
+program
+    .command('diagnose')
+    .description('Read-only graph health report: dangling edges, self-loops, duplicates, stubs')
+    .option('--graph <path>', 'Path to project root', '.')
+    .option('--json', 'Machine-readable output')
+    .action(diagnose_1.diagnoseCommand);
+program
+    .command('save-result')
+    .description('Save a Q/A pair into the graph memory for future runs')
+    .argument('<question>', 'The question that was asked')
+    .option('--graph <path>', 'Path to project root', '.')
+    .option('--answer <text>', 'The answer to record')
+    .option('--answer-file <path>', 'Read the answer from a file')
+    .option('--outcome <kind>', 'useful | dead_end | corrected')
+    .option('--correction <text>', 'Corrections to the recorded answer')
+    .option('--nodes <ids>', 'Comma-separated source node ids this answer cites')
+    .action(feedback_1.saveResultCommand);
+program
+    .command('reflect')
+    .description('Aggregate memory outcomes into .graphify/reflections/LESSONS.md')
+    .option('--graph <path>', 'Path to project root', '.')
+    .action(feedback_1.reflectCommand);
+const globalCmd = program
+    .command('global')
+    .description('Cross-repo global graph: merge many repo graphs into one queryable store');
+globalCmd
+    .command('add')
+    .description('Merge a repo graph into the global store (idempotent by tag)')
+    .argument('<path>', 'Repo root with a .graphify directory')
+    .option('--as <tag>', 'Repo tag (defaults to the directory name)')
+    .action(global_1.globalAddCommand);
+globalCmd
+    .command('remove')
+    .description('Remove a repo from the global graph')
+    .argument('<tag>', 'Repo tag')
+    .action(global_1.globalRemoveCommand);
+globalCmd
+    .command('list')
+    .description('List repos registered in the global graph')
+    .action(() => (0, global_1.globalListCommand)());
+globalCmd
+    .command('path')
+    .description('Shortest path across repos in the global graph')
+    .argument('<source>', 'Source node id or unique label')
+    .argument('<target>', 'Target node id or unique label')
+    .action(global_1.globalPathCommand);
+program
+    .command('hook-guard')
+    .description('Editor PreToolUse guard (installed into .claude/settings.json) — internal use')
+    .argument('<mode>', 'search | read | gemini')
+    .allowUnknownOption(true)
+    .action((mode) => {
+    (0, hook_guard_1.hookGuard)(mode, process.argv.slice(4));
+});
 if (require.main === module) {
     program.parse();
 }

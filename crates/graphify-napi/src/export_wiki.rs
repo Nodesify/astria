@@ -545,7 +545,12 @@ fn god_node_article(wiki: &Wiki, node: &NodeAnalysis) -> String {
     lines.join("\n")
 }
 
-fn index_md(wiki: &Wiki, member_counts: &HashMap<i64, usize>, total_edges: usize) -> String {
+fn index_md(
+    wiki: &Wiki,
+    member_counts: &HashMap<i64, usize>,
+    total_edges: usize,
+    hyperedges: &[graphify_build::hyperedges::HyperEdge],
+) -> String {
     let total_nodes = wiki.nodes.len();
     let mut lines: Vec<String> = vec![
         "# Knowledge Graph Index".into(),
@@ -596,6 +601,22 @@ fn index_md(wiki: &Wiki, member_counts: &HashMap<i64, usize>, total_edges: usize
         lines.push(String::new());
     }
 
+    if !hyperedges.is_empty() {
+        lines.push("## Hyperedges".into());
+        lines.push("(group relationships — N-ary, not pairwise)".into());
+        lines.push(String::new());
+        for h in hyperedges.iter().take(MAX_SURPRISING_INDEX) {
+            lines.push(format!(
+                "- **{}** — {} members [{}] `{}`",
+                h.label,
+                h.nodes.len(),
+                h.confidence,
+                h.id
+            ));
+        }
+        lines.push(String::new());
+    }
+
     if !wiki.surprising.is_empty() {
         lines.push("## Surprising Connections".into());
         lines.push("(cross-community edges ranked by novelty)".into());
@@ -630,6 +651,7 @@ pub fn export_wiki(
     root: Option<&Path>,
 ) -> Result<usize> {
     let wiki = Wiki::load(db, root)?;
+    let hyperedges = graphify_build::hyperedges::load_all(db).unwrap_or_default();
     let max_key_nodes = max_key_nodes.max(1);
 
     let communities_dir = out_dir.join("communities");
@@ -678,7 +700,7 @@ pub fn export_wiki(
             });
     std::fs::write(
         out_dir.join("index.md"),
-        index_md(&wiki, &member_counts, wiki.edges.len()),
+        index_md(&wiki, &member_counts, wiki.edges.len(), &hyperedges),
     )?;
 
     Ok(count)
