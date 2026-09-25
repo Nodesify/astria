@@ -157,7 +157,13 @@ jobs:
         run: |
           unset NODE_AUTH_TOKEN
           for dir in packages/astria-cli/npm/*/; do
-            echo "Publishing $(node -p "require('./$dir/package.json').name")..."
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$version" version > /dev/null 2>&1; then
+              echo "$name@$version already on npm — skipping"
+              continue
+            fi
+            echo "Publishing $name..."
             pushd "$dir"
             rm -f .npmrc "$HOME/.npmrc"
             npm publish --ignore-scripts --access public --provenance 2>publish.log || {
@@ -179,15 +185,21 @@ jobs:
         run: |
           unset NODE_AUTH_TOKEN
           cd packages/astria-cli
-          rm -f .npmrc "$HOME/.npmrc"
-          npm publish --ignore-scripts --access public --provenance 2>publish.log || {
-            if grep -q "previously published" publish.log; then
-              echo "already published — skipping"
-            else
-              cat publish.log
-              exit 1
-            fi
-          }
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version > /dev/null 2>&1; then
+            echo "$name@$version already on npm — skipping"
+          else
+            rm -f .npmrc "$HOME/.npmrc"
+            npm publish --ignore-scripts --access public --provenance 2>publish.log || {
+              if grep -q "previously published" publish.log; then
+                echo "already published — skipping"
+              else
+                cat publish.log
+                exit 1
+              fi
+            }
+          fi
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
