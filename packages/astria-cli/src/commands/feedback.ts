@@ -35,7 +35,7 @@ export async function saveResultCommand(
     );
     console.log(`Memory saved: ${saved.memoryPath}`);
     console.log(`Graph node: ${saved.nodeId}`);
-    console.log('Run `nodesify-graphify update .` to re-embed and re-cluster.');
+    console.log('Run `astria update .` to re-embed and re-cluster.');
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);
     process.exitCode = 1;

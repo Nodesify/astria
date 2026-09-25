@@ -5,7 +5,7 @@ import { PLATFORM_NAMES } from '../install/platforms';
 export function registerInstallCommand(program: Command) {
   program
     .command('install')
-    .description('Install nodesify-graphify skill for an AI platform')
+    .description('Install astria skill for an AI platform')
     .option('--platform <name>', `Platform: ${PLATFORM_NAMES.join(', ')}`, 'claude')
     .action(async (opts: { platform: string }) => {
       try {
@@ -21,7 +21,7 @@ export function registerInstallCommand(program: Command) {
 
   program
     .command('uninstall')
-    .description('Uninstall nodesify-graphify skill for an AI platform')
+    .description('Uninstall astria skill for an AI platform')
     .option('--platform <name>', `Platform: ${PLATFORM_NAMES.join(', ')}`, 'claude')
     .action(async (opts: { platform: string }) => {
       try {

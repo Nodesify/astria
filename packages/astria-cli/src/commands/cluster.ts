@@ -6,7 +6,7 @@ export async function clusterCommand(path: string) {
     console.log(`Running cluster + analyze on: ${path}`);
     const result = clusterOnly(path);
     console.log(`Communities: ${result.communities}`);
-    console.log(`Report updated at: ${pathMod.join(path, '.graphify', 'graph_report.md')}`);
+    console.log(`Report updated at: ${pathMod.join(path, '.astria', 'graph_report.md')}`);
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);
     process.exitCode = 1;
