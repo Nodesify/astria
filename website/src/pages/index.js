@@ -7,7 +7,7 @@ import Heading from '@theme/Heading';
 import styles from './index.module.css';
 
 const Stats = [
-  { value: '73–79×', label: 'fewer tokens per query, measured' },
+  { value: '50–110×', label: 'fewer tokens per query, measured' },
   { value: '21', label: 'languages via tree-sitter' },
   { value: '0', label: 'API keys required' },
   { value: '100%', label: 'local — your code never leaves' },
@@ -175,6 +175,11 @@ function StatsBand() {
               <div className={styles.statLabel}>{s.label}</div>
             </div>
           ))}
+        </div>
+        <div className={styles.statsFoot}>
+          <Link to="/docs/benchmarks">
+            The numbers, the methodology, and a head-to-head vs the original Graphify →
+          </Link>
         </div>
       </div>
     </section>

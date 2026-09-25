@@ -246,6 +246,21 @@
   color: var(--ifm-color-emphasis-700);
 }
 
+.statsFoot {
+  margin-top: 1.6rem;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.statsFoot a {
+  color: var(--ifm-color-primary-dark);
+  font-weight: 600;
+}
+
+[data-theme='dark'] .statsFoot a {
+  color: var(--ifm-color-primary-light);
+}
+
 /* ============ Features ============ */
 
 .features {

@@ -2,7 +2,7 @@
 
 Understand a codebase before you touch it. `nodesify-graphify` turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
 
-You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **73–79x fewer tokens per query** on real repos (printed honestly after every run, computed from real file sizes vs actual query output).
+You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run, computed from real file sizes vs actual query output — [methodology and head-to-head](worked/head-to-head/)).
 
 Three things a folder full of files can't give you:
 
@@ -10,7 +10,7 @@ Three things a folder full of files can't give you:
 2. **An honest audit trail** — every edge is labeled EXTRACTED / INFERRED / AMBIGUOUS with a numeric confidence score. You always know what was found in the source versus deduced, and `--detail high` filters to only declared facts.
 3. **Answers for agents and humans** — query it from the CLI, from any AI agent via MCP, or just read the exported markdown wiki with plain file links.
 
-[Worked examples with honest reviews](worked/) — the tool run on itself and on its Python ancestor, including what the graph got *wrong*.
+[Worked examples with honest reviews](worked/) — the tool run on itself and on its Python ancestor, including what the graph got *wrong* — plus a [head-to-head benchmark](worked/head-to-head/) against the original Python Graphify on the same corpus.
 
 **Docs:** [nodesify.github.io/nodesify-graphify](https://nodesify.github.io/nodesify-graphify/)
 
@@ -130,7 +130,7 @@ The graph compounds in value as you query it. Every query records which (seed, d
 
 ### Token reduction benchmark
 
-Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository: ~221,000 corpus tokens vs ~3,000 per query — **73x fewer tokens per query**. On tiny corpora it will honestly report <1x; there the graph's value is structure, not compression, and the output says so.
+Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository at v0.8.0: ~333,000 corpus tokens vs ~3,000 per query — **110× fewer tokens per query**; on the original Python Graphify's codebase: **52×**. On tiny corpora it will honestly report <1x; there the graph's value is structure, not compression, and the output says so. Numbers vary per run and corpus — [methodology, head-to-head, and the embedding experiment](worked/head-to-head/).
 
 ### Wiki export
 
