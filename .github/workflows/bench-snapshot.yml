@@ -1,0 +1,44 @@
+# Build and deploy the docs site; also re-run the benchmark snapshot on demand.
+
+name: Benchmark snapshot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bench-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    env:
+      BENCH_RUNNER_LABEL: ubuntu-latest (GitHub Actions)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+      - name: Install nodesify-graphify (published CLI)
+        run: npm install -g @nodesify/graphify
+      - name: Run snapshot benchmark
+        run: node scripts/bench/run-snapshot.mjs
+      - name: Commit snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add website/src/data/benchmarks-snapshot.json
+          git diff --cached --quiet || git commit -m "chore(bench): update benchmark snapshot"
+          git push
+      - name: Redeploy docs site
+        run: gh workflow run "Deploy docs site" --ref develop
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -3,6 +3,8 @@ sidebar_position: 8
 title: Benchmarks and evidence
 ---
 
+import BenchmarkSnapshot from '@site/src/components/BenchmarkSnapshot';
+
 # Benchmarks and evidence
 
 Every claim on this site is measured, printed after every run, and reproducible with the commands below. This page collects the canonical numbers (v0.8.0), the methodology behind them, and a head-to-head against the original Python Graphify this tool rewrites.
@@ -44,6 +46,14 @@ Honest reading:
 - **Speed**: ~4.7× faster end-to-end. The original spends most of its time in Python/networkx build and clustering; ours is a native Rust core with SQLite persistence.
 - **Graph density**: ours extracts ~2× the nodes and ~4.8× the edges — `Imports`/`Uses`/`Defines` edges in addition to calls, plus file-aggregate nodes. That yields finer communities (161 vs 45); the original's Leiden clustering merges more aggressively. Denser is not automatically better — it is a different granularity trade-off.
 - **Token reduction**: effectively identical (50.1× vs 51.6×). Each tool measured with its own benchmark implementation (ours was ported from theirs); the absolute corpus-token estimates differ (~87k vs ~158k) because the estimators differ, so the ratio — not the absolute tokens — is the comparable metric.
+
+## Live benchmark snapshot
+
+The table below is **regenerated automatically**: run **Benchmark snapshot → Run workflow** from the [Actions tab](https://github.com/Nodesify/nodesify-graphify/actions/workflows/bench-snapshot.yml), and the workflow runs both tools on a fresh GitHub runner, commits the updated snapshot JSON, and redeploys this site. This is the continuous proof that the numbers above stay honest.
+
+<BenchmarkSnapshot />
+
+CI runners are shared hardware, so treat snapshot numbers as trend data; the manual workstation run in the table above remains the detailed reference (it also includes the embedding experiment below).
 
 ## The embedding experiment
 

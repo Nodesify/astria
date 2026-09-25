@@ -45,6 +45,16 @@ DocSearch (apply at https://docsearch.algolia.com/), remove the `themes`
 block from `docusaurus.config.js` and add an `algolia` key to `themeConfig`
 with the appId/apiKey/indexName Algolia gives you.
 
+## Benchmark snapshot
+
+`docs/benchmarks.md` renders `src/data/benchmarks-snapshot.json` (via
+`src/components/BenchmarkSnapshot`). To refresh it: **Actions → Benchmark
+snapshot → Run workflow** — it runs both tools (ours + the original Python
+graphify pinned to `91f4d12`) on a fresh runner via
+`scripts/bench/run-snapshot.mjs`, commits the updated JSON, and dispatches
+this site's deploy. Locally you can run the same with
+`node scripts/bench/run-snapshot.mjs` (needs `uv`, and the published CLI).
+
 ## Social preview image
 
 `static/img/og-image.png` (1200×630) is referenced by the `og:image` /
