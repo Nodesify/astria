@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Documentation"
+    url: "https://nodesify.github.io/astria/"
+    about: "Versioned docs — CLI reference, MCP tools, guides, and troubleshooting. Many reported bugs are answered here."
+  - name: "Troubleshooting guide"
+    url: "https://nodesify.github.io/astria/docs/reference/troubleshooting"
+    about: "Stale graphs, large-repo export refusals, missing languages — check here first."
+  - name: "Nodesify"
+    url: "https://nodesify.com"
+    about: "Contact the maintainers. For security issues, see SECURITY.md — please use private vulnerability reporting, not this form."
