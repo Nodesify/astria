@@ -26,6 +26,8 @@ Activates the `enrich_with_semantics()` pipeline stage (docs, papers, images →
 
 Without a backend configured, builds stay fully offline and deterministic. Per-run overrides without env vars: `nodesify-graphify run . --backend openai --model gpt-4o-mini`.
 
+Keys are sent in request headers (the Gemini key never goes in the URL, where it would leak into logs and history). When `GRAPHIFY_LLM_BASE_URL` points at a plain-`http` endpoint that is not local (localhost, `127.0.0.1`, `[::1]` — Ollama/LM Studio setups are silent), a warning is printed because the API key travels unencrypted.
+
 ## Local embeddings
 
 | Variable | Purpose |

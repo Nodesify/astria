@@ -36,7 +36,9 @@ Supported platforms: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, 
 
 `install` writes the platform's skill files and injects an always-on `## graphify` instruction block into `AGENTS.md` / `CLAUDE.md` — telling agents to query the graph before grepping and to run `update` after edits. The instruction block names both access paths: MCP tools when the `graphify` server is connected, or the `nodesify-graphify` CLI from any agent.
 
-`--platform zcode` additionally registers the graphify MCP server in `.zcode/config.json` under `mcp.servers`, which ZCode trusts and auto-connects at session start — the tools (`repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`) appear natively in every session for that project. All steps are idempotent; `uninstall` removes them.
+Platforms with a project-scoped MCP config also get the graphify server registered automatically: `zcode` (`.zcode/config.json`), `claude` (`.mcp.json` — Claude Code asks you to approve it once), `cursor` (`.cursor/mcp.json`), and `gemini` (`.gemini/settings.json`). The tools (`repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`) then appear natively in every session for that project. Codex keeps hooks + CLI — its MCP config is global-only, so it is intentionally left untouched. All steps are idempotent and merge-safe (existing servers and unrelated config keys are preserved); `uninstall` removes them.
+
+Existing installs upgrade in place: `install` recognizes its own previously generated instruction blocks and refreshes them to the current wording; hand-customized `## graphify` sections are detected and left untouched.
 
 ## Git hooks
 

@@ -43,6 +43,8 @@ nodesify-graphify export --graph . --format html --mode large --out graph-view.h
 
 Large mode precomputes node positions, disables physics, shows the highest-degree nodes first, supports debounced search and a "Show all nodes" toggle, caps the community legend, and disables expensive edge arrows for very large graphs.
 
+The viewer is safe to open on graphs built from untrusted repositories: node and community labels come from repo content (identifiers, docstrings, LLM output) and are rendered strictly as text — never interpolated as HTML — so a crafted label cannot inject script into the exported page.
+
 ## GraphML, JSON and Neo4j
 
 ```bash
