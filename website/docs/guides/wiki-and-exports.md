@@ -1,6 +1,8 @@
 ---
-sidebar_position: 4
+sidebar_position: 1
 title: Wiki and exports
+description: Export the graph as an agent-crawlable markdown wiki, an Obsidian vault, an interactive HTML viewer, or GraphML/JSON/Neo4j.
+keywords: [wiki, obsidian, export, html, graphml, neo4j, cypher, visualization]
 ---
 
 # Wiki and exports

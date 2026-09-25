@@ -1,6 +1,8 @@
 ---
 sidebar_position: 2
 title: Getting started
+description: Install @nodesify/graphify, build your first knowledge graph, query it, and keep it fresh — in under five minutes.
+keywords: [install, npm, getting started, quickstart, graphify]
 ---
 
 # Getting started
@@ -53,7 +55,7 @@ nodesify-graphify affected <node>                 # Blast radius - what breaks i
 nodesify-graphify map                             # PageRank-ranked repo map with top symbols
 ```
 
-See the [CLI reference](./cli) for every command and flag.
+See the [CLI reference](./reference/cli) for every command and flag.
 
 ## Use it from AI agents
 
@@ -62,7 +64,7 @@ nodesify-graphify mcp          # Run MCP stdio server - query the graph from any
 nodesify-graphify install      # Install skill files for AI coding assistants
 ```
 
-`mcp` exposes the graph over the Model Context Protocol, so any MCP-capable agent (Claude Code, Codex, Cursor, …) can query it. `install` writes skill files for your assistant of choice:
+`mcp` exposes the graph over the Model Context Protocol, so any MCP-capable agent (Claude Code, Codex, Cursor, …) can query it — see the [MCP tools reference](./reference/mcp-tools) for the tool list. `install` writes skill files for your assistant of choice; the full setup (platforms, git hooks, the editor guard) is on [Agent integration](./guides/mcp-and-agents).
 
 Supported platforms: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`.
 
@@ -74,7 +76,7 @@ nodesify-graphify hook install|uninstall|status
 
 ## Health, memory, and many repos at once
 
-Three more loops worth knowing about (full flags in the [CLI reference](./cli)):
+Three more loops worth knowing about (full flags in the [CLI reference](./reference/cli)):
 
 ```bash
 nodesify-graphify diagnose                        # read-only graph health report (--json for tooling)
@@ -83,7 +85,7 @@ nodesify-graphify reflect                         # aggregate memory outcomes in
 nodesify-graphify run . --global --as myrepo      # merge this repo into the cross-repo global graph
 ```
 
-`diagnose` is the first stop when a graph looks wrong. The memory loop (`save-result` → `update` → `reflect`) turns settled questions into graph nodes — curated, on top of the automatic learned edges. And the global graph merges many repos into one queryable store, unifying shared external symbols across repos.
+`diagnose` is the first stop when a graph looks wrong (see [Troubleshooting](./reference/troubleshooting)). The memory loop (`save-result` → `update` → `reflect`) turns settled questions into graph nodes — curated, on top of the automatic learned edges (see [Memory and learning](./guides/memory-and-learning)). And the [global graph](./guides/global-graph) merges many repos into one queryable store, unifying shared external symbols across repos.
 
 ## Excluding files
 
@@ -93,4 +95,4 @@ Place a `.graphifyignore` file in your project root (gitignore syntax) to exclud
 
 Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository at v0.8.0: ~333,000 corpus tokens vs ~3,000 per query — **110× fewer tokens per query**; on the original Python Graphify's codebase: **52×**. On tiny corpora it will honestly report &lt;1×; there the graph's value is structure, not compression, and the output says so.
 
-Numbers vary per run and corpus — the full methodology, a head-to-head against the original Python Graphify, and the embedding experiment are on the [Benchmarks and evidence](./benchmarks) page.
+Numbers vary per run and per corpus — the full methodology, a head-to-head against the original Python Graphify, and the embedding experiment are on the [Benchmarks and evidence](./explanation/benchmarks) page.

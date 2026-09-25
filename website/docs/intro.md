@@ -1,13 +1,15 @@
 ---
 sidebar_position: 1
 title: Introduction
+description: nodesify-graphify turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local embeddings, zero API keys.
+keywords: [knowledge graph, codebase, ast, tree-sitter, rust, agents, mcp]
 ---
 
 # Introduction
 
 **nodesify-graphify** turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
 
-You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run; varies by corpus — see [Benchmarks and evidence](./benchmarks)).
+You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run; varies by corpus — see [Benchmarks and evidence](./explanation/benchmarks)).
 
 ## Three things a folder full of files can't give you
 
@@ -18,10 +20,15 @@ You drop into an unfamiliar repo and need to know: what is load-bearing here, wh
 ## Where to go next
 
 - [Getting started](./getting-started) — install and run your first graph
-- [CLI reference](./cli) — every command and flag
-- [Wiki and exports](./wiki-and-exports) — markdown wiki, Obsidian vault, HTML viewer, Neo4j
-- [Semantic enrichment](./semantic-enrichment) — local embeddings and LLM backends
-- [Benchmarks and evidence](./benchmarks) — measured numbers and the head-to-head vs the original Graphify
-- [Architecture](./architecture) — how the pipeline works under the hood
+- [Agent integration](./guides/mcp-and-agents) — wire the graph into Claude Code, Codex, Cursor, …
+- [CLI reference](./reference/cli) — every command and flag
+- [MCP tools reference](./reference/mcp-tools) — the nine tools your agent can call
+- [Wiki and exports](./guides/wiki-and-exports) — markdown wiki, Obsidian vault, HTML viewer, Neo4j
+- [Semantic enrichment](./guides/semantic-enrichment) — local embeddings and LLM backends
+- [Global graph](./guides/global-graph) — one queryable store across repos
+- [Memory and learning](./guides/memory-and-learning) — learned edges and curated Q/A memory
+- [Troubleshooting](./reference/troubleshooting) — when something looks wrong
+- [Benchmarks and evidence](./explanation/benchmarks) — measured numbers and the head-to-head vs the original Graphify
+- [Architecture](./explanation/architecture) — how the pipeline works under the hood
 
 Worked examples with honest reviews — the tool run on itself and on its Python ancestor, including what the graph got *wrong* — live in the [`worked/`](https://github.com/Nodesify/nodesify-graphify/tree/main/worked) directory of the repository, alongside a [head-to-head comparison](https://github.com/Nodesify/nodesify-graphify/tree/main/worked/head-to-head) against the original Python Graphify on the same corpus.

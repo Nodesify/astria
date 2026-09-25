@@ -1,6 +1,8 @@
 ---
-sidebar_position: 7
+sidebar_position: 4
 title: Language support
+description: The 21 languages nodesify-graphify extracts via tree-sitter, and how to add a new one with a LanguageConfig module.
+keywords: [languages, tree-sitter, python, rust, typescript, go, java]
 ---
 
 # Language support
