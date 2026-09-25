@@ -10,10 +10,12 @@ state worse than the previous one.
       git remotes automatically; update local `origin` URLs anyway:
       `git remote set-url origin git@github.com:Nodesify/astria.git`
 - [x] Update repo description/topics (old topics mention graphify).
-- [ ] GitHub Pages: the docs site URL becomes `nodesify.github.io/astria/`
+- [x] GitHub Pages: the docs site URL becomes `nodesify.github.io/astria/`
       automatically once the repo renames, but **old links do not redirect**
       for Pages. Update any external links (README badges already point at
-      the new path in this repo).
+      the new path in this repo). (done — site 404'd until a fresh deploy
+      from the renamed repo; redeployed via `gh workflow run docs.yml`,
+      URL verified 200)
 
 ## 2. npm — before first publish
 - [ ] On npmjs.com, open the `@nodesify` org and pre-create the package
