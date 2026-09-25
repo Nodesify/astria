@@ -15,6 +15,7 @@ pub fn config() -> &'static LanguageConfig {
         class_call_names: &[],
         function_call_names: &[],
         import_call_names: &[],
+        closure_types: &[],
     };
     &CONFIG
 }
@@ -34,6 +35,7 @@ pub fn cpp_config() -> &'static LanguageConfig {
         class_call_names: &[],
         function_call_names: &[],
         import_call_names: &[],
+        closure_types: &[],
     };
     &CONFIG
 }
