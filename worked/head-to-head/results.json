@@ -1,0 +1,56 @@
+{
+  "date": "2026-09-25",
+  "environment": {
+    "machine": "Windows 11 10.0.26200 x64 (same machine for both tools)",
+    "nodesify_graphify": "0.8.0 prebuilt native binary via npm (@nodesify/graphify), commit 44560ae for self-corpus",
+    "original_graphify": "safishamsi/graphify commit 91f4d12 (pyproject v0.1.14), Python 3.12.12 venv (uv), graspologic/networkx as pinned by its pyproject"
+  },
+  "methodology": [
+    "Same corpus, same machine: the original Python graphify's own repository at commit 91f4d12 (90 detect entries, ~0.5 MB text).",
+    "Both tools ran the structural pipeline only: detect -> AST extract -> build -> cluster -> analyze -> report. No LLM enrichment on either side (the original's semantic layer is Claude-subagent-driven and was skipped per its own code-only fast path; ours was simply not configured).",
+    "The original was driven by a script replicating its skill.md exactly: detect() -> collect_files()/extract() -> build_from_json() -> cluster()/score_all() -> god_nodes()/surprising_connections() -> generate()/to_json().",
+    "Each tool's token benchmark is its own implementation (ours was ported from upstream's): corpus tokens are estimated from real file sizes with each tool's own estimator, and query cost is each tool's own answer-size model on five fixed questions. The comparable metric is each tool's ratio on the same corpus, not the absolute token estimates.",
+    "Timings are wall clock, best of a single cold run per tool (no prior caches for either)."
+  ],
+  "corpus_python_graphify": {
+    "original": {
+      "build_seconds": 21.92,
+      "build_stage_seconds": {"detect": 1.40, "extract": 0.20, "build_cluster_analyze_report": 20.30},
+      "nodes": 719,
+      "edges": 1196,
+      "communities": 45,
+      "benchmark": {"corpus_tokens": 87005, "avg_query_tokens": 1738, "reduction": 50.1}
+    },
+    "nodesify_graphify_structural": {
+      "build_seconds": 4.68,
+      "nodes": 1479,
+      "edges": 5789,
+      "communities": 161,
+      "benchmark": {"corpus_tokens": 157712, "avg_query_tokens": 3058, "reduction": 51.6}
+    },
+    "nodesify_graphify_with_embeddings": {
+      "build_seconds": 17.51,
+      "nodes": 1471,
+      "edges": 8242,
+      "similar_to_edges": 2453,
+      "communities": 91,
+      "benchmark": {"corpus_tokens": 157712, "avg_query_tokens": 3064, "reduction": 51.5}
+    }
+  },
+  "embedding_experiment": {
+    "description": "nodesify-graphify run with and without --embed (local model, no API key). Numbers from fresh runs on v0.8.0.",
+    "self_corpus": {
+      "corpus": "this repository at commit 44560ae (git-tracked files only, 191 files, 1.3 MB)",
+      "without_embed": {"nodes": 2063, "edges": 7546, "communities": 428, "reduction": 109.6, "build_seconds": 5.82},
+      "with_embed": {"nodes": 2063, "edges": 10781, "similar_to_edges": 3235, "communities": 201, "reduction": 109.1, "embed_pass_seconds": 7.91}
+    },
+    "python_corpus": {
+      "without_embed": {"communities": 161},
+      "with_embed": {"communities": 91, "similar_to_edges": 2453}
+    },
+    "finding": "similar_to edges consolidate communities 428 -> 201 (-53%) on the self corpus and 161 -> 91 (-44%) on the Python corpus. The token ratio is unchanged (~109x / ~51.5x): embeddings add semantic recall, not compression."
+  },
+  "worked_examples_historical": {
+    "note": "Earlier measurements under older versions and smaller file sets; kept for the record in ../nodesify-graphify/review.md and ../graphify-python/review.md. Self corpus then: 156 files, 78.8x; Python corpus: 40.2x. The 401->194/212 community-consolidation figures in older release notes correspond to those older runs; current canonical numbers are the embedding_experiment block above."
+  }
+}
