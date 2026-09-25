@@ -379,12 +379,34 @@ fn run_pipeline_inner(
         tx.commit()?;
     }
 
-    let files_to_process: Vec<PathBuf> = detected
+    let mut files_to_process: Vec<PathBuf> = detected
         .new
         .iter()
         .chain(detected.changed.iter())
         .map(|e| root.join(&e.path))
         .collect();
+
+    // Transcript sidecars: `.graphify/transcripts/*.{txt,md}` become document
+    // nodes. This is the local contract of the official graphify's whisper
+    // step — any transcriber (or hand-written notes) drops a file here and it
+    // joins the graph on the next run. The walk skips `.graphify/` by design,
+    // so these are ingested explicitly.
+    let transcripts_dir = graphify_dir.join("transcripts");
+    if transcripts_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&transcripts_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let is_sidecar = p
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x == "txt" || x == "md")
+                    .unwrap_or(false);
+                if is_sidecar && !files_to_process.contains(&p) {
+                    files_to_process.push(p);
+                }
+            }
+        }
+    }
 
     // A no-op pass (nothing changed) still runs the embed stage when it is
     // requested or embeddings already exist — otherwise `run --embed` on an
@@ -477,6 +499,18 @@ fn run_pipeline_inner(
     }
 
     let cluster_result = graphify_cluster::cluster(db)?;
+    // Hyperedges: deterministic N-ary groups (communities, shared references).
+    // Best-effort — a failure here must not block the build.
+    match graphify_build::hyperedges::generate(db) {
+        Ok(n) if n > 0 => {
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('last_hyperedges', ?1)",
+                rusqlite::params![n.to_string()],
+            );
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("warning: hyperedge generation failed: {e}"),
+    }
     let analysis = graphify_analyze::analyze(db)?;
     let report = graphify_report::generate_report(db, &analysis)?;
 
@@ -570,7 +604,25 @@ pub fn export_json(db: &Connection, out_path: &Path) -> graphify_core::Result<()
         }));
     }
 
-    let graph = serde_json::json!({ "nodes": nodes, "edges": edges });
+    // Hyperedges (schema-compatible with the official graphify consumer).
+    let hyperedges: Vec<serde_json::Value> = match graphify_build::hyperedges::load_all(db) {
+        Ok(list) => list
+            .iter()
+            .map(|h| {
+                serde_json::json!({
+                    "id": h.id,
+                    "label": h.label,
+                    "nodes": h.nodes,
+                    "relation": h.relation,
+                    "confidence": h.confidence,
+                    "confidence_score": h.score,
+                })
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+
+    let graph = serde_json::json!({ "nodes": nodes, "edges": edges, "hyperedges": hyperedges });
     let json = serde_json::to_string_pretty(&graph)?;
     std::fs::write(out_path, json)?;
     Ok(())
@@ -589,4 +641,90 @@ pub fn load_graph_db(root: &Path) -> graphify_core::Result<Connection> {
         )));
     }
     db::open_db(&p)
+}
+
+/// Open a graph database from either a repo root (`<root>/.graphify/db.sqlite`)
+/// or a direct path to a `.sqlite` file — lets `query`/`explain`/`path` run
+/// against the cross-repo global store via `--graph <path>`. Returns the
+/// connection and the db file's parent directory (the `.graphify` dir, when
+/// known) for stamp/feedback writing.
+pub fn load_graph_db_flexible(path: &Path) -> graphify_core::Result<(Connection, Option<PathBuf>)> {
+    if path.is_file() {
+        return Ok((db::open_db(path)?, path.parent().map(|p| p.to_path_buf())));
+    }
+    let repo_db = path.join(".graphify").join("db.sqlite");
+    if repo_db.exists() {
+        return Ok((
+            db::open_db(&repo_db)?,
+            Some(repo_db.parent().unwrap().to_path_buf()),
+        ));
+    }
+    Err(graphify_core::GraphifyError::Graph(format!(
+        "No graph found at {} — pass a repo root or a graph .sqlite file",
+        path.display()
+    )))
+}
+
+/// After a successful query/explain/path: append the env-gated JSONL query
+/// log and refresh the orientation stamp that `hook-guard read --strict`
+/// uses to suppress blocking. Both are best-effort and fail silent.
+pub fn record_query_feedback(
+    graphify_dir: Option<&Path>,
+    kind: &str,
+    question: &str,
+    nodes: usize,
+    duration_ms: u128,
+) {
+    // Orientation stamp (fresh on every query → hook strict TTL).
+    if let Some(dir) = graphify_dir {
+        let cache = dir.join("cache");
+        if cache.is_dir() || std::fs::create_dir_all(&cache).is_ok() {
+            let stamp = format!(
+                "{}\t{}\t{}\t{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+                kind,
+                nodes,
+                duration_ms
+            );
+            let _ = std::fs::write(cache.join("last_query_stamp"), stamp);
+        }
+    }
+
+    // JSONL query log (off by default, matching upstream #1797).
+    if std::env::var("GRAPHIFY_QUERY_LOG_DISABLE").as_deref() == Ok("1") {
+        return;
+    }
+    let path = match std::env::var("GRAPHIFY_QUERY_LOG") {
+        Ok(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => {
+            if std::env::var("GRAPHIFY_QUERY_LOG_ENABLE").as_deref() != Ok("1") {
+                return;
+            }
+            let home = std::env::var("USERPROFILE")
+                .or_else(|_| std::env::var("HOME"))
+                .unwrap_or_else(|_| ".".to_string());
+            std::path::PathBuf::from(home)
+                .join(".cache")
+                .join("nodesify-graphify-queries.log")
+        }
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = format!(
+        "{{\"ts\":{},\"kind\":{:?},\"question\":{:?},\"nodes\":{},\"duration_ms\":{}}}\n",
+        ts, kind, question, nodes, duration_ms
+    );
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
 }

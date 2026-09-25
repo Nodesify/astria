@@ -785,6 +785,7 @@ dependencies = [
  "graphify-extract",
  "graphify-paths",
  "rusqlite",
+ "serde_json",
  "strsim",
  "unicode-normalization",
 ]
@@ -876,8 +877,10 @@ name = "graphify-ingest"
 version = "0.8.0"
 dependencies = [
  "graphify-core",
+ "graphify-extract",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "ureq",
 ]
@@ -958,6 +961,7 @@ name = "graphify-report"
 version = "0.8.0"
 dependencies = [
  "graphify-analyze",
+ "graphify-build",
  "graphify-core",
  "graphify-paths",
  "rusqlite",

@@ -47,6 +47,11 @@ pub const MANIFEST_FILENAMES: &[&str] = &[
     "go.mod",
     "package.json",
     "pom.xml",
+    // MCP server configs: agent toolchains are part of the graph too.
+    ".mcp.json",
+    "mcp.json",
+    "mcp_servers.json",
+    "claude_desktop_config.json",
 ];
 
 #[cfg(test)]

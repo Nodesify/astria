@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ingestUrl = exports.exportObsidian = exports.exportWiki = exports.exportTree = exports.runMcpServer = exports.affectedNode = exports.graphHistory = exports.diffGraphs = exports.mergeGraphs = exports.clusterOnly = exports.findPath = exports.repoMap = exports.queryGraph = exports.tokenBenchmark = exports.exportCypherCmd = exports.exportGraphmlCmd = exports.exportHtmlCmd = exports.exportJsonCmd = exports.explainNode = exports.graphStats = exports.updatePipeline = exports.runPipeline = void 0;
+exports.ingestPostgres = exports.ingestScip = exports.globalPath = exports.globalList = exports.globalRemove = exports.globalAdd = exports.reflectGraph = exports.saveQueryResult = exports.diagnoseGraph = exports.ingestUrl = exports.exportObsidian = exports.exportWiki = exports.exportTree = exports.runMcpServer = exports.affectedNode = exports.graphHistory = exports.diffGraphs = exports.mergeGraphs = exports.clusterOnly = exports.findPath = exports.repoMap = exports.queryGraph = exports.tokenBenchmark = exports.exportCypherCmd = exports.exportGraphmlCmd = exports.exportHtmlCmd = exports.exportJsonCmd = exports.explainNode = exports.graphStats = exports.updatePipeline = exports.runPipeline = void 0;
 const path_1 = require("path");
 const fs_1 = require("fs");
 const PLATFORM_SUFFIX = {
@@ -95,4 +95,13 @@ exports.exportTree = binding.exportTree;
 exports.exportWiki = binding.exportWiki;
 exports.exportObsidian = binding.exportObsidian;
 exports.ingestUrl = binding.ingestUrl;
+exports.diagnoseGraph = binding.diagnoseGraph;
+exports.saveQueryResult = binding.saveQueryResult;
+exports.reflectGraph = binding.reflect;
+exports.globalAdd = binding.globalAdd;
+exports.globalRemove = binding.globalRemove;
+exports.globalList = binding.globalList;
+exports.globalPath = binding.globalPath;
+exports.ingestScip = binding.ingestScip;
+exports.ingestPostgres = binding.ingestPostgres;
 //# sourceMappingURL=native.js.map

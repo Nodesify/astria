@@ -52,6 +52,10 @@ async function runCommand(path, opts) {
             const outDir = pathMod.join(path, '.graphify', 'wiki');
             const articles = (0, native_1.exportWiki)(path, outDir, 25);
             console.log(`Wiki written: ${articles} articles -> ${pathMod.join(outDir, 'index.md')}`);
+            if (opts.global) {
+                const merged = (0, native_1.globalAdd)(path, opts.as);
+                console.log(`Global graph: repo '${merged.tag}' merged (${merged.nodesAdded} nodes, ${merged.edgesAdded} edges, ${merged.sameTypeEdges} same_type_as, ${merged.crossRepoCallEdges} cross-repo calls)`);
+            }
         }
         const benchmark = (0, native_1.tokenBenchmark)(path);
         if (benchmark)

@@ -79,6 +79,35 @@ pub fn generate_report(
         report.push_str(&format!("_Built by graphify v{v}._\n\n"));
     }
 
+    // Hyperedges: deterministic N-ary group relationships (communities,
+    // shared reference groups) — a group that pairwise edges cannot express.
+    if let Ok(hyperedges) = graphify_build::hyperedges::load_all(db) {
+        if !hyperedges.is_empty() {
+            report.push_str(&format!(
+                "## Hyperedges ({} group relationships)\n\n",
+                hyperedges.len()
+            ));
+            for h in hyperedges.iter().take(15) {
+                let score = h.score.map(|s| format!(" {s:.2}")).unwrap_or_default();
+                report.push_str(&format!(
+                    "- **{}** — {} members [{}{}] `id: {}`\n",
+                    h.label,
+                    h.nodes.len(),
+                    h.confidence,
+                    score,
+                    h.id
+                ));
+            }
+            if hyperedges.len() > 15 {
+                report.push_str(&format!(
+                    "\n... and {} more (see graph.json `hyperedges`).\n",
+                    hyperedges.len() - 15
+                ));
+            }
+            report.push('\n');
+        }
+    }
+
     report.push_str("## Communities\n\n");
     {
         let communities_stmt =

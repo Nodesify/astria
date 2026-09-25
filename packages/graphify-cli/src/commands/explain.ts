@@ -15,6 +15,9 @@ export async function explainCommand(node: string, opts: { graph: string }) {
     if (result.community !== null && result.community !== undefined) {
       console.log(`  Community: ${result.community}`);
     }
+    if (result.hyperedges && result.hyperedges.length > 0) {
+      console.log(`  Hyperedges: ${result.hyperedges.join(', ')}`);
+    }
 
     if (result.neighbors.length > 0) {
       console.log(`\nConnections (${result.neighborCount}):`);

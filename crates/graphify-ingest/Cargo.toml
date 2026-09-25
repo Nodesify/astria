@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 graphify-core = { workspace = true }
+graphify-extract = { workspace = true }
+sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ureq = { workspace = true }

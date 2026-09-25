@@ -1166,6 +1166,17 @@ pub fn explain_with_neighbors(
     let answer = format!("explain: {} ({} neighbors)", node.label, neighbor_count);
     log_query(db, node_id, &answer);
 
+    // Hyperedge membership: which N-ary groups this node belongs to.
+    let hyperedges: Vec<String> = {
+        let mut stmt = db.prepare(
+            "SELECT label FROM hyperedges WHERE EXISTS (
+               SELECT 1 FROM json_each(hyperedges.nodes) WHERE json_each.value = ?1
+             ) LIMIT 5",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![node.id], |r| r.get::<_, String>(0))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
     Ok(Some(ExplainResult {
         id: node.id.clone(),
         label: node.label.clone(),
@@ -1174,6 +1185,7 @@ pub fn explain_with_neighbors(
         community: node.community,
         neighbor_count,
         neighbors,
+        hyperedges,
     }))
 }
 
@@ -1195,6 +1207,8 @@ pub struct ExplainResult {
     pub community: Option<i64>,
     pub neighbor_count: usize,
     pub neighbors: Vec<EdgeInfoResult>,
+    /// Labels of hyperedges whose member list contains this node.
+    pub hyperedges: Vec<String>,
 }
 
 #[cfg(test)]

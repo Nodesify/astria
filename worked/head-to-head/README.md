@@ -54,3 +54,9 @@ nodesify-graphify run . --embed    # with local embeddings
 ```
 
 Full machine-readable numbers: [`results.json`](./results.json). Historical (older-version) worked examples: [`../graphify-python/review.md`](../graphify-python/review.md), [`../nodesify-graphify/review.md`](../nodesify-graphify/review.md).
+
+The same comparison is automated: `.github/workflows/bench-snapshot.yml`
+(manual dispatch) runs both tools on a fresh GitHub runner via
+`scripts/bench/orig_run.py` + `scripts/bench/run-snapshot.mjs`, commits the
+result to `website/src/data/benchmarks-snapshot.json`, and the docs site
+renders it live on the Benchmarks page.

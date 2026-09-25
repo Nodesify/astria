@@ -109,8 +109,17 @@ struct Meta {
 struct Payload {
     nodes: Vec<NodeOut>,
     edges: Vec<EdgeOut>,
+    #[serde(rename = "hyperedges")]
+    hyper_edges: Vec<HyperEdgeOut>,
     legend: Vec<LegendEntry>,
     meta: Meta,
+}
+
+#[derive(Serialize)]
+struct HyperEdgeOut {
+    id: String,
+    label: String,
+    nodes: Vec<String>,
 }
 
 fn export_html_impl(
@@ -240,6 +249,50 @@ fn export_html_impl(
     }};
 
     var network = new vis.Network(container, {{ nodes: nodes, edges: edges }}, options);
+
+    // Hyperedges as shaded convex hulls behind the nodes. Positions come from
+    // the precomputed layout (DATA.nodes x/y) converted to DOM pixels via the
+    // network's own transform, so hulls track pan/zoom for free.
+    (function() {{
+      var hyper = (DATA.hyperedges || []).map(function(h) {{
+        var pts = [];
+        (h.nodes || []).forEach(function(id) {{
+          var n = DATA.nodes.find(function(x) {{ return x.id === id; }});
+          if (n) pts.push({{ x: n.x, y: n.y }});
+        }});
+        return {{ label: h.label, pts: pts }};
+      }}).filter(function(h) {{ return h.pts.length >= 3; }});
+      if (!hyper.length) return;
+
+      function drawHulls(ctx) {{
+        hyper.forEach(function(h) {{
+          var pts = h.pts.map(function(p) {{
+            var dom = network.canvasToDOM({{ x: p.x, y: p.y }});
+            return {{ x: dom.x, y: dom.y }};
+          }});
+          var cx = 0, cy = 0;
+          pts.forEach(function(p) {{ cx += p.x; cy += p.y; }});
+          cx /= pts.length; cy /= pts.length;
+          ctx.save();
+          ctx.globalAlpha = 0.10;
+          ctx.fillStyle = '#6366f1';
+          ctx.strokeStyle = '#6366f1';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          pts.forEach(function(p, i) {{
+            var ex = cx + (p.x - cx) * 1.18, ey = cy + (p.y - cy) * 1.18;
+            if (i === 0) ctx.moveTo(ex, ey); else ctx.lineTo(ex, ey);
+          }});
+          ctx.closePath();
+          ctx.fill();
+          ctx.globalAlpha = 0.35;
+          ctx.stroke();
+          ctx.restore();
+        }});
+      }}
+      network.on('beforeDrawing', drawHulls);
+    }})();
+
     if (visibleIds.length) {{
       network.fit({{ nodes: visibleIds, animation: false }});
     }}
@@ -436,6 +489,15 @@ fn build_payload(db: &Connection, large_mode: bool) -> graphify_core::Result<Pay
         .collect();
     let legend_rest_count: usize = comm_list.iter().skip(LEGEND_LIMIT).map(|(_, n)| n).sum();
 
+    let hyper_edges: Vec<HyperEdgeOut> = graphify_build::hyperedges::load_all(db)?
+        .into_iter()
+        .map(|h| HyperEdgeOut {
+            id: h.id,
+            label: h.label,
+            nodes: h.nodes,
+        })
+        .collect();
+
     Ok(Payload {
         meta: Meta {
             node_count,
@@ -446,6 +508,7 @@ fn build_payload(db: &Connection, large_mode: bool) -> graphify_core::Result<Pay
         },
         nodes,
         edges,
+        hyper_edges,
         legend,
     })
 }

@@ -14,6 +14,10 @@ import { treeCommand } from './commands/tree';
 import { wikiCommand } from './commands/wiki';
 import { prsCommand } from './commands/prs';
 import { addCommand } from './commands/add';
+import { diagnoseCommand } from './commands/diagnose';
+import { saveResultCommand, reflectCommand } from './commands/feedback';
+import { globalAddCommand, globalRemoveCommand, globalListCommand, globalPathCommand } from './commands/global';
+import { hookGuard } from './commands/hook-guard';
 import { updateCommand } from './commands/update';
 import { watchCommand } from './commands/watch';
 import { clusterCommand } from './commands/cluster';
@@ -40,7 +44,9 @@ program
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
   .option('--wiki', 'Also export a markdown wiki to .graphify/wiki')
   .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
-  .action(runCommand);
+  .option('--global', 'After building, merge this repo into the cross-repo global graph')
+  .option('--as <tag>', 'Repo tag for --global (defaults to the directory name)')
+  .action((path, opts) => runCommand(path, { ...opts, global: opts.global, as: opts.as }));
 
 program
   .command('update')
@@ -183,10 +189,12 @@ program
 program
   .command('add')
   .description('Fetch a URL (arXiv paper, tweet, webpage, image, PDF) into ./raw and update the graph')
-  .argument('<url>', 'URL to fetch')
+  .argument('[url]', 'URL to fetch (required unless --scip/--postgres is given)')
   .option('--graph <path>', 'Path to project root', '.')
   .option('--author <name>', 'Author recorded in the saved metadata')
   .option('--contributor <name>', 'Contributor recorded in the saved metadata')
+  .option('--scip <file>', 'Ingest a simplified SCIP JSON index instead of fetching a URL')
+  .option('--postgres <dsn>', 'Introspect a live PostgreSQL schema (requires psql on PATH) instead of fetching a URL')
   .action(addCommand);
 
 program
@@ -197,6 +205,70 @@ program
 
 registerInstallCommand(program);
 registerHookCommand(program);
+
+
+program
+  .command('diagnose')
+  .description('Read-only graph health report: dangling edges, self-loops, duplicates, stubs')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--json', 'Machine-readable output')
+  .action(diagnoseCommand);
+
+program
+  .command('save-result')
+  .description('Save a Q/A pair into the graph memory for future runs')
+  .argument('<question>', 'The question that was asked')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--answer <text>', 'The answer to record')
+  .option('--answer-file <path>', 'Read the answer from a file')
+  .option('--outcome <kind>', 'useful | dead_end | corrected')
+  .option('--correction <text>', 'Corrections to the recorded answer')
+  .option('--nodes <ids>', 'Comma-separated source node ids this answer cites')
+  .action(saveResultCommand);
+
+program
+  .command('reflect')
+  .description('Aggregate memory outcomes into .graphify/reflections/LESSONS.md')
+  .option('--graph <path>', 'Path to project root', '.')
+  .action(reflectCommand);
+
+const globalCmd = program
+  .command('global')
+  .description('Cross-repo global graph: merge many repo graphs into one queryable store');
+
+globalCmd
+  .command('add')
+  .description('Merge a repo graph into the global store (idempotent by tag)')
+  .argument('<path>', 'Repo root with a .graphify directory')
+  .option('--as <tag>', 'Repo tag (defaults to the directory name)')
+  .action(globalAddCommand);
+
+globalCmd
+  .command('remove')
+  .description('Remove a repo from the global graph')
+  .argument('<tag>', 'Repo tag')
+  .action(globalRemoveCommand);
+
+globalCmd
+  .command('list')
+  .description('List repos registered in the global graph')
+  .action(() => globalListCommand());
+
+globalCmd
+  .command('path')
+  .description('Shortest path across repos in the global graph')
+  .argument('<source>', 'Source node id or unique label')
+  .argument('<target>', 'Target node id or unique label')
+  .action(globalPathCommand);
+
+program
+  .command('hook-guard')
+  .description('Editor PreToolUse guard (installed into .claude/settings.json) — internal use')
+  .argument('<mode>', 'search | read | gemini')
+  .allowUnknownOption(true)
+  .action((mode: string) => {
+    hookGuard(mode, process.argv.slice(4));
+  });
 
 if (require.main === module) {
   program.parse();
