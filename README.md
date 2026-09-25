@@ -1,4 +1,20 @@
+<div align="center">
+
 # nodesify-graphify
+
+**Knowledge graph builder for codebases**
+
+[![CI](https://github.com/Nodesify/nodesify-graphify/actions/workflows/ci.yml/badge.svg)](https://github.com/Nodesify/nodesify-graphify/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@nodesify/graphify)](https://www.npmjs.com/package/@nodesify/graphify)
+[![npm downloads](https://img.shields.io/npm/dm/@nodesify/graphify)](https://www.npmjs.com/package/@nodesify/graphify)
+[![docs](https://img.shields.io/badge/docs-latest-blue)](https://nodesify.github.io/nodesify-graphify/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-22-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Nodesify/nodesify-graphify)
+
+[Docs](https://nodesify.github.io/nodesify-graphify/) | [CLI Reference](https://nodesify.github.io/nodesify-graphify/docs/cli/) | [Architecture](ARCHITECTURE.md) | [Worked examples](worked/)
+
+</div>
 
 Understand a codebase before you touch it. `nodesify-graphify` turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
 
@@ -11,8 +27,6 @@ Three things a folder full of files can't give you:
 3. **Answers for agents and humans** — query it from the CLI, from any AI agent via MCP, or just read the exported markdown wiki with plain file links.
 
 [Worked examples with honest reviews](worked/) — the tool run on itself and on its Python ancestor, including what the graph got *wrong* — plus a [head-to-head benchmark](worked/head-to-head/) against the original Python Graphify on the same corpus.
-
-**Docs:** [nodesify.github.io/nodesify-graphify](https://nodesify.github.io/nodesify-graphify/)
 
 ## Install
 
@@ -28,6 +42,7 @@ Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 - **Cross-repo global graph** — `~/.nodesify-graphify/global.db`: `global add/remove/list/path`, repo-tag prefixed merging that unifies external symbols across repos, `same_type_as` type edges, cross-repo call resolution (fail closed on ambiguity), `run --global --as <tag>`, and `query/explain/path --graph` against the merged store.
 - **Graph health + feedback loop** — `diagnose` (read-only health report, `--json`), `save-result`/`reflect` curated memory (`.graphify/memory/` → graph nodes → `LESSONS.md`) alongside automatic learned edges, build-time validation, JSONL query log (`GRAPHIFY_QUERY_LOG`), and always-on instruction blocks in `AGENTS.md`/`CLAUDE.md`.
 - **Ingest breadth (offline-first)** — Cargo workspace + path-dep topology (auto), `.mcp.json`/`mcp_servers.json`/`claude_desktop_config.json` (env names only, never values), `add --scip <index.json>`, `add --postgres <dsn>` (read-only introspection, requires `psql`), and transcript sidecars (`.graphify/transcripts/*.txt|md`).
+- **SSRF-hardened URL ingestion** — `add <url>` validates every redirect hop (auto-follow is off), DNS-resolves each host and blocks loopback/private/CGNAT/link-local addresses (IPv4 and IPv6, incl. mapped forms), and slugifies downloaded filenames so a hostile URL segment cannot write outside `raw/`. The HTML export renders labels as text (no HTML interpolation), a plain-`http` LLM base URL with an API key warns, and CI audits npm dependencies alongside the existing Rust advisory check.
 
 ## What's new in 0.8.0
 

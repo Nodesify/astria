@@ -57,7 +57,7 @@ Each stage is a pure function in its own crate; semantic enrichment is optional 
 | `graphify-mcp` | MCP stdio server exposing the graph to AI agents. |
 | `graphify-report` | Markdown generation for the final user-facing report. |
 | `graphify-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. |
-| `graphify-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection. |
+| `graphify-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection: scheme allowlist, per-hop redirect re-validation (manual redirect following), DNS-resolved address blocking (private/CGNAT/link-local, IPv4+IPv6), and slugified download filenames. |
 | `graphify-pdf` | PDF text extraction. |
 | `graphify-napi` | The bridge between Rust and Node.js: pipeline orchestration, query surface, merge/diff, JSON/HTML/GraphML/tree export. |
 | `graphify-cli` *(Node.js package)* | The user-facing CLI: argument parsing and installing AI skills. |

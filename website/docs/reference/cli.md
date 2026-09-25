@@ -131,6 +131,8 @@ nodesify-graphify add --postgres <dsn>                         # Introspect a li
 
 Both `--scip` and `--postgres` are offline/local alternatives to URL fetching: SCIP indexes bring external toolchain symbols into the graph (`scip_impl`/`scip_typed`/`scip_def`/`scip_ref` edges, deterministic ids); Postgres introspection is read-only over `information_schema` (tables/views/routines/FKs → `contains` + `references` edges, no credentials stored). The Postgres DSN is opt-in by flag — nothing calls the network by default.
 
+URL fetching is SSRF-guarded: only `http`/`https` schemes are accepted; each host is checked by name *and* DNS-resolved, and any loopback/private/CGNAT/link-local address (IPv4 or IPv6, including mapped forms like `::ffff:127.0.0.1`) is rejected — so cloud metadata endpoints and localhost services are unreachable no matter how the URL is spelled. Redirects are followed manually (max 5 hops) and every hop is re-validated, meaning a public server cannot bounce a fetch to an internal address. Downloads are capped at 50 MB with a 30-second timeout, and saved filenames are slugified from the URL, so a hostile URL segment cannot escape the output directory.
+
 ## Assistant integration
 
 ```bash
