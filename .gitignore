@@ -8,3 +8,6 @@ node_modules/
 .gemini/
 .graphify/
 .fastembed_cache/
+
+# benchmark scratch workspace
+bench-work/
