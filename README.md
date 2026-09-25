@@ -18,6 +18,8 @@
 
 Understand a codebase before you touch it. `astria` turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
 
+astria is inspired by the Python [Graphify](https://github.com/safishamsi/graphify) project's core idea — turn a corpus into a queryable knowledge graph — but it is an independent, from-scratch implementation: a deterministic, offline-first Rust/tree-sitter pipeline, not a fork or a port.
+
 You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run, computed from real file sizes vs actual query output — [methodology and head-to-head](worked/head-to-head/)).
 
 Three things a folder full of files can't give you:
@@ -26,7 +28,7 @@ Three things a folder full of files can't give you:
 2. **An honest audit trail** — every edge is labeled EXTRACTED / INFERRED / AMBIGUOUS with a numeric confidence score. You always know what was found in the source versus deduced, and `--detail high` filters to only declared facts.
 3. **Answers for agents and humans** — query it from the CLI, from any AI agent via MCP, or just read the exported markdown wiki with plain file links.
 
-[Worked examples with honest reviews](worked/) — the tool run on itself and on its Python ancestor, including what the graph got *wrong* — plus a [head-to-head benchmark](worked/head-to-head/) against the original Python Graphify on the same corpus.
+[Worked examples with honest reviews](worked/) — the tool run on itself, including what the graph got *wrong* — plus a [head-to-head benchmark](worked/head-to-head/) against the Python Graphify project that inspired it, run on the same corpus.
 
 ## Install
 
@@ -47,7 +49,7 @@ Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 
 ## What's new (unreleased)
 
-- **Hypergraph, deterministically** — n-ary `hyperedges` (schema v7/v8) produced without an LLM: community `participate_in` groups and `shares_reference` literal groups; consumed by graph.json, report, wiki, HTML hulls, and `explain`. The official's hyperedges are LLM-produced; ours are local and reproducible.
+- **Hypergraph, deterministically** — n-ary `hyperedges` (schema v7/v8) produced without an LLM: community `participate_in` groups and `shares_reference` literal groups; consumed by graph.json, report, wiki, HTML hulls, and `explain`. Graphify's hyperedges are LLM-produced; ours are local and reproducible.
 - **Cross-repo global graph** — `~/.astria/global.db`: `global add/remove/list/path`, repo-tag prefixed merging that unifies external symbols across repos, `same_type_as` type edges, cross-repo call resolution (fail closed on ambiguity), `run --global --as <tag>`, and `query/explain/path --graph` against the merged store.
 - **Graph health + feedback loop** — `diagnose` (read-only health report, `--json`), `save-result`/`reflect` curated memory (`.astria/memory/` → graph nodes → `LESSONS.md`) alongside automatic learned edges, build-time validation, JSONL query log (`ASTRIA_QUERY_LOG`), and always-on instruction blocks in `AGENTS.md`/`CLAUDE.md`.
 - **Ingest breadth (offline-first)** — Cargo workspace + path-dep topology (auto), `.mcp.json`/`mcp_servers.json`/`claude_desktop_config.json` (env names only, never values), `add --scip <index.json>`, `add --postgres <dsn>` (read-only introspection, requires `psql`), and transcript sidecars (`.astria/transcripts/*.txt|md`).
@@ -76,7 +78,7 @@ Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 
 ## What's new in 0.6.0
 
-- **Safe HTML graph viewer** — `export --format html --mode standard` matches the original Graphify 5,000-node limit; `--mode large` opts into a precomputed-layout viewer (physics-free, key nodes first, batched search) that opens instantly on any repo size
+- **Safe HTML graph viewer** — `export --format html --mode standard` enforces a 5,000-node safety cap; `--mode large` opts into a precomputed-layout viewer (physics-free, key nodes first, batched search) that opens instantly on any repo size
 - **Faster large-graph visualization** — Rust-computed positions, straight edges, arrow/legend caps, and a "Show all nodes" toggle replace the per-keystroke physics simulation that could hang the browser
 
 ## What's new in 0.5.0
@@ -143,7 +145,7 @@ Running `astria run .` creates `.astria/` with:
 
 ### HTML visualization modes
 
-Use `--format html` to create an interactive vis-network graph view. HTML export uses the same 5,000-node safety limit as the original Graphify viewer:
+Use `--format html` to create an interactive vis-network graph view. HTML export applies a 5,000-node safety limit:
 
 ```bash
 astria export --graph . --format html --out graph-view.html
@@ -170,7 +172,7 @@ The graph compounds in value as you query it. Every query records which (seed, d
 
 ### Token reduction benchmark
 
-Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository at v0.8.0: ~333,000 corpus tokens vs ~3,000 per query — **110× fewer tokens per query**; on the original Python Graphify's codebase: **52×**. On tiny corpora it will honestly report <1x; there the graph's value is structure, not compression, and the output says so. Numbers vary per run and corpus — [methodology, head-to-head, and the embedding experiment](worked/head-to-head/).
+Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository at v0.8.0: ~333,000 corpus tokens vs ~3,000 per query — **110× fewer tokens per query**; on the Python Graphify codebase: **52×**. On tiny corpora it will honestly report <1x; there the graph's value is structure, not compression, and the output says so. Numbers vary per run and corpus — [methodology, head-to-head, and the embedding experiment](worked/head-to-head/).
 
 ### Wiki export
 
@@ -203,14 +205,14 @@ Two independent semantic layers, both optional:
 - `similar_to` edges (INFERRED, cosine-scored) linking semantically related symbols across files — they flow into clustering, surprising connections, and every export
 - embedding-backed query recall: `query` merges semantic candidates with token matching, so conceptual questions with zero string overlap still find their symbols
 
-Once embeddings exist, every `run`/`update` refreshes them incrementally (offline — the refresh never downloads), and `query` picks them up automatically. Override the model cache location with ``ASTRIA_EMBED_CACHE_DIR` (legacy `GRAPHIFY_EMBED_CACHE_DIR` accepted)`.
+Once embeddings exist, every `run`/`update` refreshes them incrementally (offline — the refresh never downloads), and `query` picks them up automatically. Override the model cache location with `ASTRIA_EMBED_CACHE_DIR` (legacy `GRAPHIFY_EMBED_CACHE_DIR` accepted).
 
 **LLM enrichment** — set any LLM backend and the pipeline enriches docs, papers, and images into concept nodes automatically:
 
 | Backend | Env vars | Vision |
 |---------|----------|--------|
 | Anthropic Claude (default) | `ASTRIA_LLM_API_KEY` | ✓ |
-| OpenAI-compatible (OpenAI, DeepSeek, Ollama, LM Studio, custom) | `GRAPHIFY_LLM_BASE_URL` + `ASTRIA_LLM_API_KEY`/`OPENAI_API_KEY` | ✓ |
+| OpenAI-compatible (OpenAI, DeepSeek, Ollama, LM Studio, custom) | `ASTRIA_LLM_BASE_URL` (or `OPENAI_BASE_URL`) + `ASTRIA_LLM_API_KEY`/`OPENAI_API_KEY` | ✓ |
 | Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | ✓ |
 
 `ASTRIA_LLM_BACKEND` selects explicitly; `ASTRIA_LLM_MODEL` overrides (legacy `GRAPHIFY_*` names still honored) the model. Per-run: `astria run . --backend openai --model gpt-4o-mini`. Images (png/jpg/webp/gif, ≤5 MB) go through each backend's vision API.
