@@ -4,6 +4,11 @@ name: Benchmark snapshot
 
 on:
   workflow_dispatch:
+  # The Actions-tab button needs the workflow on the default branch; until
+  # develop merges to main, push a change to the trigger file to request a run.
+  push:
+    branches: [develop, main]
+    paths: ['.github/bench-trigger']
 
 permissions:
   contents: write
