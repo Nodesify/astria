@@ -1,6 +1,8 @@
 ---
-sidebar_position: 5
+sidebar_position: 2
 title: Semantic enrichment
+description: Two optional semantic layers — local embeddings (no API key) and LLM enrichment — that add similar_to edges and concept nodes to the graph.
+keywords: [embeddings, llm, semantic, claude, openai, gemini, similar_to]
 ---
 
 # Semantic enrichment
@@ -20,7 +22,7 @@ Downloads a small local model once (~90 MB, then offline forever) and computes v
 
 Once embeddings exist, every `run`/`update` refreshes them incrementally (offline — the refresh never downloads), and `query` picks them up automatically.
 
-Override the model cache location with `GRAPHIFY_EMBED_CACHE_DIR`.
+Override the model cache location with `GRAPHIFY_EMBED_CACHE_DIR` — all variables in [Environment variables](../reference/env-vars).
 
 ## LLM enrichment
 

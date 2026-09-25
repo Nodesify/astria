@@ -1,6 +1,8 @@
 ---
-sidebar_position: 8
+sidebar_position: 2
 title: Benchmarks and evidence
+description: Measured token-reduction numbers, methodology, the head-to-head against the original Python Graphify, and the embedding experiment — all reproducible.
+keywords: [benchmarks, token reduction, performance, methodology, evidence]
 ---
 
 import BenchmarkSnapshot from '@site/src/components/BenchmarkSnapshot';

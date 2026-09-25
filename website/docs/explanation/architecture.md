@@ -1,22 +1,32 @@
 ---
-sidebar_position: 6
+sidebar_position: 1
 title: Architecture
+description: How nodesify-graphify works — the eight-stage Rust pipeline, crate responsibilities, the SQLite data model, and why it stays fast.
+keywords: [architecture, pipeline, rust, sqlite, tree-sitter, crates, data model]
 ---
 
 # Architecture
 
 nodesify-graphify turns source code into a queryable knowledge graph. It uses AST-based extraction via tree-sitter for deterministic, fast analysis, stored in a SQLite database.
 
-The project is a Rust workspace with 14 domain-specific crates and a Node.js CLI.
+The project is a Rust workspace with 15 domain-specific crates and a Node.js CLI package.
 
 - **Language**: Rust 2021
 - **Build system**: Cargo + npm
-- **Core dependencies**: `rusqlite` (persistence), `tree-sitter` (AST parsing), `petgraph` (graph algorithms), `napi-rs` (Node.js bindings)
+- **Core dependencies**: `rusqlite` (persistence), `tree-sitter` (AST parsing), `petgraph` (graph algorithms), `napi-rs` (Node.js bindings), `fastembed` (local embeddings)
 
 ## Pipeline
 
-```
-detect() → extract() → enrich_with_semantics() → build() → dedup_nodes() → cluster() → analyze() → report()
+```mermaid
+flowchart LR
+    A["detect()<br/>graphify-detect"] --> B["extract()<br/>graphify-extract"]
+    B --> C{"backend<br/>configured?"}
+    C -->|yes| D["enrich_with_semantics()<br/>graphify-semantic"]
+    C -->|no| E
+    D --> E["build() + dedup_nodes()<br/>graphify-build"]
+    E --> F["cluster()<br/>graphify-cluster"]
+    F --> G["analyze()<br/>graphify-analyze"]
+    G --> H["report()<br/>graphify-report"]
 ```
 
 The pipeline is orchestrated in `crates/graphify-napi/src/pipeline.rs`. Validation runs before graph assembly: every node needs id/label/file_type/source_file, every edge needs existing endpoints and a valid confidence class — a corrupted extraction fails the run with the full violation list (`diagnose` reports the same classes of problem read-only on an existing graph).
@@ -39,6 +49,7 @@ Each stage is a pure function in its own crate; semantic enrichment is optional 
 | `graphify-paths` | Path normalization and `.graphify` directory management. |
 | `graphify-detect` | File system scanning, `.graphifyignore` support, and incremental change detection via SHA-256 hashes. |
 | `graphify-extract` | Tree-sitter AST traversal logic. Each language defines its own extraction rules (nodes, edges, docstrings). |
+| `graphify-embed` | Local embedding model (fastembed/ONNX, `bge-small-en-v1.5`) powering `similar_to` edges and embedding-backed query recall — no API key, offline after the first model download. |
 | `graphify-build` | Persistent graph assembly; entity dedup (MinHash/LSH blocking + Jaro-Winkler verify) in `dedup.rs`. |
 | `graphify-cluster` | Deterministic community detection (stable labels, cohesion, modularity) using `petgraph`. |
 | `graphify-analyze` | God nodes, ranked surprising cross-community connections, blast radius (`affected.rs`, reverse reachability). |
@@ -49,7 +60,7 @@ Each stage is a pure function in its own crate; semantic enrichment is optional 
 | `graphify-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection. |
 | `graphify-pdf` | PDF text extraction. |
 | `graphify-napi` | The bridge between Rust and Node.js: pipeline orchestration, query surface, merge/diff, JSON/HTML/GraphML/tree export. |
-| `graphify-cli` | The Node.js-based user interface, responsible for argument parsing and installing AI skills. |
+| `graphify-cli` *(Node.js package)* | The user-facing CLI: argument parsing and installing AI skills. |
 
 ## Data model
 

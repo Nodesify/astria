@@ -1,6 +1,8 @@
 ---
-sidebar_position: 3
+sidebar_position: 1
 title: CLI reference
+description: Every nodesify-graphify command and flag — building, querying, exporting, memory, the cross-repo global graph, and assistant integration.
+keywords: [cli, commands, flags, reference]
 ---
 
 # CLI reference
@@ -40,7 +42,7 @@ nodesify-graphify status [--graph .]                      # Graph health and sta
 nodesify-graphify history [--limit 20] [--graph .]        # Show recent query history
 ```
 
-### Query flags
+### Query flags {#query-flags}
 
 - `--dfs` — depth-first instead of breadth-first traversal
 - `--depth N` — maximum traversal depth
@@ -77,7 +79,7 @@ nodesify-graphify export --graph . --format cypher --out graphify.cypher
 cypher-shell -u neo4j -p <password> -f graphify.cypher
 ```
 
-See [Wiki and exports](./wiki-and-exports) for details.
+See [Wiki and exports](../guides/wiki-and-exports) for details.
 
 ## Graph health
 
@@ -89,7 +91,7 @@ Read-only health report over an existing graph: dangling edge endpoints (stub vs
 
 ## Memory and reflection
 
-The feedback loop that complements [learned edges](#learning-from-usage): learned edges are automatic, memory is curated.
+The feedback loop that complements [learned edges](#learning-from-usage): learned edges are automatic, memory is curated. Full walkthrough in [Memory and learning](../guides/memory-and-learning).
 
 ```bash
 nodesify-graphify save-result <question> --answer <text> [--answer-file <path>] \
@@ -103,7 +105,7 @@ nodesify-graphify reflect [--graph .]
 
 ## Global graph (cross-repo)
 
-Merge many repo graphs into one queryable store at `~/.nodesify-graphify/global.db`:
+Merge many repo graphs into one queryable store at `~/.nodesify-graphify/global.db` — merging behavior in detail in [Global graph](../guides/global-graph):
 
 ```bash
 nodesify-graphify run <path> --global --as <tag>   # build, then merge into the global store
@@ -139,10 +141,10 @@ nodesify-graphify hook install|uninstall|status  # Git hook management
 nodesify-graphify hook-guard <mode>            # Editor PreToolUse guard (search | read | gemini) — installed into .claude/settings.json
 ```
 
-Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`.
+Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`. Setup walkthrough in [Agent integration](../guides/mcp-and-agents); the nine MCP tools are documented in the [MCP tools reference](./mcp-tools).
 
 `install` also injects an always-on `## graphify` instruction block into `AGENTS.md`/`CLAUDE.md` (query before grep, run `update` after edits) — idempotent, removed by `uninstall`. `hook-guard` is the editor-side companion to git hooks: it nudges agents toward `query` before raw searches and can (strict mode, opt-in) gate un-indexed reads. It fails open — any error means the tool call proceeds untouched.
 
-## Learning from usage
+## Learning from usage {#learning-from-usage}
 
 The graph compounds in value as you query it. Every query records which (seed, discovered) node pairs its traversal connected; when the same pair recurs across **at least 2 distinct questions with 3+ total hits**, the next `run`/`update` promotes it to a `learned` edge (`INFERRED`, hits-scored, provenance `query_history`). Learned edges flow into clustering, analysis, and every export — the graph remembers which connections you actually keep asking about. High-fidelity traversals (`--detail high`) can filter them like any `INFERRED` fact.

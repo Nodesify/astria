@@ -131,11 +131,12 @@ function HeroTerminal() {
 
 function Hero() {
   const { siteConfig } = useDocusaurusContext();
+  const version = siteConfig.customFields?.productVersion ?? '';
   return (
     <header className={styles.hero}>
       <div className={clsx('container', styles.heroInner)}>
         <div className={styles.heroCopy}>
-          <div className={styles.badge}>v0.8.0 — markdown wiki + Obsidian vault export</div>
+          <div className={styles.badge}>v{version} — markdown wiki + Obsidian vault export</div>
           <Heading as="h1" className={styles.heroTitle}>
             Understand a codebase <span className={styles.heroAccent}>before you touch it</span>
           </Heading>
@@ -246,7 +247,7 @@ function CtaBand() {
           <Link className={clsx('button', 'button--lg', styles.primaryBtn)} to="/docs/getting-started">
             Read the docs
           </Link>
-          <Link className={clsx('button', 'button--lg', styles.ghostBtn)} to="/docs/cli">
+          <Link className={clsx('button button--lg', styles.ghostBtn)} to="/docs/cli">
             CLI reference
           </Link>
         </div>
