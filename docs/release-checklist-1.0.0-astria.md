@@ -18,7 +18,7 @@ state worse than the previous one.
       URL verified 200)
 
 ## 2. npm — before first publish
-- [ ] On npmjs.com, open the `@nodesify` org and pre-create the package
+- [x] On npmjs.com, open the `@nodesify` org and pre-create the package
       entries `@nodesify/astria` + the five platform packages
       (`-win32-x64-msvc`, `-darwin-x64`, `-darwin-arm64`,
       `-linux-x64-gnu`, `-linux-arm64-gnu`) with **GitHub trusted publishing**
@@ -28,16 +28,19 @@ state worse than the previous one.
       manual publish from a maintainer machine (`npm publish --access public`
       in `packages/astria-cli/npm/<platform>/`, then the main package) and
       link trusted publishing afterwards.
+      (done — the release publish succeeded via trusted publishing)
 
 ## 3. Release
-- [ ] Merge `develop` → `main` per the usual flow.
-- [ ] Tag and push: `git tag v1.0.0 && git push origin v1.0.0` (from `main`).
+- [x] Merge `develop` → `main` per the usual flow.
+      (done — "Release v1.0.0 — astria (#66)" on main)
+- [x] Tag and push: `git tag v1.0.0 && git push origin v1.0.0` (from `main`).
       `release.yml` verifies the tag equals
       `packages/astria-cli/package.json` (1.0.0), builds five platforms, and
       publishes platform packages then the main package.
+      (done — npm dist-tag `latest` = 1.0.0)
 
 ## 4. npm — after publish
-- [ ] Deprecate the old packages so every existing install sees the pointer:
+- [x] Deprecate the old packages so every existing install sees the pointer:
       ```
       npm deprecate @nodesify/graphify "Renamed to @nodesify/astria — npm i -g @nodesify/astria, then run `astria migrate` and `astria install`"
       npm deprecate @nodesify/graphify-win32-x64-msvc "Renamed to @nodesify/astria-win32-x64-msvc"
@@ -46,12 +49,15 @@ state worse than the previous one.
       npm deprecate @nodesify/graphify-linux-x64-gnu "Renamed to @nodesify/astria-linux-x64-gnu"
       npm deprecate @nodesify/graphify-linux-arm64-gnu "Renamed to @nodesify/astria-linux-arm64-gnu"
       ```
+      (done — verified: `npm view` shows the deprecation message on the main
+      package and all five platform packages. npm printed an EOTP error on the
+      last command, but the deprecation had already landed.)
 - [ ] Consider one final `@nodesify/graphify@0.9.1` whose postinstall prints
       the migration banner, if you want in-CLI reach even without deprecation
       notices.
 
 ## 5. Docs site
-- [ ] If cutting a fresh docs version, follow `website/README.md`
+- [x] If cutting a fresh docs version, follow `website/README.md`
       (`npm run docusaurus docs:version`), then point `lastVersion` in
       `website/docusaurus.config.js` at it. `versioned_docs/version-0.8.0`
       stays frozen as history (it documents the graphify era — that is
