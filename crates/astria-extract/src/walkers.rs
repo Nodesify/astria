@@ -921,10 +921,7 @@ fn find_rationale_tag(line: &str, comment_prefix: &str) -> Option<&'static str> 
 // Single-file extraction
 // ---------------------------------------------------------------------------
 
-pub(crate) fn extract_single(
-    path: &Path,
-    cfg: &LanguageConfig,
-) -> Result<Extraction, AstriaError> {
+pub(crate) fn extract_single(path: &Path, cfg: &LanguageConfig) -> Result<Extraction, AstriaError> {
     let source = std::fs::read(path)?;
     let source_ref = source.as_slice();
 
@@ -987,7 +984,9 @@ pub(crate) fn extract_single(
 
     // Drop malformed edges: an unresolved reference can leave an empty
     // endpoint, and an empty target would fail build validation wholesale.
-    state.edges.retain(|e| !e.source.is_empty() && !e.target.is_empty());
+    state
+        .edges
+        .retain(|e| !e.source.is_empty() && !e.target.is_empty());
 
     // Cfg-gated twins (#[cfg(feature)] / #[cfg(not)]) textually duplicate a
     // definition; only one exists per build, so keep the first occurrence of

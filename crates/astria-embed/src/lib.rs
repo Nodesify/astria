@@ -47,9 +47,7 @@ pub fn load_embedder() -> astria_core::Result<TextEmbedding> {
             .with_show_download_progress(true),
     )
     .map_err(|e| {
-        astria_core::AstriaError::Graph(format!(
-            "failed to load embedding model {MODEL_NAME}: {e}"
-        ))
+        astria_core::AstriaError::Graph(format!("failed to load embedding model {MODEL_NAME}: {e}"))
     })
 }
 
@@ -171,9 +169,9 @@ pub fn embed_missing_nodes(
                 node_text(label, docstring.as_deref(), signature.as_deref())
             })
             .collect();
-        let vectors = embedder.embed(texts, None).map_err(|e| {
-            astria_core::AstriaError::Graph(format!("embedding batch failed: {e}"))
-        })?;
+        let vectors = embedder
+            .embed(texts, None)
+            .map_err(|e| astria_core::AstriaError::Graph(format!("embedding batch failed: {e}")))?;
         let tx = db.unchecked_transaction()?;
         {
             let mut stmt = tx.prepare(

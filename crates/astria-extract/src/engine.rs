@@ -243,13 +243,21 @@ mod tests {
         let ext = &results[0];
         let ids: Vec<&str> = ext.nodes.iter().map(|n| n.id.as_str()).collect();
         let from_env: Vec<&&str> = ids.iter().filter(|id| id.ends_with("::from_env")).collect();
-        assert_eq!(from_env.len(), 2, "both from_env methods extracted: {ids:?}");
+        assert_eq!(
+            from_env.len(),
+            2,
+            "both from_env methods extracted: {ids:?}"
+        );
         assert!(
             ids.iter().all(|id| count_char(id, ':') >= 0),
             "ids well formed"
         );
         let unique = from_env.iter().collect::<std::collections::HashSet<_>>();
-        assert_eq!(unique.len(), 2, "impl method ids must be unique: {from_env:?}");
+        assert_eq!(
+            unique.len(),
+            2,
+            "impl method ids must be unique: {from_env:?}"
+        );
     }
 
     fn count_char(s: &str, c: char) -> i32 {
@@ -292,9 +300,17 @@ mod tests {
             .filter(|n| n.node_type == "section")
             .map(|n| n.id.as_str())
             .collect();
-        assert_eq!(section_ids.len(), 3, "all sections extracted: {section_ids:?}");
+        assert_eq!(
+            section_ids.len(),
+            3,
+            "all sections extracted: {section_ids:?}"
+        );
         let unique: std::collections::HashSet<_> = section_ids.iter().collect();
-        assert_eq!(unique.len(), 3, "repeated headings must get unique ids: {section_ids:?}");
+        assert_eq!(
+            unique.len(),
+            3,
+            "repeated headings must get unique ids: {section_ids:?}"
+        );
     }
 
     #[test]

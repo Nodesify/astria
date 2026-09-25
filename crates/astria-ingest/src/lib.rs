@@ -204,9 +204,7 @@ fn fetch_bytes(url: &str) -> Result<(Vec<u8>, String)> {
                 .get("location")
                 .and_then(|v| v.to_str().ok())
                 .ok_or_else(|| {
-                    AstriaError::Graph(format!(
-                        "redirect from {current} without a Location header"
-                    ))
+                    AstriaError::Graph(format!("redirect from {current} without a Location header"))
                 })?;
             current = resolve_redirect(&current, location)?;
             continue;

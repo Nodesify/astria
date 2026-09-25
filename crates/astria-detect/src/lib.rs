@@ -195,8 +195,7 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
         // and query results.
         let sample_len = bytes.len().min(64 * 1024);
         let sample_newlines = bytes[..sample_len].iter().filter(|&&b| b == b'\n').count();
-        if astria_core::security::looks_minified(bytes.len() as u64, sample_len, sample_newlines)
-        {
+        if astria_core::security::looks_minified(bytes.len() as u64, sample_len, sample_newlines) {
             continue;
         }
 

@@ -542,10 +542,7 @@ pub fn export_obsidian(db: &Connection, out_dir: &Path) -> Result<usize> {
         count += 1;
     }
 
-    std::fs::write(
-        out_dir.join("astria.canvas"),
-        canvas_json(&vault, &members),
-    )?;
+    std::fs::write(out_dir.join("astria.canvas"), canvas_json(&vault, &members))?;
 
     Ok(count)
 }

@@ -18,10 +18,7 @@ fn community_labels(db: &Connection) -> HashMap<i64, String> {
     .unwrap_or_default()
 }
 
-pub fn generate_report(
-    db: &Connection,
-    analysis: &AnalysisResult,
-) -> astria_core::Result<String> {
+pub fn generate_report(db: &Connection, analysis: &AnalysisResult) -> astria_core::Result<String> {
     let node_count: i64 = db
         .query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get(0))
         .unwrap_or(0);
