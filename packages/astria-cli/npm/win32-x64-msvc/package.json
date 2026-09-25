@@ -1,15 +1,15 @@
 {
-  "name": "@nodesify/graphify-win32-x64-msvc",
-  "version": "0.2.2",
+  "name": "@nodesify/astria-win32-x64-msvc",
+  "version": "1.0.0",
   "os": [
     "win32"
   ],
   "cpu": [
     "x64"
   ],
-  "main": "graphify.win32-x64-msvc.node",
+  "main": "astria.win32-x64-msvc.node",
   "files": [
-    "graphify.win32-x64-msvc.node"
+    "astria.win32-x64-msvc.node"
   ],
   "description": "Turn any folder into a queryable knowledge graph",
   "keywords": [
@@ -19,16 +19,16 @@
     "ast",
     "code-intelligence"
   ],
-  "homepage": "https://github.com/Nodesify/nodesify-graphify#readme",
+  "homepage": "https://github.com/Nodesify/astria#readme",
   "license": "MIT",
   "engines": {
     "node": ">=20"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Nodesify/nodesify-graphify.git"
+    "url": "git+https://github.com/Nodesify/astria.git"
   },
   "bugs": {
-    "url": "https://github.com/Nodesify/nodesify-graphify/issues"
+    "url": "https://github.com/Nodesify/astria/issues"
   }
 }

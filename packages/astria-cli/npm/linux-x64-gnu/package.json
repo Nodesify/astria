@@ -1,15 +1,15 @@
 {
-  "name": "@nodesify/graphify-linux-arm64-gnu",
-  "version": "0.2.2",
+  "name": "@nodesify/astria-linux-x64-gnu",
+  "version": "1.0.0",
   "os": [
     "linux"
   ],
   "cpu": [
-    "arm64"
+    "x64"
   ],
-  "main": "graphify.linux-arm64-gnu.node",
+  "main": "astria.linux-x64-gnu.node",
   "files": [
-    "graphify.linux-arm64-gnu.node"
+    "astria.linux-x64-gnu.node"
   ],
   "description": "Turn any folder into a queryable knowledge graph",
   "keywords": [
@@ -19,17 +19,17 @@
     "ast",
     "code-intelligence"
   ],
-  "homepage": "https://github.com/Nodesify/nodesify-graphify#readme",
+  "homepage": "https://github.com/Nodesify/astria#readme",
   "license": "MIT",
   "engines": {
     "node": ">=20"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Nodesify/nodesify-graphify.git"
+    "url": "git+https://github.com/Nodesify/astria.git"
   },
   "bugs": {
-    "url": "https://github.com/Nodesify/nodesify-graphify/issues"
+    "url": "https://github.com/Nodesify/astria/issues"
   },
   "libc": [
     "glibc"
