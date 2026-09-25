@@ -21,6 +21,10 @@ node -e "const fs=require('fs');if(!fs.existsSync('.graphify/graph.json')){conso
 ## Step 2 - Read the report
 
 Read `.graphify/graph_report.md` and summarize: hub nodes, communities, surprising connections.
+## Prefer MCP tools when connected
+
+If the `graphify` MCP server is connected (registered by `nodesify-graphify install` for claude, cursor, gemini, and zcode), prefer its native tools over shell commands: `repo_map` to orient, `query_graph` for a natural-language question, `explain`/`get_neighbors` for one symbol, `shortest_path` to trace a connection, `affected` before changing a shared symbol. Use the CLI commands below only when the server is not connected.
+
 
 ## Enforcement Rules
 

@@ -129,7 +129,12 @@ export function hookGuard(mode: string, _args: string[]): void {
       }
       // Strict: deny one un-indexed read per session until oriented.
       if (strict && input.tool_name === 'Read' && !orientedRecently(gdir)) {
-        const session = process.env.CLAUDE_SESSION_ID || 'default';
+        // Session ids become filenames; strip anything that could carry a
+        // path separator or traversal before using one.
+        const session =
+          (process.env.CLAUDE_SESSION_ID || 'default')
+            .replace(/[^A-Za-z0-9_-]/g, '')
+            .slice(0, 64) || 'default';
         const marker = join(gdir, 'cache', 'hook_sessions', `${session}.denied`);
         try {
           mkdirSync(join(gdir, 'cache', 'hook_sessions'), { recursive: true });

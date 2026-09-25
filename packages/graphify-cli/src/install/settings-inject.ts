@@ -248,35 +248,68 @@ export function removeCursorRule(projectDir: string): boolean {
   return true;
 }
 
-// ---- ZCode (.zcode/config.json mcp.servers) ----
+// ---- Project-scoped MCP registration (ZCode / Claude Code / Cursor / Gemini) ----
 
-export function injectZcodeMcp(projectDir: string): boolean {
-  const configPath = path.join(projectDir, '.zcode', 'config.json');
+export type McpFlavor = 'zcode' | 'claude' | 'cursor' | 'gemini';
+
+const GRAPHIFY_MCP_SERVER = { type: 'stdio', command: 'nodesify-graphify', args: ['mcp'] };
+
+const MCP_TARGETS: Record<McpFlavor, { configPath: string; serverPath: string[] }> = {
+  zcode: { configPath: path.join('.zcode', 'config.json'), serverPath: ['mcp', 'servers', 'graphify'] },
+  claude: { configPath: '.mcp.json', serverPath: ['mcpServers', 'graphify'] },
+  cursor: { configPath: path.join('.cursor', 'mcp.json'), serverPath: ['mcpServers', 'graphify'] },
+  gemini: { configPath: path.join('.gemini', 'settings.json'), serverPath: ['mcpServers', 'graphify'] },
+};
+
+export function injectAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
+  const target = MCP_TARGETS[flavor];
+  const configPath = path.join(projectDir, target.configPath);
   const data = readJson(configPath);
-  if (!data.mcp) data.mcp = {};
-  if (!data.mcp.servers) data.mcp.servers = {};
-  if (data.mcp.servers.graphify) return false;
 
-  data.mcp.servers.graphify = {
-    type: 'stdio',
-    command: 'nodesify-graphify',
-    args: ['mcp'],
-  };
+  let node: any = data;
+  for (const key of target.serverPath.slice(0, -1)) {
+    if (typeof node[key] !== 'object' || node[key] === null) node[key] = {};
+    node = node[key];
+  }
+  const name = target.serverPath[target.serverPath.length - 1];
+  if (node[name]) return false;
+
+  node[name] = { ...GRAPHIFY_MCP_SERVER };
   writeJson(configPath, data);
   return true;
 }
 
-export function removeZcodeMcp(projectDir: string): boolean {
-  const configPath = path.join(projectDir, '.zcode', 'config.json');
+export function removeAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
+  const target = MCP_TARGETS[flavor];
+  const configPath = path.join(projectDir, target.configPath);
   if (!fs.existsSync(configPath)) return false;
 
   const data = readJson(configPath);
-  if (!data.mcp?.servers?.graphify) return false;
-  delete data.mcp.servers.graphify;
-  if (Object.keys(data.mcp.servers).length === 0) delete data.mcp.servers;
-  if (Object.keys(data.mcp).length === 0) delete data.mcp;
+  const parents: Array<[any, string]> = [];
+  let node: any = data;
+  for (const key of target.serverPath.slice(0, -1)) {
+    if (typeof node[key] !== 'object' || node[key] === null) return false;
+    parents.push([node, key]);
+    node = node[key];
+  }
+  const name = target.serverPath[target.serverPath.length - 1];
+  if (!node[name]) return false;
+
+  delete node[name];
+  for (let i = parents.length - 1; i >= 0; i--) {
+    const [parent, key] = parents[i];
+    if (Object.keys(parent[key]).length === 0) delete parent[key];
+  }
   writeJson(configPath, data);
   return true;
+}
+
+export function injectZcodeMcp(projectDir: string): boolean {
+  return injectAgentMcp(projectDir, 'zcode');
+}
+
+export function removeZcodeMcp(projectDir: string): boolean {
+  return removeAgentMcp(projectDir, 'zcode');
 }
 
 // ---- Kiro (.kiro/steering/graphify.md) ----

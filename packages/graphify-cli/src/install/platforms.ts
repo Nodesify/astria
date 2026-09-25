@@ -8,8 +8,8 @@ export interface PlatformConfig {
   agentsMd: boolean;
   geminiMd: boolean;
   settingsHook: 'claude' | 'codex' | 'gemini' | 'opencode' | 'none';
-  /** Register the graphify MCP server in the agent's project-scoped config. */
-  mcp?: boolean;
+  /** Register the graphify MCP server in this platform's project-scoped config. */
+  mcp?: 'zcode' | 'claude' | 'cursor' | 'gemini';
 }
 
 export const PLATFORMS: Record<string, PlatformConfig> = {
@@ -20,6 +20,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     agentsMd: false,
     geminiMd: false,
     settingsHook: 'claude',
+    mcp: 'claude',
   },
   codex: {
     skillFile: 'skill-codex.md',
@@ -38,6 +39,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     agentsMd: false,
     geminiMd: true,
     settingsHook: 'gemini',
+    mcp: 'gemini',
   },
   opencode: {
     skillFile: 'skill-opencode.md',
@@ -54,6 +56,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     agentsMd: false,
     geminiMd: false,
     settingsHook: 'none',
+    mcp: 'cursor',
   },
   kiro: {
     skillFile: 'skill.md',
@@ -96,7 +99,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     agentsMd: true,
     geminiMd: false,
     settingsHook: 'none',
-    mcp: true,
+    mcp: 'zcode',
   },
 };
 
