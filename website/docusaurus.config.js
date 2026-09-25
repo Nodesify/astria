@@ -8,6 +8,7 @@ const darkCodeTheme = require('prism-react-renderer').themes.dracula;
 const config = {
   title: 'nodesify-graphify',
   tagline: 'Understand a codebase before you touch it',
+  favicon: 'img/favicon.svg',
   url: 'https://nodesify.github.io',
   baseUrl: '/nodesify-graphify/',
   organizationName: 'Nodesify',
@@ -39,6 +40,10 @@ const config = {
     ({
       navbar: {
         title: 'nodesify-graphify',
+        logo: {
+          alt: 'nodesify-graphify logo',
+          src: 'img/logo.svg',
+        },
         items: [
           {
             type: 'docSidebar',

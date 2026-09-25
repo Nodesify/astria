@@ -1,0 +1,18 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="20" y1="24" x2="108" y2="104" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#34d399"/>
+      <stop offset="1" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <path d="M64 30 L100 50 V94 L64 114 L28 94 V50 Z" stroke="url(#g)" stroke-width="7" stroke-linejoin="round" fill="none" opacity="0.35"/>
+  <line x1="64" y1="30" x2="28" y2="94" stroke="url(#g)" stroke-width="6" stroke-linecap="round"/>
+  <line x1="64" y1="30" x2="100" y2="94" stroke="url(#g)" stroke-width="6" stroke-linecap="round"/>
+  <line x1="28" y1="94" x2="100" y2="94" stroke="url(#g)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="64" cy="30" r="13" fill="url(#g)"/>
+  <circle cx="28" cy="94" r="10" fill="url(#g)"/>
+  <circle cx="100" cy="94" r="10" fill="url(#g)"/>
+  <circle cx="64" cy="30" r="5" fill="#fff" fill-opacity="0.9"/>
+  <circle cx="28" cy="94" r="4" fill="#fff" fill-opacity="0.75"/>
+  <circle cx="100" cy="94" r="4" fill="#fff" fill-opacity="0.75"/>
+</svg>
