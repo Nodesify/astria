@@ -12,6 +12,8 @@ Three things a folder full of files can't give you:
 
 [Worked examples with honest reviews](worked/) — the tool run on itself and on its Python ancestor, including what the graph got *wrong*.
 
+**Docs:** [nodesify.github.io/nodesify-graphify](https://nodesify.github.io/nodesify-graphify/)
+
 ## Install
 
 ```bash

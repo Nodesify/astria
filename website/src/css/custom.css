@@ -1,0 +1,89 @@
+/* You can override the default Infima variables here. */
+:root {
+  --ifm-color-primary: #2e7d32;
+  --ifm-color-primary-dark: #297129;
+  --ifm-color-primary-darker: #276a26;
+  --ifm-color-primary-darkest: #20571f;
+  --ifm-color-primary-light: #3a8c3e;
+  --ifm-color-primary-lighter: #429646;
+  --ifm-color-primary-lightest: #52a956;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #66bb6a;
+  --ifm-color-primary-dark: #4cae51;
+  --ifm-color-primary-darker: #45a04a;
+  --ifm-color-primary-darkest: #39833d;
+  --ifm-color-primary-light: #82c886;
+  --ifm-color-primary-lighter: #8fce93;
+  --ifm-color-primary-lightest: #a9deac;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Landing page */
+.heroBanner {
+  padding: 4rem 0;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.heroSubtitleNote {
+  max-width: 640px;
+  margin: 0 auto;
+  font-size: 1rem;
+  opacity: 0.9;
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.buttonOutline {
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.installSnippet {
+  margin-top: 1.5rem;
+}
+
+.installSnippet code {
+  background: rgba(0, 0, 0, 0.25);
+  color: #fff;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
+.features {
+  padding: 3rem 0;
+}
+
+.featureCard {
+  margin-top: 1rem;
+}
+
+.featureEmoji {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.benchmark {
+  padding: 3rem 0;
+  background: var(--ifm-color-emphasis-100);
+}
+
+.benchmark h2 {
+  margin-bottom: 1rem;
+}
+
+.benchmark p {
+  max-width: 720px;
+  margin: 0 auto;
+}
