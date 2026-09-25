@@ -10,6 +10,7 @@ import {
   injectOpenCodePlugin, removeOpenCodePlugin,
   injectCursorRule, removeCursorRule,
   injectKiroSteering, removeKiroSteering,
+  injectZcodeMcp, removeZcodeMcp,
 } from './settings-inject';
 
 function getSkillDir(): string {
@@ -183,6 +184,14 @@ export function installPlatform(platform: string, projectDir: string): string[] 
       break;
   }
 
+  if (cfg.mcp) {
+    if (injectZcodeMcp(projectDir)) {
+      messages.push('ZCode MCP server -> .zcode/config.json');
+    } else {
+      messages.push('ZCode MCP server: already registered');
+    }
+  }
+
   return messages;
 }
 
@@ -265,6 +274,14 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
       removeOpenCodePlugin(projectDir);
       messages.push('OpenCode plugin: removed');
       break;
+  }
+
+  if (cfg.mcp) {
+    if (removeZcodeMcp(projectDir)) {
+      messages.push('ZCode MCP server: removed');
+    } else {
+      messages.push('ZCode MCP server: not found');
+    }
   }
 
   return messages;

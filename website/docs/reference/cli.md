@@ -141,7 +141,7 @@ nodesify-graphify hook install|uninstall|status  # Git hook management
 nodesify-graphify hook-guard <mode>            # Editor PreToolUse guard (search | read | gemini) — installed into .claude/settings.json
 ```
 
-Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`. Setup walkthrough in [Agent integration](../guides/mcp-and-agents); the nine MCP tools are documented in the [MCP tools reference](./mcp-tools).
+Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`. Setup walkthrough in [Agent integration](../guides/mcp-and-agents); the nine MCP tools are documented in the [MCP tools reference](./mcp-tools).
 
 `install` also injects an always-on `## graphify` instruction block into `AGENTS.md`/`CLAUDE.md` (query before grep, run `update` after edits) — idempotent, removed by `uninstall`. `hook-guard` is the editor-side companion to git hooks: it nudges agents toward `query` before raw searches and can (strict mode, opt-in) gate un-indexed reads. It fails open — any error means the tool call proceeds untouched.
 

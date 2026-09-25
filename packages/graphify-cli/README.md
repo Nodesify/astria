@@ -51,7 +51,7 @@ Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Scala, PHP,
 ## AI platform integration
 
 ```bash
-nodesify-graphify install --platform claude   # or: codex, gemini, cursor, copilot, aider, opencode, kiro, trae
+nodesify-graphify install --platform claude   # or: codex, gemini, cursor, copilot, aider, opencode, kiro, trae, zcode
 ```
 
 ## .graphifyignore

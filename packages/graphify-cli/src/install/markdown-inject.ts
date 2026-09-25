@@ -45,14 +45,19 @@ export function removeSection(filePath: string): boolean {
 
 export const PROJECT_MD_SECTION = `## graphify
 
-This project has an optional nodesify-graphify knowledge graph at .graphify/.
-The graph is maintained automatically after edits when the platform supports PostToolUse hooks.
-Use /graphify when you want graph-backed architecture lookup, mapping, or export; ordinary file search remains supported.
+This project has a nodesify-graphify knowledge graph at .graphify/.
+Access it through whichever path your agent has:
+- MCP (when a graphify MCP server is connected): repo_map, query_graph, explain,
+  get_neighbors, shortest_path, affected.
+- CLI (works everywhere): nodesify-graphify map, query, explain, path, affected.
 
 Always-on behaviors:
-1. Before running grep/ripgrep to locate code, try nodesify-graphify query first --
+1. Prefer the graph over repeated text searches for architecture questions, feature
+   location, cross-file logic flow, and change impact; orient with repo_map (or map,
+   or .graphify/graph_report.md), and run affected <node> before changing a shared symbol.
+2. Before running grep/ripgrep to locate code, try nodesify-graphify query first --
    it answers with file:line provenance in one call against the already-built graph.
-2. After modifying code, run nodesify-graphify update . (AST-only, no API cost) so the
+3. After modifying code, run nodesify-graphify update . (AST-only, no API cost) so the
    graph stays fresh; queries then report accurate staleness metadata.`;
 export const SKILL_REGISTRATION = `
 # graphify

@@ -16,6 +16,7 @@ import {
   injectOpenCodePlugin, removeOpenCodePlugin,
   injectCursorRule, removeCursorRule,
   injectKiroSteering, removeKiroSteering,
+  injectZcodeMcp, removeZcodeMcp,
 } from '../install/settings-inject';
 import {
   injectSection, removeSection, PROJECT_MD_SECTION, SKILL_REGISTRATION,
@@ -239,13 +240,61 @@ function testKiroSteering() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ---- ZCode ----
+
+function testZcodeMcp() {
+  const dir = tmpDir();
+
+  const result1 = injectZcodeMcp(dir);
+  assert(result1 === true, 'ZCode: first inject returns true');
+
+  const config = readJson(path.join(dir, '.zcode', 'config.json'));
+  const server = config.mcp.servers.graphify;
+  assert(server.command === 'nodesify-graphify', 'ZCode: server command is nodesify-graphify');
+  assert(JSON.stringify(server.args) === '["mcp"]', 'ZCode: server args are ["mcp"]');
+
+  const result2 = injectZcodeMcp(dir);
+  assert(result2 === false, 'ZCode: second inject returns false (idempotent)');
+
+  // merge: preserves existing servers and unrelated config keys
+  const dir2 = tmpDir();
+  fs.mkdirSync(path.join(dir2, '.zcode'), { recursive: true });
+  const existing = {
+    hooks: { enabled: true },
+    mcp: { servers: { other: { type: 'stdio', command: 'other-cli' } } },
+  };
+  fs.writeFileSync(path.join(dir2, '.zcode', 'config.json'), JSON.stringify(existing));
+  injectZcodeMcp(dir2);
+  const merged = readJson(path.join(dir2, '.zcode', 'config.json'));
+  assert(merged.mcp.servers.other.command === 'other-cli', 'ZCode: preserves existing MCP servers');
+  assert(merged.hooks.enabled === true, 'ZCode: preserves unrelated config keys');
+  assert(merged.mcp.servers.graphify.command === 'nodesify-graphify', 'ZCode: adds graphify server');
+  fs.rmSync(dir2, { recursive: true, force: true });
+
+  const removed = removeZcodeMcp(dir);
+  assert(removed === true, 'ZCode: remove returns true');
+
+  const config2 = readJson(path.join(dir, '.zcode', 'config.json'));
+  assert(!config2.mcp, 'ZCode: empty mcp block cleaned up after remove');
+
+  const removed2 = removeZcodeMcp(dir);
+  assert(removed2 === false, 'ZCode: second remove returns false');
+
+  const removed3 = removeZcodeMcp(tmpDir());
+  assert(removed3 === false, 'ZCode: remove from missing file returns false');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // ---- Markdown inject ----
 
 function testMarkdownInject() {
   const dir = tmpDir();
 
   assert(!PROJECT_MD_SECTION.includes('MUST'), 'PROJECT_MD_SECTION is passive');
-  assert(PROJECT_MD_SECTION.includes('/graphify'), 'PROJECT_MD_SECTION mentions opt-in skill');
+  assert(PROJECT_MD_SECTION.includes('repo_map'), 'PROJECT_MD_SECTION names MCP tools');
+  assert(PROJECT_MD_SECTION.includes('nodesify-graphify query'), 'PROJECT_MD_SECTION names CLI path');
+  assert(PROJECT_MD_SECTION.includes('affected'), 'PROJECT_MD_SECTION covers change impact');
 
   // injectSection creates file with content
   const filePath = path.join(dir, 'CLAUDE.md');
@@ -292,6 +341,7 @@ testGeminiHook();
 testOpenCodePlugin();
 testCursorRule();
 testKiroSteering();
+testZcodeMcp();
 testMarkdownInject();
 
 console.log(`\n${passed} passed, ${failed} failed`);

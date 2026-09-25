@@ -8,6 +8,8 @@ export interface PlatformConfig {
   agentsMd: boolean;
   geminiMd: boolean;
   settingsHook: 'claude' | 'codex' | 'gemini' | 'opencode' | 'none';
+  /** Register the graphify MCP server in the agent's project-scoped config. */
+  mcp?: boolean;
 }
 
 export const PLATFORMS: Record<string, PlatformConfig> = {
@@ -84,6 +86,17 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     agentsMd: true,
     geminiMd: false,
     settingsHook: 'none',
+  },
+  zcode: {
+    // skill-codex.md is CLI-oriented, which is what ZCode sessions use
+    // unless the graphify MCP server is registered by the mcp flag below.
+    skillFile: 'skill-codex.md',
+    skillDst: path.join('.zcode', 'skills', 'graphify', 'SKILL.md'),
+    claudeMd: false,
+    agentsMd: true,
+    geminiMd: false,
+    settingsHook: 'none',
+    mcp: true,
   },
 };
 
