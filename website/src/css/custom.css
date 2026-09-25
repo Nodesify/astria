@@ -1,89 +1,140 @@
-/* You can override the default Infima variables here. */
+/* Global theme: emerald palette, Inter/JetBrains Mono typography, chrome polish */
+
 :root {
-  --ifm-color-primary: #2e7d32;
-  --ifm-color-primary-dark: #297129;
-  --ifm-color-primary-darker: #276a26;
-  --ifm-color-primary-darkest: #20571f;
-  --ifm-color-primary-light: #3a8c3e;
-  --ifm-color-primary-lighter: #429646;
-  --ifm-color-primary-lightest: #52a956;
-  --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+  --ifm-color-primary: #059669;
+  --ifm-color-primary-dark: #047857;
+  --ifm-color-primary-darker: #065f46;
+  --ifm-color-primary-darkest: #064e3b;
+  --ifm-color-primary-light: #10b981;
+  --ifm-color-primary-lighter: #34d399;
+  --ifm-color-primary-lightest: #6ee7b7;
+
+  --ifm-font-family-base: 'Inter Variable', system-ui, -apple-system, 'Segoe UI',
+    Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --ifm-heading-font-family: 'Inter Variable', system-ui, -apple-system, 'Segoe UI',
+    Roboto, sans-serif;
+  --ifm-font-family-monospace: 'JetBrains Mono Variable', 'SFMono-Regular', Menlo,
+    Consolas, 'Liberation Mono', monospace;
+  --ifm-code-font-size: 92%;
+  --ifm-font-size-base: 16px;
+  --ifm-line-height-base: 1.68;
+
+  --docusaurus-highlighted-code-line-bg: rgba(5, 150, 105, 0.14);
+
+  --ifm-navbar-height: 4rem;
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #66bb6a;
-  --ifm-color-primary-dark: #4cae51;
-  --ifm-color-primary-darker: #45a04a;
-  --ifm-color-primary-darkest: #39833d;
-  --ifm-color-primary-light: #82c886;
-  --ifm-color-primary-lighter: #8fce93;
-  --ifm-color-primary-lightest: #a9deac;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+  --ifm-color-primary: #34d399;
+  --ifm-color-primary-dark: #10b981;
+  --ifm-color-primary-darker: #059669;
+  --ifm-color-primary-darkest: #047857;
+  --ifm-color-primary-light: #6ee7b7;
+  --ifm-color-primary-lighter: #a7f3d0;
+  --ifm-color-primary-lightest: #d1fae5;
+
+  --ifm-background-color: #0b1220;
+  --ifm-background-surface-color: #101a2e;
+  --ifm-color-emphasis-100: #131d33;
+  --ifm-color-emphasis-200: #1e2a44;
+  --ifm-color-emphasis-300: #2a3a5c;
+
+  --docusaurus-highlighted-code-line-bg: rgba(52, 211, 153, 0.16);
 }
 
-/* Landing page */
-.heroBanner {
-  padding: 4rem 0;
-  text-align: center;
-  position: relative;
+/* Headings */
+h1, h2, h3, h4 {
+  letter-spacing: -0.015em;
+}
+
+/* Navbar */
+.navbar {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: none;
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+}
+
+[data-theme='dark'] .navbar {
+  background: rgba(11, 18, 32, 0.82);
+}
+
+.navbar__title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.navbar__logo {
+  height: 30px;
+  width: 30px;
+}
+
+.navbar__link {
+  font-weight: 500;
+}
+
+/* Docs body typography */
+article h1 {
+  font-size: 2.1rem;
+  font-weight: 800;
+}
+
+article h2 {
+  font-weight: 700;
+  margin-top: 2.6rem;
+}
+
+/* Code blocks */
+.theme-code-block {
+  border-radius: 12px !important;
+  box-shadow: 0 6px 24px -12px rgba(2, 44, 34, 0.35);
+}
+
+/* Admonitions */
+.admonition {
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+/* Tables */
+table {
+  border-radius: 10px;
   overflow: hidden;
 }
 
-.heroSubtitleNote {
-  max-width: 640px;
-  margin: 0 auto;
-  font-size: 1rem;
-  opacity: 0.9;
+/* Footer */
+.footer {
+  --ifm-footer-background-color: #0d1526;
+  --ifm-footer-link-color: #94a3b8;
+  --ifm-footer-title-color: #e2e8f0;
+  --ifm-footer-color: #64748b;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  background: #0d1526;
 }
 
-.buttons {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  margin-top: 2rem;
+.footer__link-item:hover {
+  color: #34d399;
 }
 
-.buttonOutline {
-  border-color: rgba(255, 255, 255, 0.6);
+.footer__title {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-.installSnippet {
-  margin-top: 1.5rem;
+.footer__copyright {
+  font-size: 0.85rem;
 }
 
-.installSnippet code {
-  background: rgba(0, 0, 0, 0.25);
-  color: #fff;
-  padding: 0.5rem 1rem;
-  border-radius: 8px;
-  font-size: 1rem;
+/* Buttons site-wide */
+.button {
+  border-radius: 10px;
+  font-weight: 600;
 }
 
-.features {
-  padding: 3rem 0;
-}
-
-.featureCard {
-  margin-top: 1rem;
-}
-
-.featureEmoji {
-  font-size: 2.5rem;
-  margin-bottom: 0.5rem;
-}
-
-.benchmark {
-  padding: 3rem 0;
-  background: var(--ifm-color-emphasis-100);
-}
-
-.benchmark h2 {
-  margin-bottom: 1rem;
-}
-
-.benchmark p {
-  max-width: 720px;
-  margin: 0 auto;
+/* Smooth focus rings */
+:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
 }
