@@ -64,6 +64,219 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "astria-analyze"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "astria-paths",
+ "petgraph",
+ "rusqlite",
+]
+
+[[package]]
+name = "astria-build"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "astria-extract",
+ "astria-paths",
+ "rusqlite",
+ "serde_json",
+ "strsim",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "astria-cluster"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "petgraph",
+ "rusqlite",
+]
+
+[[package]]
+name = "astria-core"
+version = "1.0.0"
+dependencies = [
+ "petgraph",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "astria-detect"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "astria-paths",
+ "ignore",
+ "rusqlite",
+ "sha2",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
+name = "astria-embed"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "fastembed",
+ "rusqlite",
+ "tempfile",
+]
+
+[[package]]
+name = "astria-extract"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "astria-paths",
+ "astria-pdf",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-css",
+ "tree-sitter-dart",
+ "tree-sitter-elixir",
+ "tree-sitter-go",
+ "tree-sitter-haskell",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-kotlin-ng",
+ "tree-sitter-lua",
+ "tree-sitter-php",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-scala",
+ "tree-sitter-swift",
+ "tree-sitter-typescript",
+ "tree-sitter-zig",
+]
+
+[[package]]
+name = "astria-ingest"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "astria-extract",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "ureq",
+ "url",
+]
+
+[[package]]
+name = "astria-mcp"
+version = "1.0.0"
+dependencies = [
+ "astria-analyze",
+ "astria-core",
+ "astria-paths",
+ "astria-query",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "astria-napi"
+version = "1.0.0"
+dependencies = [
+ "astria-analyze",
+ "astria-build",
+ "astria-cluster",
+ "astria-core",
+ "astria-detect",
+ "astria-embed",
+ "astria-extract",
+ "astria-ingest",
+ "astria-mcp",
+ "astria-paths",
+ "astria-query",
+ "astria-report",
+ "astria-semantic",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "petgraph",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "astria-paths"
+version = "1.0.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
+name = "astria-pdf"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "pdf-extract",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "astria-query"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "astria-paths",
+ "petgraph",
+ "rusqlite",
+ "strsim",
+ "tempfile",
+]
+
+[[package]]
+name = "astria-report"
+version = "1.0.0"
+dependencies = [
+ "astria-analyze",
+ "astria-build",
+ "astria-core",
+ "astria-paths",
+ "rusqlite",
+]
+
+[[package]]
+name = "astria-semantic"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -765,219 +978,6 @@ dependencies = [
  "log",
  "regex-automata",
  "regex-syntax",
-]
-
-[[package]]
-name = "graphify-analyze"
-version = "0.8.0"
-dependencies = [
- "graphify-core",
- "graphify-paths",
- "petgraph",
- "rusqlite",
-]
-
-[[package]]
-name = "graphify-build"
-version = "0.8.0"
-dependencies = [
- "graphify-core",
- "graphify-extract",
- "graphify-paths",
- "rusqlite",
- "serde_json",
- "strsim",
- "unicode-normalization",
-]
-
-[[package]]
-name = "graphify-cluster"
-version = "0.8.0"
-dependencies = [
- "graphify-core",
- "petgraph",
- "rusqlite",
-]
-
-[[package]]
-name = "graphify-core"
-version = "0.8.0"
-dependencies = [
- "petgraph",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror",
- "unicode-normalization",
-]
-
-[[package]]
-name = "graphify-detect"
-version = "0.8.0"
-dependencies = [
- "graphify-core",
- "graphify-paths",
- "ignore",
- "rusqlite",
- "sha2",
- "tempfile",
- "walkdir",
-]
-
-[[package]]
-name = "graphify-embed"
-version = "0.8.0"
-dependencies = [
- "fastembed",
- "graphify-core",
- "rusqlite",
- "tempfile",
-]
-
-[[package]]
-name = "graphify-extract"
-version = "0.8.0"
-dependencies = [
- "graphify-core",
- "graphify-paths",
- "graphify-pdf",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "toml",
- "tree-sitter",
- "tree-sitter-bash",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-cpp",
- "tree-sitter-css",
- "tree-sitter-dart",
- "tree-sitter-elixir",
- "tree-sitter-go",
- "tree-sitter-haskell",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-kotlin-ng",
- "tree-sitter-lua",
- "tree-sitter-php",
- "tree-sitter-python",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-scala",
- "tree-sitter-swift",
- "tree-sitter-typescript",
- "tree-sitter-zig",
-]
-
-[[package]]
-name = "graphify-ingest"
-version = "0.8.0"
-dependencies = [
- "graphify-core",
- "graphify-extract",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "ureq",
- "url",
-]
-
-[[package]]
-name = "graphify-mcp"
-version = "0.8.0"
-dependencies = [
- "graphify-analyze",
- "graphify-core",
- "graphify-paths",
- "graphify-query",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "graphify-napi"
-version = "0.8.0"
-dependencies = [
- "graphify-analyze",
- "graphify-build",
- "graphify-cluster",
- "graphify-core",
- "graphify-detect",
- "graphify-embed",
- "graphify-extract",
- "graphify-ingest",
- "graphify-mcp",
- "graphify-paths",
- "graphify-query",
- "graphify-report",
- "graphify-semantic",
- "napi",
- "napi-build",
- "napi-derive",
- "petgraph",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "graphify-paths"
-version = "0.8.0"
-dependencies = [
- "tempfile",
-]
-
-[[package]]
-name = "graphify-pdf"
-version = "0.8.0"
-dependencies = [
- "graphify-core",
- "pdf-extract",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "graphify-query"
-version = "0.8.0"
-dependencies = [
- "graphify-core",
- "graphify-paths",
- "petgraph",
- "rusqlite",
- "strsim",
- "tempfile",
-]
-
-[[package]]
-name = "graphify-report"
-version = "0.8.0"
-dependencies = [
- "graphify-analyze",
- "graphify-build",
- "graphify-core",
- "graphify-paths",
- "rusqlite",
-]
-
-[[package]]
-name = "graphify-semantic"
-version = "0.8.0"
-dependencies = [
- "base64 0.22.1",
- "graphify-core",
- "serde",
- "serde_json",
- "tempfile",
- "ureq",
 ]
 
 [[package]]

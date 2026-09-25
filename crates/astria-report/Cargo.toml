@@ -1,0 +1,11 @@
+[package]
+name = "astria-report"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+astria-core = { workspace = true }
+astria-build = { workspace = true }
+astria-paths = { workspace = true }
+astria-analyze = { workspace = true }
+rusqlite = { workspace = true }

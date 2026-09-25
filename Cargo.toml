@@ -1,38 +1,38 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/graphify-core",
-    "crates/graphify-paths",
-    "crates/graphify-detect",
-    "crates/graphify-extract",
-    "crates/graphify-build",
-    "crates/graphify-cluster",
-    "crates/graphify-analyze",
-    "crates/graphify-report",
-    "crates/graphify-query",
-    "crates/graphify-mcp",
-    "crates/graphify-napi",
-    "crates/graphify-semantic",
-    "crates/graphify-ingest",
-    "crates/graphify-pdf",
-    "crates/graphify-embed",
+    "crates/astria-core",
+    "crates/astria-paths",
+    "crates/astria-detect",
+    "crates/astria-extract",
+    "crates/astria-build",
+    "crates/astria-cluster",
+    "crates/astria-analyze",
+    "crates/astria-report",
+    "crates/astria-query",
+    "crates/astria-mcp",
+    "crates/astria-napi",
+    "crates/astria-semantic",
+    "crates/astria-ingest",
+    "crates/astria-pdf",
+    "crates/astria-embed",
 ]
 
 [workspace.dependencies]
-graphify-core = { path = "crates/graphify-core" }
-graphify-paths = { path = "crates/graphify-paths" }
-graphify-detect = { path = "crates/graphify-detect" }
-graphify-extract = { path = "crates/graphify-extract" }
-graphify-build = { path = "crates/graphify-build" }
-graphify-cluster = { path = "crates/graphify-cluster" }
-graphify-analyze = { path = "crates/graphify-analyze" }
-graphify-report = { path = "crates/graphify-report" }
-graphify-query = { path = "crates/graphify-query" }
-graphify-mcp = { path = "crates/graphify-mcp" }
-graphify-semantic = { path = "crates/graphify-semantic" }
-graphify-ingest = { path = "crates/graphify-ingest" }
-graphify-pdf = { path = "crates/graphify-pdf" }
-graphify-embed = { path = "crates/graphify-embed" }
+astria-core = { path = "crates/astria-core" }
+astria-paths = { path = "crates/astria-paths" }
+astria-detect = { path = "crates/astria-detect" }
+astria-extract = { path = "crates/astria-extract" }
+astria-build = { path = "crates/astria-build" }
+astria-cluster = { path = "crates/astria-cluster" }
+astria-analyze = { path = "crates/astria-analyze" }
+astria-report = { path = "crates/astria-report" }
+astria-query = { path = "crates/astria-query" }
+astria-mcp = { path = "crates/astria-mcp" }
+astria-semantic = { path = "crates/astria-semantic" }
+astria-ingest = { path = "crates/astria-ingest" }
+astria-pdf = { path = "crates/astria-pdf" }
+astria-embed = { path = "crates/astria-embed" }
 rusqlite = { version = "0.34", features = ["bundled"] }
 petgraph = "0.7"
 thiserror = "2"

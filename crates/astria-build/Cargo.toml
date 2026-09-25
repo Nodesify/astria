@@ -1,0 +1,13 @@
+[package]
+name = "astria-build"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+strsim = { workspace = true }
+unicode-normalization = { workspace = true }
+astria-core = { workspace = true }
+astria-extract = { workspace = true }
+astria-paths = { workspace = true }
+serde_json = "1"
+rusqlite = { workspace = true }
