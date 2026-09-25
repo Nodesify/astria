@@ -5,11 +5,11 @@ top to bottom; each step is ordered so a failure can't leave a half-published
 state worse than the previous one.
 
 ## 1. GitHub
-- [ ] Rename repo `Nodesify/nodesify-graphify` → `Nodesify/astria`
+- [x] Rename repo `Nodesify/nodesify-graphify` → `Nodesify/astria` (done — remote updated and verified)
       (Settings → General → Repository name). GitHub redirects old URLs and
       git remotes automatically; update local `origin` URLs anyway:
       `git remote set-url origin git@github.com:Nodesify/astria.git`
-- [ ] Update repo description/topics (old topics mention graphify).
+- [x] Update repo description/topics (old topics mention graphify).
 - [ ] GitHub Pages: the docs site URL becomes `nodesify.github.io/astria/`
       automatically once the repo renames, but **old links do not redirect**
       for Pages. Update any external links (README badges already point at
