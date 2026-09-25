@@ -5,20 +5,39 @@ on:
     tags:
       - 'v*'
 
+# Least-privilege default: jobs that need more declare it explicitly.
 permissions:
-  id-token: write
-  contents: write
+  contents: read
 
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+    # Must match what ci.yml requests top-level: called workflows may
+    # downgrade but not elevate the caller's token scopes.
     permissions:
       contents: read
       checks: write
 
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify tag matches package version
+        # Fail before the 5-leg build matrix spends 30+ minutes on a tag
+        # that cannot publish (the v0.8.0 re-tag churn, #46).
+        run: |
+          pkg_version=$(node -p "require('./packages/graphify-cli/package.json').version")
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$pkg_version" != "$tag_version" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match packages/graphify-cli/package.json version ${pkg_version}"
+            exit 1
+          fi
+
   build:
     runs-on: ${{ matrix.os }}
-    needs: ci
+    timeout-minutes: 90
+    needs: [ci, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -51,8 +70,8 @@ jobs:
             # build drops the embed feature (clear runtime error on --embed)
             cargo-flags: --no-default-features
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@stable # branch ref on purpose: tracks latest stable Rust; not SHA-pinned so updates keep flowing
         with:
           targets: ${{ matrix.target }}
       - name: Setup cross-compilation toolchain
@@ -64,39 +83,43 @@ jobs:
           mkdir -p .cargo
           echo '[target.${{ matrix.target }}]' >> .cargo/config.toml
           echo 'linker = "${{ matrix.linker }}"' >> .cargo/config.toml
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v5
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '22'
       - name: Install dependencies
+        # npm install (not ci) is deliberate: --install-strategy=nested shapes
+        # node_modules for the napi tooling; scripts/check-napi-version.mjs
+        # guards the lockfile dependency this bypasses.
         run: cd packages/graphify-cli && npm install --install-strategy=nested
       - name: Build native binary
         env:
           NAPI_RS_CLI_VERSION: '2.18.4'
-        run: cargo build --release --target ${{ matrix.target }} -p graphify-napi ${{ matrix.cargo-flags }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p graphify-napi ${{ matrix.cargo-flags }}
       - name: Copy artifact (Linux/macOS)
         if: runner.os != 'Windows'
         run: cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/graphify-cli/dist/graphify.node
       - name: Copy artifact (Windows)
         if: runner.os == 'Windows'
         run: cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/graphify-cli/dist/graphify.node
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: graphify-${{ matrix.platform }}
           path: packages/graphify-cli/dist/graphify.node
 
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: build
     permissions:
       id-token: write
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '22.14.0'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           pattern: 'graphify-*'
@@ -134,11 +157,14 @@ jobs:
           done
         env:
           NPM_CONFIG_ACCESS: public
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
       - name: Publish main package
+        # After the platform packages (they are its optional deps) and before
+        # the GitHub Release, so a failed publish never leaves a Release
+        # announcing an unpublished package.
         run: |
           unset NODE_AUTH_TOKEN
           cd packages/graphify-cli && npm publish --ignore-scripts --access public --provenance
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          generate_release_notes: true

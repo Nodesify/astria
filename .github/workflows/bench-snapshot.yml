@@ -21,18 +21,21 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       BENCH_RUNNER_LABEL: ubuntu-latest (GitHub Actions)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: 20
-      - uses: astral-sh/setup-uv@v5
+          node-version: 22
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           python-version: '3.12'
+      # Deliberate: benchmarks the PUBLISHED CLI from npm, not repo HEAD, so
+      # the snapshot reflects what users can actually install today.
       - name: Install nodesify-graphify (published CLI)
         run: npm install -g @nodesify/graphify
       - name: Run snapshot benchmark
@@ -43,6 +46,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add website/src/data/benchmarks-snapshot.json
           git diff --cached --quiet || git commit -m "chore(bench): update benchmark snapshot"
+          # The bench run is long enough that develop may have moved; rebase
+          # our snapshot commit (if any) before pushing.
+          git pull --rebase origin "${GITHUB_REF_NAME}"
           git push
       - name: Redeploy docs site
         run: gh workflow run "Deploy docs site" --ref develop
