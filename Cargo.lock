@@ -883,6 +883,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "ureq",
+ "url",
 ]
 
 [[package]]

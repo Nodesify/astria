@@ -290,6 +290,26 @@ fn build_agent() -> ureq::Agent {
         .new_agent()
 }
 
+/// True when a base URL targets the local machine, where plain http is the
+/// normal, safe configuration (Ollama, LM Studio, vLLM) and there is no
+/// network to eavesdrop on.
+fn is_local_base_url(base_url: &str) -> bool {
+    let after_scheme = base_url
+        .strip_prefix("http://")
+        .or_else(|| base_url.strip_prefix("https://"))
+        .unwrap_or(base_url);
+    let authority = after_scheme.split(['/', '?']).next().unwrap_or("");
+    let authority = authority.rsplit('@').next().unwrap_or("");
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        // Bracketed IPv6 literal; strip the port after the closing bracket.
+        rest.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    let host = host.to_lowercase();
+    matches!(host.as_str(), "localhost" | "0.0.0.0" | "::1") || host.starts_with("127.")
+}
+
 // ---------------------------------------------------------------------------
 // NoopBackend
 // ---------------------------------------------------------------------------
@@ -458,6 +478,12 @@ impl OpenAiBackend {
             return Err(GraphifyError::Graph(
                 "no API key: set GRAPHIFY_LLM_API_KEY or OPENAI_API_KEY".into(),
             ));
+        }
+        if api_key.is_some() && base_url.starts_with("http://") && !is_local_base_url(&base_url) {
+            eprintln!(
+                "warning: GRAPHIFY_LLM_BASE_URL uses plain http ({base_url}); \
+                 the API key is sent unencrypted"
+            );
         }
         Ok(Self {
             agent: build_agent(),
@@ -941,6 +967,17 @@ mod tests {
         // local model, no Authorization header expected
         let body = backend.build_request_body("x", "txt");
         assert_eq!(body["model"], "llama3");
+    }
+
+    #[test]
+    fn local_base_url_detection() {
+        assert!(is_local_base_url("http://localhost:11434/v1"));
+        assert!(is_local_base_url("http://127.0.0.1:8000"));
+        assert!(is_local_base_url("http://[::1]:11434/v1"));
+        assert!(is_local_base_url("http://user@localhost/v1"));
+        assert!(!is_local_base_url("http://api.example.com/v1"));
+        assert!(!is_local_base_url("http://localhost.attacker.com"));
+        assert!(!is_local_base_url("https://api.openai.com/v1"));
     }
 
     // -- Gemini payloads --

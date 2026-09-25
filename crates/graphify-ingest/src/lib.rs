@@ -7,16 +7,20 @@ pub mod postgres;
 pub mod scip;
 
 use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use graphify_core::GraphifyError;
 use graphify_core::Result;
+use url::Url;
 
 /// Maximum download size: 50 MB.
 const MAX_DOWNLOAD_BYTES: usize = 50 * 1024 * 1024;
 /// Timeout for all ingestion requests.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Maximum redirect hops followed manually; every hop is re-validated.
+const MAX_REDIRECTS: usize = 5;
 
 /// Options carried into the saved file's frontmatter.
 #[derive(Debug, Clone, Default)]
@@ -178,40 +182,64 @@ fn annotated_markdown(
 // ---------------------------------------------------------------------------
 
 fn fetch_bytes(url: &str) -> Result<(Vec<u8>, String)> {
-    validate_url(url)?;
+    // Auto-follow is disabled so redirects surface here and every hop
+    // re-runs URL validation: a public server answering 302 -> internal
+    // address must not become an internal fetch.
     let agent = ureq::config::Config::builder()
         .timeout_global(Some(REQUEST_TIMEOUT))
+        .max_redirects(0)
         .build()
         .new_agent();
-    let response = agent
-        .get(url)
-        .call()
-        .map_err(|e| GraphifyError::Graph(format!("Failed to fetch {url}: {e}")))?;
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let mut reader = response.into_body().into_reader();
-    let mut bytes = Vec::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|e| GraphifyError::Graph(format!("Download read error: {e}")))?;
-        if n == 0 {
-            break;
+    let mut current = url.to_string();
+    for _ in 0..=MAX_REDIRECTS {
+        validate_url(&current)?;
+        validate_resolved_hosts(&current)?;
+        let response = agent
+            .get(&current)
+            .call()
+            .map_err(|e| GraphifyError::Graph(format!("Failed to fetch {current}: {e}")))?;
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| {
+                    GraphifyError::Graph(format!(
+                        "redirect from {current} without a Location header"
+                    ))
+                })?;
+            current = resolve_redirect(&current, location)?;
+            continue;
         }
-        bytes.extend_from_slice(&buf[..n]);
-        if bytes.len() > MAX_DOWNLOAD_BYTES {
-            return Err(GraphifyError::Graph(format!(
-                "Download exceeded {} byte limit for {url}",
-                MAX_DOWNLOAD_BYTES
-            )));
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let mut reader = response.into_body().into_reader();
+        let mut bytes = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = reader
+                .read(&mut buf)
+                .map_err(|e| GraphifyError::Graph(format!("Download read error: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buf[..n]);
+            if bytes.len() > MAX_DOWNLOAD_BYTES {
+                return Err(GraphifyError::Graph(format!(
+                    "Download exceeded {} byte limit for {url}",
+                    MAX_DOWNLOAD_BYTES
+                )));
+            }
         }
+        return Ok((bytes, content_type));
     }
-    Ok((bytes, content_type))
+    Err(GraphifyError::Graph(format!(
+        "exceeded {MAX_REDIRECTS} redirect hops starting at {url}"
+    )))
 }
 
 fn save_markdown(out_dir: &Path, content: String) -> Result<PathBuf> {
@@ -283,18 +311,95 @@ fn derive_doc_name(content: &str) -> String {
 fn pdf_name(url: &str) -> String {
     match arxiv_id(url) {
         Some(id) => format!("arxiv_{}.pdf", id.replace('.', "_")),
-        None => format!("{}.pdf", url.rsplit('/').next().unwrap_or("document")),
+        None => {
+            let seg = last_path_segment(url);
+            let seg = seg.as_deref().unwrap_or("document");
+            match seg.rsplit_once('.') {
+                // Segment already names a pdf: keep one extension.
+                Some((stem, ext)) if ext.eq_ignore_ascii_case("pdf") => {
+                    format!("{}.pdf", safe_file_stem(stem, "document"))
+                }
+                _ => format!("{}.pdf", safe_file_stem(seg, "document")),
+            }
+        }
     }
 }
 
 fn image_name(url: &str) -> String {
-    let seg = url.rsplit('/').next().unwrap_or("image");
-    let seg = seg.split('?').next().unwrap_or("image");
-    if seg.contains('.') {
-        seg.to_string()
-    } else {
-        "image.png".to_string()
+    let seg = last_path_segment(url);
+    let seg = seg.as_deref().unwrap_or("image");
+    match seg.rsplit_once('.') {
+        Some((stem, ext))
+            if !ext.is_empty()
+                && ext.len() <= 5
+                && ext.chars().all(|c| c.is_ascii_alphanumeric()) =>
+        {
+            format!("{}.{}", safe_file_stem(stem, "image"), ext.to_lowercase())
+        }
+        _ => "image.png".to_string(),
     }
+}
+
+/// Last `/`-separated path component of a URL, without query or fragment.
+fn last_path_segment(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next()?;
+    let seg = path.rsplit('/').next()?;
+    Some(seg.to_string())
+}
+
+/// Slug a URL segment into a safe filename component: only ASCII
+/// alphanumerics (and `_`) survive, so separators, drive letters, and
+/// Windows-reserved device names cannot appear — the result can never
+/// escape the output directory.
+fn safe_file_stem(seg: &str, fallback: &str) -> String {
+    let slug: String = seg
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches(|c| c == '_' || c == '.').to_string();
+    if slug.is_empty() {
+        return fallback.to_string();
+    }
+    if is_windows_reserved(&slug) {
+        format!("f_{slug}")
+    } else {
+        slug
+    }
+}
+
+/// Windows treats these (any case) as devices regardless of extension.
+fn is_windows_reserved(stem: &str) -> bool {
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 fn arxiv_id(url: &str) -> Option<String> {
@@ -467,6 +572,99 @@ fn is_private_host(host: &str) -> bool {
         || host.ends_with(".local")
 }
 
+/// Join a redirect `Location` value against the request URL it came from.
+/// Absolute, `//host/path`, `/path`, and bare-relative forms all resolve via
+/// the url crate; the loop's `validate_url` call then rejects any target
+/// whose scheme is not http/https (e.g. `file://`).
+fn resolve_redirect(base: &str, location: &str) -> Result<String> {
+    let joined = Url::parse(base)
+        .and_then(|b| b.join(location))
+        .map_err(|e| GraphifyError::Graph(format!("bad redirect target '{location}': {e}")))?;
+    Ok(joined.to_string())
+}
+
+/// DNS-resolve `url`'s host and reject any address that is not public.
+/// Catches what the string-level `validate_url` checks cannot see: DNS names
+/// that resolve to internal addresses (rebinding or lookalike records) and
+/// non-canonical IPv4 spellings (`2130706433`, `0x7f000001`), which the OS
+/// resolver normalizes to an `IpAddr` before we inspect it. Called before
+/// every request, including every manual redirect hop.
+///
+/// Residual risk: ureq re-resolves independently at connect time, so a
+/// rebinding attacker with a fast-TTL record can still win the race between
+/// this check and the connection. Blocking is standard-practice mitigation,
+/// not a hard guarantee.
+fn validate_resolved_hosts(url: &str) -> Result<()> {
+    let parsed =
+        Url::parse(url).map_err(|e| GraphifyError::Graph(format!("invalid URL {url}: {e}")))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| GraphifyError::Graph(format!("URL has no host: {url}")))?;
+    if is_private_host(host) {
+        return Err(GraphifyError::Graph(format!(
+            "URL resolves to a private/internal address (blocked): {url}"
+        )));
+    }
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let addrs: Vec<IpAddr> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| GraphifyError::Graph(format!("failed to resolve {host}: {e}")))?
+        .map(|a| a.ip())
+        .collect();
+    if addrs.is_empty() {
+        return Err(GraphifyError::Graph(format!(
+            "host resolved to no addresses: {host}"
+        )));
+    }
+    for ip in addrs {
+        if is_private_ip(ip) {
+            return Err(GraphifyError::Graph(format!(
+                "URL resolves to a private/internal address (blocked): {url}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// True for any address a user/agent-supplied URL must not be fetched from:
+/// loopback, private ranges, link-local (incl. cloud metadata
+/// 169.254.169.254), CGNAT, benchmarking, multicast/reserved/broadcast, and
+/// the IPv6 equivalents including IPv4-mapped (`::ffff:127.0.0.1`) and
+/// IPv4-compatible (`::127.0.0.1`) forms.
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_private_ipv4(v4),
+        IpAddr::V6(v6) => match v6.to_ipv4() {
+            // Mapped and IPv4-compatible forms carry the embedded v4's risk.
+            Some(v4) => is_private_ipv4(v4),
+            None => {
+                // 2001:db8::/32 (documentation) has no stable std check.
+                let s = v6.segments();
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_unique_local()
+                    || v6.is_unicast_link_local()
+                    || v6.is_multicast()
+                    || (s[0] == 0x2001 && s[1] == 0x0db8)
+            }
+        },
+    }
+}
+
+fn is_private_ipv4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    ip.is_loopback()                                 // 127.0.0.0/8
+        || ip.is_private()                           // 10/8, 172.16/12, 192.168/16
+        || ip.is_link_local()                        // 169.254/16 (cloud metadata)
+        || ip.is_unspecified()                       // 0.0.0.0
+        || o[0] == 0                                 // 0.0.0.0/8 "this network"
+        || o[0] == 100 && (64..=127).contains(&o[1]) // 100.64.0.0/10 CGNAT
+        || (o[0], o[1], o[2]) == (192, 0, 0)         // 192.0.0.0/24 IETF assignments
+        || (o[0], o[1], o[2]) == (192, 0, 2)         // 192.0.2.0/24 TEST-NET-1
+        || o[0] == 198 && (18..=19).contains(&o[1])  // 198.18.0.0/15 benchmarking
+        || o[0] >= 224 // multicast 224/4, reserved 240/4
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,6 +784,141 @@ mod tests {
     #[test]
     fn urlencode_handles_reserved() {
         assert_eq!(urlencode("a b&c"), "a%20b%26c");
+    }
+
+    // -- SSRF: resolved-address checks --
+
+    #[test]
+    fn private_ipv4_ranges_blocked() {
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.20.5.5",
+            "172.31.255.255",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "0.1.2.3",
+            "100.64.0.1",
+            "100.127.255.255",
+            "198.18.0.1",
+            "198.19.255.255",
+            "192.0.0.1",
+            "192.0.2.9",
+            "224.0.0.1",
+            "255.255.255.255",
+        ] {
+            assert!(
+                is_private_ip(ip.parse().unwrap()),
+                "{ip} must be treated as private"
+            );
+        }
+        for ip in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "100.63.255.255",
+            "100.128.0.1",
+            "172.32.0.1",
+            "198.20.0.1",
+            "203.0.113.99",
+        ] {
+            assert!(
+                !is_private_ip(ip.parse().unwrap()),
+                "{ip} must be treated as public"
+            );
+        }
+    }
+
+    #[test]
+    fn private_ipv6_ranges_blocked() {
+        for ip in [
+            "::1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "fd12:3456::1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "::ffff:169.254.169.254",
+            "::127.0.0.1",
+        ] {
+            assert!(
+                is_private_ip(ip.parse().unwrap()),
+                "{ip} must be treated as private"
+            );
+        }
+        assert!(!is_private_ip("2606:4700::1111".parse().unwrap()));
+    }
+
+    #[test]
+    fn resolved_host_check_blocks_loopback() {
+        // `localhost` and IP literals resolve without any network access, so
+        // this test is hermetic.
+        assert!(validate_resolved_hosts("http://localhost/x").is_err());
+        assert!(validate_resolved_hosts("https://127.0.0.1/x").is_err());
+        assert!(validate_resolved_hosts("http://[::1]:8080/x").is_err());
+    }
+
+    // -- SSRF: redirect targets --
+
+    #[test]
+    fn resolve_redirect_joins_all_location_forms() {
+        assert_eq!(
+            resolve_redirect("https://a.com/x/y", "/z").unwrap(),
+            "https://a.com/z"
+        );
+        assert_eq!(
+            resolve_redirect("https://a.com/x/y", "other").unwrap(),
+            "https://a.com/x/other"
+        );
+        assert_eq!(
+            resolve_redirect("https://a.com/x", "//b.com/p?q=1").unwrap(),
+            "https://b.com/p?q=1"
+        );
+        assert_eq!(
+            resolve_redirect("https://a.com/", "https://b.com/p").unwrap(),
+            "https://b.com/p"
+        );
+    }
+
+    #[test]
+    fn resolve_redirect_rejects_garbage() {
+        assert!(resolve_redirect("https://a.com/", "http://").is_err());
+        assert!(resolve_redirect("not a url at all", "/x").is_err());
+    }
+
+    #[test]
+    fn redirect_scheme_downgrade_blocked_upstream_of_join() {
+        // The loop re-runs validate_url on the joined target, so a `file://`
+        // Location resolves to an absolute URL here but is rejected there.
+        assert_eq!(
+            resolve_redirect("https://a.com/", "file:///etc/passwd").unwrap(),
+            "file:///etc/passwd"
+        );
+        assert!(validate_url("file:///etc/passwd").is_err());
+    }
+
+    // -- Filename safety --
+
+    #[test]
+    fn download_names_cannot_traverse() {
+        // Windows path separators in a URL segment must not become separators
+        // in the saved filename.
+        assert_eq!(image_name(r"https://evil.com/..\..\evil.png"), "evil.png");
+        assert_eq!(pdf_name(r"https://evil.com/p/..\..\evil"), "evil.pdf");
+        assert!(!image_name(r"https://evil.com/..\..\evil.png").contains(['\\', '/']));
+    }
+
+    #[test]
+    fn download_names_strip_query_and_normalize() {
+        assert_eq!(image_name("https://x.com/img/pic.JPEG?w=100"), "pic.jpeg");
+        assert_eq!(pdf_name("https://x.com/a/report.pdf?dl=1"), "report.pdf");
+        assert_eq!(image_name("https://x.com/a/b/"), "image.png");
+        assert_eq!(image_name("https://x.com/diagram"), "image.png");
+        // Windows-reserved device names are defused.
+        assert_eq!(image_name("https://x.com/NUL.png"), "f_nul.png");
     }
 
     #[test]

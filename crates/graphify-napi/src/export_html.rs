@@ -188,15 +188,29 @@ fn export_html_impl(
     var visibleIds = [];
 
     // Legend is precomputed (counts + capped palette) to keep the DOM small.
+    // Built with createElement/textContent: labels come from repo content
+    // (identifiers, docstrings, LLM output) and must never be parsed as HTML.
     (function() {{
-      var html = '<h4>Communities</h4>';
+      var legend = document.getElementById('legend');
+      var h4 = document.createElement('h4');
+      h4.textContent = 'Communities';
+      legend.appendChild(h4);
       DATA.legend.forEach(function(e) {{
-        html += '<div class="item"><div class="swatch" style="background:' + e.color + '"></div> ' + e.label + ' (' + e.count + ' nodes)</div>';
+        var item = document.createElement('div');
+        item.className = 'item';
+        var swatch = document.createElement('div');
+        swatch.className = 'swatch';
+        swatch.style.background = e.color;
+        item.appendChild(swatch);
+        item.appendChild(document.createTextNode(' ' + e.label + ' (' + e.count + ' nodes)'));
+        legend.appendChild(item);
       }});
       if (DATA.meta.legendRestCount > 0) {{
-        html += '<div class="muted">+ ' + DATA.meta.legendRestCount + ' more communities</div>';
+        var rest = document.createElement('div');
+        rest.className = 'muted';
+        rest.textContent = '+ ' + DATA.meta.legendRestCount + ' more communities';
+        legend.appendChild(rest);
       }}
-      document.getElementById('legend').innerHTML = html;
     }})();
 
     // One batched visibility pass per change instead of per-node updates.
@@ -623,5 +637,35 @@ mod tests {
         let legend_rows = html.matches(r#""label":"Community"#).count();
         assert_eq!(legend_rows, LEGEND_LIMIT);
         assert!(html.contains(r#""legendRestCount":30"#));
+    }
+
+    #[test]
+    fn legend_is_built_without_html_interpolation() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, community) VALUES
+               ('n0', '<img src=x onerror=alert(1)>', 'code', 'f.rs', 0),
+               ('n1', 'B()', 'code', 'f.rs', 0);
+             INSERT INTO edges (source, target, relation, confidence, source_file)
+               VALUES ('n1', 'n0', 'calls', 'EXTRACTED', 'f.rs');",
+        )
+        .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("graph-view.html");
+        export_html(&db, &out).unwrap();
+        let html = std::fs::read_to_string(&out).unwrap();
+
+        // Labels come from repo content and LLM output; they must only reach
+        // the page inside the `</script`-escaped DATA JSON, never be
+        // concatenated into markup strings for innerHTML.
+        assert!(
+            !html.contains(r#"html += '"#),
+            "legend must not build markup by string concatenation"
+        );
+        assert!(
+            html.contains("createTextNode"),
+            "legend must render labels via text nodes"
+        );
     }
 }
