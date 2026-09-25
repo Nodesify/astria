@@ -33,53 +33,116 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SKILL_REGISTRATION = exports.PROJECT_MD_SECTION = void 0;
+exports.SKILL_REGISTRATION = exports.PROJECT_MD_SECTION = exports.SECTION_MARKER = void 0;
 exports.injectSection = injectSection;
 exports.removeSection = removeSection;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const SECTION_HEADER = '## graphify';
+// Managed sections carry this marker so later installs can refresh them
+// wholesale. Legacy generated sections (pre-marker) are recognized by
+// fingerprint; anything else containing a graphify heading is treated as
+// user-owned and left untouched.
+exports.SECTION_MARKER = '<!-- nodesify-graphify:managed -->';
+const GRAPHIFY_HEADERS = ['## graphify', '# graphify'];
+const LEGACY_SECTION_SNIPPETS = [
+    // "optional ... opt-in" wording (0.7.x-era)
+    'optional nodesify-graphify knowledge graph',
+    'maintained automatically after edits when the platform supports PostToolUse hooks',
+    // "MUST read" rules wording (early releases)
+    'MUST read .graphify/graph_report.md before searching files',
+    // "CRITICAL RULES / FORBIDDEN" wording
+    '**FORBIDDEN** from using native search tools',
+];
+function headingLevel(header) {
+    return (header.match(/^#+/) || ['#'])[0].length;
+}
+// Locate a graphify section headed by `header` (matched at line start) and
+// bounded by the next heading at the same or higher level, or EOF.
+function findSection(existing, header) {
+    let start = existing.indexOf('\n' + header);
+    if (start === -1) {
+        if (!existing.startsWith(header))
+            return null;
+        start = 0;
+    }
+    const level = headingLevel(header);
+    const boundary = new RegExp(`\\n#{1,${level}} `);
+    const match = existing.slice(start + 1).match(boundary);
+    const end = match?.index !== undefined ? start + 1 + match.index : existing.length;
+    return { start, end };
+}
+function stripMarker(sectionText) {
+    return sectionText
+        .split('\n')
+        .filter((line) => line.trim() !== exports.SECTION_MARKER)
+        .join('\n')
+        .trim();
+}
+function withMarker(content) {
+    return content.trimEnd() + '\n' + exports.SECTION_MARKER;
+}
 function injectSection(filePath, content) {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
-    let existing = '';
-    if (fs.existsSync(filePath)) {
-        existing = fs.readFileSync(filePath, 'utf-8');
+    const header = content.trimStart().split('\n')[0].trim();
+    const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
+    for (const h of GRAPHIFY_HEADERS) {
+        const bounds = findSection(existing, h);
+        if (!bounds)
+            continue;
+        const sectionText = existing.slice(bounds.start, bounds.end);
+        if (stripMarker(sectionText) === content.trim())
+            return 'unchanged';
+        const managed = sectionText.includes(exports.SECTION_MARKER) ||
+            LEGACY_SECTION_SNIPPETS.some((snippet) => sectionText.includes(snippet));
+        if (!managed)
+            return 'unchanged';
+        fs.writeFileSync(filePath, existing.slice(0, bounds.start) + withMarker(content) + existing.slice(bounds.end), 'utf-8');
+        return 'updated';
     }
-    if (existing.includes(SECTION_HEADER)) {
-        return false;
-    }
-    const section = '\n' + content + '\n';
-    fs.writeFileSync(filePath, existing + section, 'utf-8');
-    return true;
+    fs.writeFileSync(filePath, existing.replace(/\n*$/, '\n\n') + withMarker(content) + '\n', 'utf-8');
+    return 'added';
 }
 function removeSection(filePath) {
-    if (!fs.existsSync(filePath)) {
+    if (!fs.existsSync(filePath))
         return false;
-    }
     let content = fs.readFileSync(filePath, 'utf-8');
-    const regex = new RegExp('\\n*' + SECTION_HEADER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\n.*?(?=\\n## |$)', 'gs');
-    const updated = content.replace(regex, '');
-    if (updated.trim().length === 0) {
+    let changed = false;
+    for (const header of GRAPHIFY_HEADERS) {
+        let bounds = findSection(content, header);
+        while (bounds) {
+            content = content.slice(0, bounds.start) + content.slice(bounds.end);
+            changed = true;
+            bounds = findSection(content, header);
+        }
+    }
+    if (!changed)
+        return false;
+    if (content.trim().length === 0) {
         fs.unlinkSync(filePath);
     }
     else {
-        fs.writeFileSync(filePath, updated, 'utf-8');
+        fs.writeFileSync(filePath, content, 'utf-8');
     }
-    return updated !== content;
+    return true;
 }
 exports.PROJECT_MD_SECTION = `## graphify
 
-This project has an optional nodesify-graphify knowledge graph at .graphify/.
-The graph is maintained automatically after edits when the platform supports PostToolUse hooks.
-Use /graphify when you want graph-backed architecture lookup, mapping, or export; ordinary file search remains supported.
+This project has a nodesify-graphify knowledge graph at .graphify/.
+Access it through whichever path your agent has:
+- MCP (when a graphify MCP server is connected): repo_map, query_graph, explain,
+  get_neighbors, shortest_path, affected.
+- CLI (works everywhere): nodesify-graphify map, query, explain, path, affected.
 
 Always-on behaviors:
-1. Before running grep/ripgrep to locate code, try nodesify-graphify query first --
+1. Prefer the graph over repeated text searches for architecture questions, feature
+   location, cross-file logic flow, and change impact; orient with repo_map (or map,
+   or .graphify/graph_report.md), and run affected <node> before changing a shared symbol.
+2. Before running grep/ripgrep to locate code, try nodesify-graphify query first --
    it answers with file:line provenance in one call against the already-built graph.
-2. After modifying code, run nodesify-graphify update . (AST-only, no API cost) so the
+3. After modifying code, run nodesify-graphify update . (AST-only, no API cost) so the
    graph stays fresh; queries then report accurate staleness metadata.`;
 exports.SKILL_REGISTRATION = `
 # graphify

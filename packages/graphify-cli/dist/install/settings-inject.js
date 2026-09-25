@@ -43,6 +43,10 @@ exports.injectOpenCodePlugin = injectOpenCodePlugin;
 exports.removeOpenCodePlugin = removeOpenCodePlugin;
 exports.injectCursorRule = injectCursorRule;
 exports.removeCursorRule = removeCursorRule;
+exports.injectAgentMcp = injectAgentMcp;
+exports.removeAgentMcp = removeAgentMcp;
+exports.injectZcodeMcp = injectZcodeMcp;
+exports.removeZcodeMcp = removeZcodeMcp;
 exports.injectKiroSteering = injectKiroSteering;
 exports.removeKiroSteering = removeKiroSteering;
 const fs = __importStar(require("fs"));
@@ -271,6 +275,62 @@ function removeCursorRule(projectDir) {
         return false;
     fs.unlinkSync(rulePath);
     return true;
+}
+const GRAPHIFY_MCP_SERVER = { type: 'stdio', command: 'nodesify-graphify', args: ['mcp'] };
+const MCP_TARGETS = {
+    zcode: { configPath: path.join('.zcode', 'config.json'), serverPath: ['mcp', 'servers', 'graphify'] },
+    claude: { configPath: '.mcp.json', serverPath: ['mcpServers', 'graphify'] },
+    cursor: { configPath: path.join('.cursor', 'mcp.json'), serverPath: ['mcpServers', 'graphify'] },
+    gemini: { configPath: path.join('.gemini', 'settings.json'), serverPath: ['mcpServers', 'graphify'] },
+};
+function injectAgentMcp(projectDir, flavor) {
+    const target = MCP_TARGETS[flavor];
+    const configPath = path.join(projectDir, target.configPath);
+    const data = readJson(configPath);
+    let node = data;
+    for (const key of target.serverPath.slice(0, -1)) {
+        if (typeof node[key] !== 'object' || node[key] === null)
+            node[key] = {};
+        node = node[key];
+    }
+    const name = target.serverPath[target.serverPath.length - 1];
+    if (node[name])
+        return false;
+    node[name] = { ...GRAPHIFY_MCP_SERVER };
+    writeJson(configPath, data);
+    return true;
+}
+function removeAgentMcp(projectDir, flavor) {
+    const target = MCP_TARGETS[flavor];
+    const configPath = path.join(projectDir, target.configPath);
+    if (!fs.existsSync(configPath))
+        return false;
+    const data = readJson(configPath);
+    const parents = [];
+    let node = data;
+    for (const key of target.serverPath.slice(0, -1)) {
+        if (typeof node[key] !== 'object' || node[key] === null)
+            return false;
+        parents.push([node, key]);
+        node = node[key];
+    }
+    const name = target.serverPath[target.serverPath.length - 1];
+    if (!node[name])
+        return false;
+    delete node[name];
+    for (let i = parents.length - 1; i >= 0; i--) {
+        const [parent, key] = parents[i];
+        if (Object.keys(parent[key]).length === 0)
+            delete parent[key];
+    }
+    writeJson(configPath, data);
+    return true;
+}
+function injectZcodeMcp(projectDir) {
+    return injectAgentMcp(projectDir, 'zcode');
+}
+function removeZcodeMcp(projectDir) {
+    return removeAgentMcp(projectDir, 'zcode');
 }
 // ---- Kiro (.kiro/steering/graphify.md) ----
 const KIRO_STEERING = `---

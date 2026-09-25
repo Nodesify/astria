@@ -41,6 +41,15 @@ const os = __importStar(require("os"));
 const platforms_1 = require("./platforms");
 const markdown_inject_1 = require("./markdown-inject");
 const settings_inject_1 = require("./settings-inject");
+function sectionMessage(result, added, updated, unchanged) {
+    return result === 'added' ? added : result === 'updated' ? updated : unchanged;
+}
+const MCP_LABELS = {
+    zcode: { name: 'ZCode MCP server', file: '.zcode/config.json' },
+    claude: { name: 'Claude MCP server', file: '.mcp.json' },
+    cursor: { name: 'Cursor MCP server', file: '.cursor/mcp.json' },
+    gemini: { name: 'Gemini MCP server', file: '.gemini/settings.json' },
+};
 function getSkillDir() {
     return path.resolve(__dirname, '..', '..', 'skills');
 }
@@ -118,6 +127,9 @@ function installPlatform(platform, projectDir) {
         else {
             messages.push('Cursor rule: already installed');
         }
+        messages.push((0, settings_inject_1.injectAgentMcp)(projectDir, 'cursor')
+            ? 'Cursor MCP server -> .cursor/mcp.json'
+            : 'Cursor MCP server: already registered');
         return messages;
     }
     if (platform === 'kiro') {
@@ -139,38 +151,24 @@ function installPlatform(platform, projectDir) {
     messages.push(...copySkillFile(platform, cfg));
     if (cfg.claudeMd) {
         const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
-        if ((0, markdown_inject_1.injectSection)(claudeMdPath, markdown_inject_1.SKILL_REGISTRATION)) {
-            messages.push('User CLAUDE.md: skill registration added');
-        }
-        else {
-            messages.push('User CLAUDE.md: already registered');
-        }
+        const registration = (0, markdown_inject_1.injectSection)(claudeMdPath, markdown_inject_1.SKILL_REGISTRATION);
+        messages.push(sectionMessage(registration, 'User CLAUDE.md: skill registration added', 'User CLAUDE.md: skill registration updated', 'User CLAUDE.md: already registered'));
     }
     const projectMd = path.join(projectDir, 'CLAUDE.md');
     if (cfg.claudeMd || cfg.agentsMd || cfg.geminiMd) {
-        if (cfg.claudeMd && (0, markdown_inject_1.injectSection)(projectMd, markdown_inject_1.PROJECT_MD_SECTION)) {
-            messages.push('Project CLAUDE.md: graphify section added');
-        }
-        else if (cfg.claudeMd) {
-            messages.push('Project CLAUDE.md: already has graphify section');
+        if (cfg.claudeMd) {
+            const result = (0, markdown_inject_1.injectSection)(projectMd, markdown_inject_1.PROJECT_MD_SECTION);
+            messages.push(sectionMessage(result, 'Project CLAUDE.md: graphify section added', 'Project CLAUDE.md: graphify section updated', 'Project CLAUDE.md: graphify section unchanged'));
         }
         if (cfg.agentsMd) {
             const agentsMd = path.join(projectDir, 'AGENTS.md');
-            if ((0, markdown_inject_1.injectSection)(agentsMd, markdown_inject_1.PROJECT_MD_SECTION)) {
-                messages.push('Project AGENTS.md: graphify section added');
-            }
-            else {
-                messages.push('Project AGENTS.md: already has graphify section');
-            }
+            const result = (0, markdown_inject_1.injectSection)(agentsMd, markdown_inject_1.PROJECT_MD_SECTION);
+            messages.push(sectionMessage(result, 'Project AGENTS.md: graphify section added', 'Project AGENTS.md: graphify section updated', 'Project AGENTS.md: graphify section unchanged'));
         }
         if (cfg.geminiMd) {
             const geminiMd = path.join(projectDir, 'GEMINI.md');
-            if ((0, markdown_inject_1.injectSection)(geminiMd, markdown_inject_1.PROJECT_MD_SECTION)) {
-                messages.push('Project GEMINI.md: graphify section added');
-            }
-            else {
-                messages.push('Project GEMINI.md: already has graphify section');
-            }
+            const result = (0, markdown_inject_1.injectSection)(geminiMd, markdown_inject_1.PROJECT_MD_SECTION);
+            messages.push(sectionMessage(result, 'Project GEMINI.md: graphify section added', 'Project GEMINI.md: graphify section updated', 'Project GEMINI.md: graphify section unchanged'));
         }
     }
     switch (cfg.settingsHook) {
@@ -207,6 +205,12 @@ function installPlatform(platform, projectDir) {
             }
             break;
     }
+    if (cfg.mcp) {
+        const label = MCP_LABELS[cfg.mcp];
+        messages.push((0, settings_inject_1.injectAgentMcp)(projectDir, cfg.mcp)
+            ? `${label.name} -> ${label.file}`
+            : `${label.name}: already registered`);
+    }
     return messages;
 }
 function uninstallPlatform(platform, projectDir) {
@@ -218,6 +222,9 @@ function uninstallPlatform(platform, projectDir) {
         else {
             messages.push('Cursor rule: not found');
         }
+        messages.push((0, settings_inject_1.removeAgentMcp)(projectDir, 'cursor')
+            ? 'Cursor MCP server: removed'
+            : 'Cursor MCP server: not found');
         return messages;
     }
     if (platform === 'kiro') {
@@ -296,6 +303,12 @@ function uninstallPlatform(platform, projectDir) {
             (0, settings_inject_1.removeOpenCodePlugin)(projectDir);
             messages.push('OpenCode plugin: removed');
             break;
+    }
+    if (cfg.mcp) {
+        const label = MCP_LABELS[cfg.mcp];
+        messages.push((0, settings_inject_1.removeAgentMcp)(projectDir, cfg.mcp)
+            ? `${label.name}: removed`
+            : `${label.name}: not found`);
     }
     return messages;
 }
