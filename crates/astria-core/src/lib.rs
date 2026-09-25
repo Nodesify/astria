@@ -10,7 +10,11 @@ pub mod types;
 /// cache). Bump when extraction output changes shape (e.g. the id scheme) —
 /// all files then hash differently, forcing one clean full re-extraction on
 /// upgrade instead of mixing old and new node ids in one graph.
-pub const EXTRACTION_HASH_VERSION: &str = "v3";
+/// v4: impl methods scope under their impl type; repeated md headings get
+/// unique ids; empty-endpoint edges are dropped.
+/// v5: impl blocks are scope-only containers (no duplicate type node).
+/// v6: cfg-gated twin definitions dedup to the first occurrence.
+pub const EXTRACTION_HASH_VERSION: &str = "v6";
 
 /// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`
 /// spelling so pre-1.0 env configs keep working. The new name wins; an empty

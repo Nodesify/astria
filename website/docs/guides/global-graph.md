@@ -1,30 +1,30 @@
 ---
 sidebar_position: 4
 title: Global graph (cross-repo)
-description: Merge many repo graphs into one queryable store at ~/.nodesify-graphify/global.db — shared symbols deduplicate, cross-repo calls resolve.
+description: Merge many repo graphs into one queryable store at ~/.astria/global.db — shared symbols deduplicate, cross-repo calls resolve.
 keywords: [global graph, cross-repo, monorepo, same_type_as, global add]
 ---
 
 # Global graph (cross-repo)
 
-Individual graphs answer questions within one repo. The global graph merges many repo graphs into a single queryable store at `~/.nodesify-graphify/global.db` — so "where is the shared auth type used?" works across service boundaries.
+Individual graphs answer questions within one repo. The global graph merges many repo graphs into a single queryable store at `~/.astria/global.db` — so "where is the shared auth type used?" works across service boundaries.
 
 ```mermaid
 flowchart LR
-    A["repo A<br/>graph A.db"] -->|"global add --as repo-a"| G["~/.nodesify-graphify/global.db"]
+    A["repo A<br/>graph A.db"] -->|"global add --as repo-a"| G["~/.astria/global.db"]
     B["repo B<br/>graph B.db"] -->|"global add --as repo-b"| G
     C["repo C<br/>graph C.db"] -->|"run --global --as repo-c"| G
-    G --> Q["query / path --graph ~/.nodesify-graphify/global.db"]
+    G --> Q["query / path --graph ~/.astria/global.db"]
 ```
 
 ## Build and merge
 
 ```bash
-nodesify-graphify run <path> --global --as <tag>   # build, then merge into the global store
-nodesify-graphify global add <path> [--as <tag>]   # same merge, standalone (idempotent per tag)
-nodesify-graphify global remove <tag>              # prune a repo from the global graph
-nodesify-graphify global list                      # registered repos
-nodesify-graphify global path <A> <B>              # shortest path across repos
+astria run <path> --global --as <tag>   # build, then merge into the global store
+astria global add <path> [--as <tag>]   # same merge, standalone (idempotent per tag)
+astria global remove <tag>              # prune a repo from the global graph
+astria global list                      # registered repos
+astria global path <A> <B>              # shortest path across repos
 ```
 
 ## Query the merged store
@@ -32,7 +32,7 @@ nodesify-graphify global path <A> <B>              # shortest path across repos
 The usual `--graph` flag works against the global db:
 
 ```bash
-nodesify-graphify query "where is the shared auth type" --graph ~/.nodesify-graphify/global.db
+astria query "where is the shared auth type" --graph ~/.astria/global.db
 ```
 
 ## How merging behaves

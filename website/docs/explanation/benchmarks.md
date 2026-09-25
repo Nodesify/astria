@@ -35,7 +35,7 @@ Numbers vary per run and per corpus (file mix, repo size, and how chatty query a
 
 The [original Graphify](https://github.com/safishamsi/graphify) (MIT) is the Python project this tool rewrites. Both tools were run **on the same corpus** — the original's own repository at commit `91f4d12` — with the structural pipeline only (no LLM enrichment on either side), each driven the way its own documentation drives it.
 
-| Metric | original Graphify (`91f4d12`) | nodesify-graphify 0.8.0 |
+| Metric | original Graphify (`91f4d12`) | astria 0.8.0 |
 |---|---|---|
 | Build time (wall) | 21.9 s (20.3 s of it build+cluster+analyze in Python/networkx) | 4.7 s |
 | Nodes | 719 | 1,479 |
@@ -51,7 +51,7 @@ Honest reading:
 
 ## Live benchmark snapshot
 
-The table below is **regenerated automatically**: run **Benchmark snapshot → Run workflow** from the [Actions tab](https://github.com/Nodesify/nodesify-graphify/actions/workflows/bench-snapshot.yml), and the workflow runs both tools on a fresh GitHub runner, commits the updated snapshot JSON, and redeploys this site. This is the continuous proof that the numbers above stay honest.
+The table below is **regenerated automatically**: run **Benchmark snapshot → Run workflow** from the [Actions tab](https://github.com/Nodesify/astria/actions/workflows/bench-snapshot.yml), and the workflow runs both tools on a fresh GitHub runner, commits the updated snapshot JSON, and redeploys this site. This is the continuous proof that the numbers above stay honest.
 
 <BenchmarkSnapshot />
 
@@ -72,23 +72,23 @@ Findings: `similar_to` edges consolidate communities by **44–53%** on both cor
 
 Two full runs with generated reports, graphs, and honest reviews of failure modes (unhelpful community labels, fixture noise, stub-noise connections):
 
-- [The tool on itself](https://github.com/Nodesify/nodesify-graphify/tree/main/worked/nodesify-graphify) — 78.8× on the (then smaller) tree
-- [The tool on the original Python Graphify](https://github.com/Nodesify/nodesify-graphify/tree/main/worked/graphify-python) — 40.2×, pinned commit
-- [Head-to-head raw data](https://github.com/Nodesify/nodesify-graphify/tree/main/worked/head-to-head) — methodology, machine-readable `results.json`, the original tool's own benchmark output
+- [The tool on itself](https://github.com/Nodesify/astria/tree/main/worked/astria) — 78.8× on the (then smaller) tree
+- [The tool on the original Python Graphify](https://github.com/Nodesify/astria/tree/main/worked/graphify-python) — 40.2×, pinned commit
+- [Head-to-head raw data](https://github.com/Nodesify/astria/tree/main/worked/head-to-head) — methodology, machine-readable `results.json`, the original tool's own benchmark output
 
 ## Reproduce
 
 ```bash
-npm install -g @nodesify/graphify
+npm install -g @nodesify/astria
 
 # self corpus
-git clone https://github.com/Nodesify/nodesify-graphify && cd nodesify-graphify
-nodesify-graphify run .            # prints the benchmark at the end
-nodesify-graphify run . --embed    # embedding experiment
+git clone https://github.com/Nodesify/astria && cd astria
+astria run .            # prints the benchmark at the end
+astria run . --embed    # embedding experiment
 
 # original-vs-rewrite corpus
 git clone https://github.com/safishamsi/graphify corpus && cd corpus && git checkout 91f4d12
-nodesify-graphify run .            # ours
+astria run .            # ours
 # the original is driven per its skill.md: detect -> extract -> build -> cluster -> analyze -> report
 # and measured with its own: graphify benchmark graphify-out/graph.json
 ```

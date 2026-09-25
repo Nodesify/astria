@@ -1,13 +1,13 @@
 ---
 sidebar_position: 1
 title: Architecture
-description: How nodesify-graphify works — the eight-stage Rust pipeline, crate responsibilities, the SQLite data model, and why it stays fast.
+description: How astria works — the eight-stage Rust pipeline, crate responsibilities, the SQLite data model, and why it stays fast.
 keywords: [architecture, pipeline, rust, sqlite, tree-sitter, crates, data model]
 ---
 
 # Architecture
 
-nodesify-graphify turns source code into a queryable knowledge graph. It uses AST-based extraction via tree-sitter for deterministic, fast analysis, stored in a SQLite database.
+astria turns source code into a queryable knowledge graph. It uses AST-based extraction via tree-sitter for deterministic, fast analysis, stored in a SQLite database.
 
 The project is a Rust workspace with 15 domain-specific crates and a Node.js CLI package.
 
@@ -19,25 +19,25 @@ The project is a Rust workspace with 15 domain-specific crates and a Node.js CLI
 
 ```mermaid
 flowchart LR
-    A["detect()<br/>graphify-detect"] --> B["extract()<br/>graphify-extract"]
+    A["detect()<br/>astria-detect"] --> B["extract()<br/>astria-extract"]
     B --> C{"backend<br/>configured?"}
-    C -->|yes| D["enrich_with_semantics()<br/>graphify-semantic"]
+    C -->|yes| D["enrich_with_semantics()<br/>astria-semantic"]
     C -->|no| E
-    D --> E["build() + dedup_nodes()<br/>graphify-build"]
-    E --> F["cluster()<br/>graphify-cluster"]
-    F --> G["analyze()<br/>graphify-analyze"]
-    G --> H["report()<br/>graphify-report"]
+    D --> E["build() + dedup_nodes()<br/>astria-build"]
+    E --> F["cluster()<br/>astria-cluster"]
+    F --> G["analyze()<br/>astria-analyze"]
+    G --> H["report()<br/>astria-report"]
 ```
 
-The pipeline is orchestrated in `crates/graphify-napi/src/pipeline.rs`. Validation runs before graph assembly: every node needs id/label/file_type/source_file, every edge needs existing endpoints and a valid confidence class — a corrupted extraction fails the run with the full violation list (`diagnose` reports the same classes of problem read-only on an existing graph).
+The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`. Validation runs before graph assembly: every node needs id/label/file_type/source_file, every edge needs existing endpoints and a valid confidence class — a corrupted extraction fails the run with the full violation list (`diagnose` reports the same classes of problem read-only on an existing graph).
 
-1. **detect()** (`graphify-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run. Manifest ingestion also covers dependency manifests — including Cargo workspace members and internal path dependencies (`crate::*` nodes with `crate_depends_on` edges).
-2. **extract()** (`graphify-extract`): Performs AST-based extraction using tree-sitter. Supports 21 languages with per-language configurations in `src/langs/`.
-3. **enrich_with_semantics()** (`graphify-semantic`, optional): When an LLM backend is configured, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results.
-4. **build()** (`graphify-build`): Merges extracted nodes and edges into the SQLite graph database, handles deduplication and cross-file reference resolution.
-5. **cluster()** (`graphify-cluster`): Performs community detection using the deterministic label propagation algorithm (via `petgraph`) and updates the `community` attribute on nodes.
-6. **analyze()** (`graphify-analyze`): Analyzes the graph to find "god nodes" (call stubs excluded), surprising cross-community connections, blast radius, and generates suggested questions.
-7. **report()** (`graphify-report`): Generates a plain-language `graph_report.md` summarizing the graph's structure and insights.
+1. **detect()** (`astria-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run. Manifest ingestion also covers dependency manifests — including Cargo workspace members and internal path dependencies (`crate::*` nodes with `crate_depends_on` edges).
+2. **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Supports 21 languages with per-language configurations in `src/langs/`.
+3. **enrich_with_semantics()** (`astria-semantic`, optional): When an LLM backend is configured, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results.
+4. **build()** (`astria-build`): Merges extracted nodes and edges into the SQLite graph database, handles deduplication and cross-file reference resolution.
+5. **cluster()** (`astria-cluster`): Performs community detection using the deterministic label propagation algorithm (via `petgraph`) and updates the `community` attribute on nodes.
+6. **analyze()** (`astria-analyze`): Analyzes the graph to find "god nodes" (call stubs excluded), surprising cross-community connections, blast radius, and generates suggested questions.
+7. **report()** (`astria-report`): Generates a plain-language `graph_report.md` summarizing the graph's structure and insights.
 
 Each stage is a pure function in its own crate; semantic enrichment is optional and activates when an LLM backend is configured.
 
@@ -45,28 +45,28 @@ Each stage is a pure function in its own crate; semantic enrichment is optional 
 
 | Crate | Responsibility |
 | :--- | :--- |
-| `graphify-core` | Shared types (`FileType`, `GraphStats`), `GraphifyError`, SQLite schema + migrations, path validation, sanitization, sensitive-path denylist. |
-| `graphify-paths` | Path normalization and `.graphify` directory management. |
-| `graphify-detect` | File system scanning, `.graphifyignore` support, and incremental change detection via SHA-256 hashes. |
-| `graphify-extract` | Tree-sitter AST traversal logic. Each language defines its own extraction rules (nodes, edges, docstrings). |
-| `graphify-embed` | Local embedding model (fastembed/ONNX, `bge-small-en-v1.5`) powering `similar_to` edges and embedding-backed query recall — no API key, offline after the first model download. |
-| `graphify-build` | Persistent graph assembly; entity dedup (MinHash/LSH blocking + Jaro-Winkler verify) in `dedup.rs`. |
-| `graphify-cluster` | Deterministic community detection (stable labels, cohesion, modularity) using `petgraph`. |
-| `graphify-analyze` | God nodes, ranked surprising cross-community connections, blast radius (`affected.rs`, reverse reachability). |
-| `graphify-query` | Query engine: BFS/DFS (optionally directed), shortest path, explain, token-based node scoring, per-path graph cache. |
-| `graphify-mcp` | MCP stdio server exposing the graph to AI agents. |
-| `graphify-report` | Markdown generation for the final user-facing report. |
-| `graphify-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. |
-| `graphify-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection: scheme allowlist, per-hop redirect re-validation (manual redirect following), DNS-resolved address blocking (private/CGNAT/link-local, IPv4+IPv6), and slugified download filenames. |
-| `graphify-pdf` | PDF text extraction. |
-| `graphify-napi` | The bridge between Rust and Node.js: pipeline orchestration, query surface, merge/diff, JSON/HTML/GraphML/tree export. |
-| `graphify-cli` *(Node.js package)* | The user-facing CLI: argument parsing and installing AI skills. |
+| `astria-core` | Shared types (`FileType`, `GraphStats`), `GraphifyError`, SQLite schema + migrations, path validation, sanitization, sensitive-path denylist. |
+| `astria-paths` | Path normalization and `.astria` directory management. |
+| `astria-detect` | File system scanning, `.astriaignore` support, and incremental change detection via SHA-256 hashes. |
+| `astria-extract` | Tree-sitter AST traversal logic. Each language defines its own extraction rules (nodes, edges, docstrings). |
+| `astria-embed` | Local embedding model (fastembed/ONNX, `bge-small-en-v1.5`) powering `similar_to` edges and embedding-backed query recall — no API key, offline after the first model download. |
+| `astria-build` | Persistent graph assembly; entity dedup (MinHash/LSH blocking + Jaro-Winkler verify) in `dedup.rs`. |
+| `astria-cluster` | Deterministic community detection (stable labels, cohesion, modularity) using `petgraph`. |
+| `astria-analyze` | God nodes, ranked surprising cross-community connections, blast radius (`affected.rs`, reverse reachability). |
+| `astria-query` | Query engine: BFS/DFS (optionally directed), shortest path, explain, token-based node scoring, per-path graph cache. |
+| `astria-mcp` | MCP stdio server exposing the graph to AI agents. |
+| `astria-report` | Markdown generation for the final user-facing report. |
+| `astria-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. |
+| `astria-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection: scheme allowlist, per-hop redirect re-validation (manual redirect following), DNS-resolved address blocking (private/CGNAT/link-local, IPv4+IPv6), and slugified download filenames. |
+| `astria-pdf` | PDF text extraction. |
+| `astria-napi` | The bridge between Rust and Node.js: pipeline orchestration, query surface, merge/diff, JSON/HTML/GraphML/tree export. |
+| `astria-cli` *(Node.js package)* | The user-facing CLI: argument parsing and installing AI skills. |
 
 ## Data model
 
 ### SQLite schema
 
-The graph is stored in `.graphify/db.sqlite` with the following tables:
+The graph is stored in `.astria/db.sqlite` with the following tables:
 
 - `nodes`: `id`, `label`, `file_type`, `source_file`, `source_line`, `docstring`, `community`
 - `edges`: `source`, `target`, `relation`, `confidence`, `confidence_score`, `source_file`, `source_line`, `context`
@@ -99,4 +99,4 @@ Ingest also contributes relation families when the relevant inputs exist: `crate
 - **Incremental rebuilds** — the system only re-extracts files that have changed, drastically reducing analysis time for large projects.
 - **napi-rs** — provides near-native performance for the CLI while maintaining the ease of use of an npm package.
 
-Design docs: [design spec](https://github.com/Nodesify/nodesify-graphify/blob/main/docs/superpowers/specs/2026-04-30-nodesify-graphify-rewrite-design.md) and [implementation plan](https://github.com/Nodesify/nodesify-graphify/blob/main/docs/superpowers/plans/2026-04-30-nodesify-graphify-implementation.md).
+Design docs: [design spec](https://github.com/Nodesify/astria/blob/main/docs/superpowers/specs/2026-04-30-astria-rewrite-design.md) and [implementation plan](https://github.com/Nodesify/astria/blob/main/docs/superpowers/plans/2026-04-30-astria-implementation.md).

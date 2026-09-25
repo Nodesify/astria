@@ -7,7 +7,7 @@
     "files_detected": 90
   },
   "versions": {
-    "nodesify_graphify": "0.8.0",
+    "astria": "0.8.0",
     "original": "graphify @ 91f4d12",
     "python": "Python 3.12.3"
   },
@@ -22,7 +22,7 @@
       "reduction": 43.3
     }
   },
-  "nodesify_graphify_structural": {
+  "astria_structural": {
     "build_seconds": 0.89,
     "nodes": 1479,
     "edges": 5789,

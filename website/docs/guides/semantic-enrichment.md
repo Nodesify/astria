@@ -12,7 +12,7 @@ Two independent semantic layers, both optional. Without them, the graph is purel
 ## Local embeddings (no API key)
 
 ```bash
-nodesify-graphify run . --embed
+astria run . --embed
 ```
 
 Downloads a small local model once (~90 MB, then offline forever) and computes vector embeddings for every node. This adds:
@@ -22,7 +22,7 @@ Downloads a small local model once (~90 MB, then offline forever) and computes v
 
 Once embeddings exist, every `run`/`update` refreshes them incrementally (offline — the refresh never downloads), and `query` picks them up automatically.
 
-Override the model cache location with `GRAPHIFY_EMBED_CACHE_DIR` — all variables in [Environment variables](../reference/env-vars).
+Override the model cache location with `ASTRIA_EMBED_CACHE_DIR` — all variables in [Environment variables](../reference/env-vars).
 
 ## LLM enrichment
 
@@ -30,14 +30,14 @@ Set any LLM backend and the pipeline enriches docs, papers, and images into conc
 
 | Backend | Env vars | Vision |
 |---------|----------|--------|
-| Anthropic Claude (default) | `GRAPHIFY_LLM_API_KEY` | ✓ |
-| OpenAI-compatible (OpenAI, DeepSeek, Ollama, LM Studio, custom) | `GRAPHIFY_LLM_BASE_URL` + `GRAPHIFY_LLM_API_KEY`/`OPENAI_API_KEY` | ✓ |
+| Anthropic Claude (default) | `ASTRIA_LLM_API_KEY` | ✓ |
+| OpenAI-compatible (OpenAI, DeepSeek, Ollama, LM Studio, custom) | `ASTRIA_LLM_BASE_URL` + `ASTRIA_LLM_API_KEY`/`OPENAI_API_KEY` | ✓ |
 | Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | ✓ |
 
-- `GRAPHIFY_LLM_BACKEND` selects the backend explicitly
-- `GRAPHIFY_LLM_MODEL` overrides the model
-- Per-run: `nodesify-graphify run . --backend openai --model gpt-4o-mini`
+- `ASTRIA_LLM_BACKEND` selects the backend explicitly
+- `ASTRIA_LLM_MODEL` overrides the model
+- Per-run: `astria run . --backend openai --model gpt-4o-mini`
 - Images (png/jpg/webp/gif, ≤5 MB) go through each backend's vision API
-- `GRAPHIFY_LLM_CONCURRENCY` controls the parallel worker pool; long files are chunked and LLM output is validated
+- `ASTRIA_LLM_CONCURRENCY` controls the parallel worker pool; long files are chunked and LLM output is validated
 
 Semantic enrichment is a pipeline stage — `enrich_with_semantics()` — that activates only when a backend is configured, so builds stay fully offline and deterministic without one.

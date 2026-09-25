@@ -228,6 +228,76 @@ mod tests {
     }
 
     #[test]
+    fn rust_impl_methods_scope_under_impl_type() {
+        // Two impl blocks defining the same method name must not collide on
+        // one file-level id — each scopes under its impl type.
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("lib.rs");
+        fs::write(
+            &rs,
+            "\nstruct A;\n\nimpl A {\n    pub fn from_env() -> Self { A }\n}\n\nstruct B;\n\nimpl B {\n    pub fn from_env() -> Self { B }\n}\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[rs], &db).unwrap();
+        let ext = &results[0];
+        let ids: Vec<&str> = ext.nodes.iter().map(|n| n.id.as_str()).collect();
+        let from_env: Vec<&&str> = ids.iter().filter(|id| id.ends_with("::from_env")).collect();
+        assert_eq!(from_env.len(), 2, "both from_env methods extracted: {ids:?}");
+        assert!(
+            ids.iter().all(|id| count_char(id, ':') >= 0),
+            "ids well formed"
+        );
+        let unique = from_env.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), 2, "impl method ids must be unique: {from_env:?}");
+    }
+
+    fn count_char(s: &str, c: char) -> i32 {
+        s.chars().filter(|x| *x == c).count() as i32
+    }
+
+    #[test]
+    fn cfg_gated_duplicate_definitions_dedup() {
+        // #[cfg(feature)] twins textually duplicate a definition; only one
+        // exists per build, so extraction keeps the first occurrence.
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("stage.rs");
+        fs::write(
+            &rs,
+            "\n#[cfg(feature = \"embed\")]\nfn embed_stage() -> u8 { 1 }\n\n#[cfg(not(feature = \"embed\"))]\nfn embed_stage() -> u8 { 0 }\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[rs], &db).unwrap();
+        let ext = &results[0];
+        let count = ext
+            .nodes
+            .iter()
+            .filter(|n| n.id.ends_with("::embed_stage"))
+            .count();
+        assert_eq!(count, 1, "cfg twins must not duplicate the node id");
+    }
+
+    #[test]
+    fn markdown_repeated_headings_get_unique_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let md = dir.path().join("spec.md");
+        fs::write(&md, "# Spec\n\n## Changes\n\none\n\n## Changes\n\ntwo\n").unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[md], &db).unwrap();
+        let ext = &results[0];
+        let section_ids: Vec<&str> = ext
+            .nodes
+            .iter()
+            .filter(|n| n.node_type == "section")
+            .map(|n| n.id.as_str())
+            .collect();
+        assert_eq!(section_ids.len(), 3, "all sections extracted: {section_ids:?}");
+        let unique: std::collections::HashSet<_> = section_ids.iter().collect();
+        assert_eq!(unique.len(), 3, "repeated headings must get unique ids: {section_ids:?}");
+    }
+
+    #[test]
     fn identifier_shaped_strings_become_reference_nodes() {
         let dir = tempfile::tempdir().unwrap();
         let py = dir.path().join("svc.py");

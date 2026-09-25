@@ -1,7 +1,7 @@
-# nodesify-graphify docs site
+# astria docs site
 
 Docusaurus v3 site deployed to GitHub Pages at
-https://nodesify.github.io/nodesify-graphify/ via
+https://nodesify.github.io/astria/ via
 `.github/workflows/docs.yml` (builds on every push touching `website/**`
 to `main` or `develop`, plus manual `workflow_dispatch`).
 
@@ -59,7 +59,7 @@ version to `versions.json`. Then update `docusaurus.config.js`:
 2. add a `'0.9.0': { banner: 'none' }` entry under `versions`
 3. update the version-badge source if the shipped version changed (the
    landing-page badge reads `customFields.productVersion`, which points at
-   `packages/graphify-cli/package.json`, so it usually needs no edit)
+   `packages/astria-cli/package.json`, so it usually needs no edit)
 
 Commit and push — CI redeploys. Old links to pre-reorg paths
 (`/docs/cli`, `/docs/benchmarks`, …) keep working via client-side

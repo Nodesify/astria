@@ -465,37 +465,53 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
         };
 
         if passes_filter {
-            // Try name_field first, then fall back to second child for call-based languages
-            let name_node = node.child_by_field_name(state.cfg.name_field);
+            // Try name_field first, then fall back to second child for call-based languages.
+            // Containers without a name field (e.g. Rust `impl_item`, whose fields are
+            // "trait"/"type") fall back to their `type` field text, so methods scope under
+            // the impl type instead of colliding at file level when several impls
+            // define the same method name.
+            let type_field_node = node.child_by_field_name("type");
+            let name_node = node
+                .child_by_field_name(state.cfg.name_field)
+                .or_else(|| type_field_node.clone());
             let name_node = match name_node {
                 Some(n) => Some(n),
                 None if !state.cfg.class_call_names.is_empty() => second_child(node),
                 _ => None,
             };
+            // A container named via the `type` fallback (an impl block) is a
+            // scope boundary only: the real type node already exists (or will
+            // come from the struct/enum declaration), so emitting one would
+            // duplicate its id.
+            let scope_only = type_field_node.is_some()
+                && node.child_by_field_name(state.cfg.name_field).is_none()
+                && kind == "impl_item";
             if let Some(name_node) = name_node {
                 let name = node_text(&name_node, state.source).to_string();
                 let class_id = make_node_id(&[&state.file_id, &name]);
                 let docstring = extract_docstring(node, state.source, state.cfg);
 
-                state.nodes.push(ExtractedNode {
-                    id: class_id.clone(),
-                    label: name.clone(),
-                    source_file: state.file_path.clone(),
-                    source_line: Some(node.start_position().row as u32),
-                    docstring,
-                    signature: node_signature(node, state.source, state.cfg),
-                    node_type: "class".to_string(),
-                });
+                if !scope_only {
+                    state.nodes.push(ExtractedNode {
+                        id: class_id.clone(),
+                        label: name.clone(),
+                        source_file: state.file_path.clone(),
+                        source_line: Some(node.start_position().row as u32),
+                        docstring,
+                        signature: node_signature(node, state.source, state.cfg),
+                        node_type: "class".to_string(),
+                    });
 
-                state.edges.push(ExtractedEdge {
-                    source: state.file_id.clone(),
-                    target: class_id.clone(),
-                    relation: "contains".to_string(),
-                    confidence: "EXTRACTED".to_string(),
-                    confidence_score: Some(1.0),
-                    source_file: state.file_path.clone(),
-                    source_line: Some(node.start_position().row as u32),
-                });
+                    state.edges.push(ExtractedEdge {
+                        source: state.file_id.clone(),
+                        target: class_id.clone(),
+                        relation: "contains".to_string(),
+                        confidence: "EXTRACTED".to_string(),
+                        confidence_score: Some(1.0),
+                        source_file: state.file_path.clone(),
+                        source_line: Some(node.start_position().row as u32),
+                    });
+                }
 
                 // Walk children inside this class context
                 let prev_class = state.current_class_id.replace(class_id);
@@ -968,6 +984,16 @@ pub(crate) fn extract_single(
 
     // Post-pass: extract rationale comments
     extract_rationale(&mut state, &source);
+
+    // Drop malformed edges: an unresolved reference can leave an empty
+    // endpoint, and an empty target would fail build validation wholesale.
+    state.edges.retain(|e| !e.source.is_empty() && !e.target.is_empty());
+
+    // Cfg-gated twins (#[cfg(feature)] / #[cfg(not)]) textually duplicate a
+    // definition; only one exists per build, so keep the first occurrence of
+    // each id and drop the rest.
+    let mut seen_node_ids: HashSet<String> = HashSet::new();
+    state.nodes.retain(|n| seen_node_ids.insert(n.id.clone()));
 
     Ok(Extraction {
         file_path: path.to_path_buf(),

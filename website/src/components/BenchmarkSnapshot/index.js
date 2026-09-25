@@ -18,7 +18,7 @@ function MetricRow({ label, a, b }) {
 
 export default function BenchmarkSnapshot() {
   const orig = snapshot.original_tool;
-  const ours = snapshot.nodesify_graphify_structural;
+  const ours = snapshot.astria_structural;
   return (
     <div>
       <p>
@@ -28,14 +28,14 @@ export default function BenchmarkSnapshot() {
           graphify @ {snapshot.corpus.commit}
         </a>{' '}
         ({snapshot.corpus.files_detected} detected entries) · ours{' '}
-        {snapshot.versions.nodesify_graphify} vs original ({snapshot.versions.python})
+        {snapshot.versions.astria} vs original ({snapshot.versions.python})
       </p>
       <table>
         <thead>
           <tr>
             <th>Metric</th>
             <th>original graphify</th>
-            <th>nodesify-graphify</th>
+            <th>astria</th>
           </tr>
         </thead>
         <tbody>

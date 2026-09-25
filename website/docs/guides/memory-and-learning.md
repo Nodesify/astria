@@ -13,7 +13,7 @@ The graph compounds in value as you use it, through two independent loops: **lea
 flowchart TD
     A["query / explain / path"] -->|"every run records (seed, discovered) pairs"| B["query history"]
     B -->|"same pair recurs:<br/>2+ distinct questions, 3+ total hits"| C["next run/update promotes it<br/>to a learned edge (INFERRED)"]
-    D["save-result"] -->|"Q/A doc with outcome + correction"| E[".graphify/memory/"]
+    D["save-result"] -->|"Q/A doc with outcome + correction"| E[".astria/memory/"]
     E -->|"ingested as graph nodes on next run/update"| F["graph"]
     E -->|"reflect aggregates"| G["LESSONS.md"]
 ```
@@ -29,16 +29,16 @@ Learned edges flow into clustering, analysis, and every export — the graph rem
 Learned edges are automatic; memory is curated. You decide which answers are worth keeping:
 
 ```bash
-nodesify-graphify save-result "where is rate limiting?" \
+astria save-result "where is rate limiting?" \
     --answer "BucketMiddleware in src/limiter.rs" \
     --outcome useful \
     --nodes <cited-node-ids>
-nodesify-graphify reflect
+astria reflect
 ```
 
-- `save-result` writes a Q/A memory doc (with an outcome — `useful`, `dead_end`, or `corrected` — and optional corrections) into `.graphify/memory/`. Cited node ids link the answer back to the graph.
+- `save-result` writes a Q/A memory doc (with an outcome — `useful`, `dead_end`, or `corrected` — and optional corrections) into `.astria/memory/`. Cited node ids link the answer back to the graph.
 - The next `run`/`update` ingests memory docs as graph nodes, so settled questions become part of the graph itself.
-- `reflect` aggregates outcomes into `.graphify/reflections/LESSONS.md` with tallies — a running record of which answers held up.
+- `reflect` aggregates outcomes into `.astria/reflections/LESSONS.md` with tallies — a running record of which answers held up.
 
 ## Why two loops
 

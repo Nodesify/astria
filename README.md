@@ -1,22 +1,22 @@
 <div align="center">
 
-# nodesify-graphify
+# astria
 
 **Knowledge graph builder for codebases**
 
-[![CI](https://github.com/Nodesify/nodesify-graphify/actions/workflows/ci.yml/badge.svg)](https://github.com/Nodesify/nodesify-graphify/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/@nodesify/graphify)](https://www.npmjs.com/package/@nodesify/graphify)
-[![npm downloads](https://img.shields.io/npm/dm/@nodesify/graphify)](https://www.npmjs.com/package/@nodesify/graphify)
-[![docs](https://img.shields.io/badge/docs-latest-blue)](https://nodesify.github.io/nodesify-graphify/)
+[![CI](https://github.com/Nodesify/astria/actions/workflows/ci.yml/badge.svg)](https://github.com/Nodesify/astria/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@nodesify/astria)](https://www.npmjs.com/package/@nodesify/astria)
+[![npm downloads](https://img.shields.io/npm/dm/@nodesify/astria)](https://www.npmjs.com/package/@nodesify/astria)
+[![docs](https://img.shields.io/badge/docs-latest-blue)](https://nodesify.github.io/astria/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-22-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Nodesify/nodesify-graphify)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Nodesify/astria)
 
-[Docs](https://nodesify.github.io/nodesify-graphify/) | [CLI Reference](https://nodesify.github.io/nodesify-graphify/docs/cli/) | [Architecture](ARCHITECTURE.md) | [Worked examples](worked/)
+[Docs](https://nodesify.github.io/astria/) | [CLI Reference](https://nodesify.github.io/astria/docs/cli/) | [Architecture](ARCHITECTURE.md) | [Worked examples](worked/)
 
 </div>
 
-Understand a codebase before you touch it. `nodesify-graphify` turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
+Understand a codebase before you touch it. `astria` turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
 
 You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run, computed from real file sizes vs actual query output — [methodology and head-to-head](worked/head-to-head/)).
 
@@ -31,23 +31,32 @@ Three things a folder full of files can't give you:
 ## Install
 
 ```bash
-npm install -g @nodesify/graphify
+npm install -g @nodesify/astria
 ```
 
 Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 
+> **Migrating from `@nodesify/graphify`?** 1.0 is a rebrand: the binary is `astria`, the npm package is `@nodesify/astria`, and graphs live in `.astria/` instead of `.graphify/`. Run once after installing:
+>
+> ```bash
+> astria migrate          # renames .graphify/ -> .astria/ and the global store
+> astria install          # refreshes AI-tool skills/hooks (also cleans the old graphify entries)
+> ```
+>
+> `GRAPHIFY_*` environment variables keep working; `ASTRIA_*` takes precedence.
+
 ## What's new (unreleased)
 
 - **Hypergraph, deterministically** — n-ary `hyperedges` (schema v7/v8) produced without an LLM: community `participate_in` groups and `shares_reference` literal groups; consumed by graph.json, report, wiki, HTML hulls, and `explain`. The official's hyperedges are LLM-produced; ours are local and reproducible.
-- **Cross-repo global graph** — `~/.nodesify-graphify/global.db`: `global add/remove/list/path`, repo-tag prefixed merging that unifies external symbols across repos, `same_type_as` type edges, cross-repo call resolution (fail closed on ambiguity), `run --global --as <tag>`, and `query/explain/path --graph` against the merged store.
-- **Graph health + feedback loop** — `diagnose` (read-only health report, `--json`), `save-result`/`reflect` curated memory (`.graphify/memory/` → graph nodes → `LESSONS.md`) alongside automatic learned edges, build-time validation, JSONL query log (`GRAPHIFY_QUERY_LOG`), and always-on instruction blocks in `AGENTS.md`/`CLAUDE.md`.
-- **Ingest breadth (offline-first)** — Cargo workspace + path-dep topology (auto), `.mcp.json`/`mcp_servers.json`/`claude_desktop_config.json` (env names only, never values), `add --scip <index.json>`, `add --postgres <dsn>` (read-only introspection, requires `psql`), and transcript sidecars (`.graphify/transcripts/*.txt|md`).
+- **Cross-repo global graph** — `~/.astria/global.db`: `global add/remove/list/path`, repo-tag prefixed merging that unifies external symbols across repos, `same_type_as` type edges, cross-repo call resolution (fail closed on ambiguity), `run --global --as <tag>`, and `query/explain/path --graph` against the merged store.
+- **Graph health + feedback loop** — `diagnose` (read-only health report, `--json`), `save-result`/`reflect` curated memory (`.astria/memory/` → graph nodes → `LESSONS.md`) alongside automatic learned edges, build-time validation, JSONL query log (`ASTRIA_QUERY_LOG`), and always-on instruction blocks in `AGENTS.md`/`CLAUDE.md`.
+- **Ingest breadth (offline-first)** — Cargo workspace + path-dep topology (auto), `.mcp.json`/`mcp_servers.json`/`claude_desktop_config.json` (env names only, never values), `add --scip <index.json>`, `add --postgres <dsn>` (read-only introspection, requires `psql`), and transcript sidecars (`.astria/transcripts/*.txt|md`).
 - **SSRF-hardened URL ingestion** — `add <url>` validates every redirect hop (auto-follow is off), DNS-resolves each host and blocks loopback/private/CGNAT/link-local addresses (IPv4 and IPv6, incl. mapped forms), and slugifies downloaded filenames so a hostile URL segment cannot write outside `raw/`. The HTML export renders labels as text (no HTML interpolation), a plain-`http` LLM base URL with an API key warns, and CI audits npm dependencies alongside the existing Rust advisory check.
 
 ## What's new in 0.8.0
 
 - **Markdown wiki export** — `wiki` / `run --wiki`: an agent-crawlable wiki (`index.md` + one article per community and god node, relative markdown links GitHub and Obsidian both navigate); `update` regenerates it so it never drifts stale
-- **Obsidian vault export** — `wiki --format obsidian`: per-node notes with frontmatter tags and `[[wikilinks]]`, community overviews, and a `graphify.canvas` (2,040 notes + 5,000 canvas edges on this repo)
+- **Obsidian vault export** — `wiki --format obsidian`: per-node notes with frontmatter tags and `[[wikilinks]]`, community overviews, and a `astria.canvas` (2,040 notes + 5,000 canvas edges on this repo)
 - **Local semantic layer** — `run --embed`: a local embedding model (no API key, one-time ~90 MB download, offline after) adds `similar_to` edges across files and embedding-backed query recall; communities consolidated 401 → 194 on this repo
 - **Learning from usage** — repeated queries promote recurring node pairs into `learned` edges; the graph compounds in value the more it is used
 - **Neo4j export** — `export --format cypher`: idempotent MERGE script for cypher-shell
@@ -74,11 +83,11 @@ Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 
 - **Deterministic clustering** — stable communities across runs, Newman modularity in report/stats
 - **Directed traversal** — `--directed` on `query`/`path` (CLI, napi, MCP), fidelity tiers (`--detail high`), continuation cursors for truncated traversals
-- **Aider-style repo map** — `nodesify-graphify map`: PageRank-ranked files with top symbols, within a token budget
+- **Aider-style repo map** — `astria map`: PageRank-ranked files with top symbols, within a token budget
 - **Node signatures** — schema v3 signatures shown in query/explain output
-- **Parallel LLM semantic extraction** — `GRAPHIFY_LLM_CONCURRENCY` worker pool, long-file chunking, output validation, Retry-After backoff
+- **Parallel LLM semantic extraction** — `ASTRIA_LLM_CONCURRENCY` worker pool, long-file chunking, output validation, Retry-After backoff
 - **Agent-facing output quality** — root-relative paths everywhere, did-you-mean suggestions, candidate lists on ambiguous seeds, node ids in query/affected output
-- **Hardening** — sensitive-path denylist (.env, keys, credentials), minified/vendored asset skip, read-only commands no longer create empty `.graphify/` directories
+- **Hardening** — sensitive-path denylist (.env, keys, credentials), minified/vendored asset skip, read-only commands no longer create empty `.astria/` directories
 - God nodes exclude call stubs; O(V+E) blast radius via reverse adjacency; numeric confidence ranking
 
 ### 0.4.0 highlights
@@ -88,44 +97,44 @@ Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 ## Usage
 
 ```bash
-nodesify-graphify run <path>                            # Full pipeline: detect → extract → build → cluster → analyze → report
-nodesify-graphify run <path> --wiki                     # ...also export a markdown wiki to .graphify/wiki
-nodesify-graphify run <path> --embed                    # ...also compute local embeddings (similar_to edges + semantic query recall)
-nodesify-graphify run <path> --global --as <tag>        # ...also merge into the cross-repo global graph
-nodesify-graphify update <path>                         # Incremental rebuild (only changed files; regenerates an existing wiki)
-nodesify-graphify watch <path> [--debounce 3000]        # Watch for file changes, auto-rebuild
-nodesify-graphify explain <node> [--graph .]            # Explain a node and its connections
-nodesify-graphify query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--graph .]  # BFS/DFS traversal
-nodesify-graphify path <A> <B> [--directed] [--detail high] [--graph .]  # Shortest path between two concepts
-nodesify-graphify affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - what breaks if you change this node
-nodesify-graphify map [--budget 2000] [--graph .]       # PageRank-ranked repo map with top symbols
-nodesify-graphify diagnose [--graph .] [--json]         # Read-only graph health report
-nodesify-graphify save-result <question> --answer <text> [--outcome useful|dead_end|corrected]  # Curate a Q/A into graph memory
-nodesify-graphify reflect [--graph .]                   # Aggregate memory outcomes into LESSONS.md
-nodesify-graphify global add <path> [--as <tag>]        # Merge a repo into the cross-repo global graph
-nodesify-graphify global remove <tag> | list | path <A> <B>  # Manage and query the global graph
-nodesify-graphify add <url> [--author] [--contributor]     # Fetch arXiv/tweet/webpage/image/PDF into ./raw + update graph
-nodesify-graphify add --scip <index.json>                  # Ingest a simplified SCIP JSON index instead of a URL
-nodesify-graphify add --postgres <dsn>                     # Introspect a live PostgreSQL schema (requires psql)
-nodesify-graphify mcp [--graph .]                             # Run MCP stdio server - query the graph from any AI agent
-nodesify-graphify tree [--out tree.html] [--max-children 40] # Collapsible filesystem tree of all symbols (HTML)
-nodesify-graphify wiki [--out .graphify/wiki] [--max-nodes 25] [--graph .]  # Wikipedia-style markdown wiki (agent-crawlable)
-nodesify-graphify prs [20] [--conflicts] [--graph .]         # Map open PRs onto the graph - impact + merge-order risk
-nodesify-graphify stats [--graph .]                     # Node/edge/community counts
-nodesify-graphify status [--graph .]                    # Graph health and staleness
-nodesify-graphify export [--graph .] [--out graph.json] [--format json|html|graphml|cypher] [--mode standard|large] # Export graph; HTML defaults to standard
-nodesify-graphify cluster-only <path>                   # Re-cluster + analyze + report without re-extracting
-nodesify-graphify merge <pathA> <pathB> <outPath>       # Merge two graphs
-nodesify-graphify diff <pathA> <pathB>                  # Compare two graphs
-nodesify-graphify history [--limit 20] [--graph .]      # Show recent query history
-nodesify-graphify install [--platform claude]           # Install skill files for AI coding assistants
-nodesify-graphify uninstall [--platform claude]         # Uninstall skill files
-nodesify-graphify hook install|uninstall|status         # Git hook management
+astria run <path>                            # Full pipeline: detect → extract → build → cluster → analyze → report
+astria run <path> --wiki                     # ...also export a markdown wiki to .astria/wiki
+astria run <path> --embed                    # ...also compute local embeddings (similar_to edges + semantic query recall)
+astria run <path> --global --as <tag>        # ...also merge into the cross-repo global graph
+astria update <path>                         # Incremental rebuild (only changed files; regenerates an existing wiki)
+astria watch <path> [--debounce 3000]        # Watch for file changes, auto-rebuild
+astria explain <node> [--graph .]            # Explain a node and its connections
+astria query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--graph .]  # BFS/DFS traversal
+astria path <A> <B> [--directed] [--detail high] [--graph .]  # Shortest path between two concepts
+astria affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - what breaks if you change this node
+astria map [--budget 2000] [--graph .]       # PageRank-ranked repo map with top symbols
+astria diagnose [--graph .] [--json]         # Read-only graph health report
+astria save-result <question> --answer <text> [--outcome useful|dead_end|corrected]  # Curate a Q/A into graph memory
+astria reflect [--graph .]                   # Aggregate memory outcomes into LESSONS.md
+astria global add <path> [--as <tag>]        # Merge a repo into the cross-repo global graph
+astria global remove <tag> | list | path <A> <B>  # Manage and query the global graph
+astria add <url> [--author] [--contributor]     # Fetch arXiv/tweet/webpage/image/PDF into ./raw + update graph
+astria add --scip <index.json>                  # Ingest a simplified SCIP JSON index instead of a URL
+astria add --postgres <dsn>                     # Introspect a live PostgreSQL schema (requires psql)
+astria mcp [--graph .]                             # Run MCP stdio server - query the graph from any AI agent
+astria tree [--out tree.html] [--max-children 40] # Collapsible filesystem tree of all symbols (HTML)
+astria wiki [--out .astria/wiki] [--max-nodes 25] [--graph .]  # Wikipedia-style markdown wiki (agent-crawlable)
+astria prs [20] [--conflicts] [--graph .]         # Map open PRs onto the graph - impact + merge-order risk
+astria stats [--graph .]                     # Node/edge/community counts
+astria status [--graph .]                    # Graph health and staleness
+astria export [--graph .] [--out graph.json] [--format json|html|graphml|cypher] [--mode standard|large] # Export graph; HTML defaults to standard
+astria cluster-only <path>                   # Re-cluster + analyze + report without re-extracting
+astria merge <pathA> <pathB> <outPath>       # Merge two graphs
+astria diff <pathA> <pathB>                  # Compare two graphs
+astria history [--limit 20] [--graph .]      # Show recent query history
+astria install [--platform claude]           # Install skill files for AI coding assistants
+astria uninstall [--platform claude]         # Uninstall skill files
+astria hook install|uninstall|status         # Git hook management
 ```
 
 Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`.
 
-Running `nodesify-graphify run .` creates `.graphify/` with:
+Running `astria run .` creates `.astria/` with:
 
 - `db.sqlite` — the graph database
 - `graph.json` — full graph export
@@ -136,13 +145,13 @@ Running `nodesify-graphify run .` creates `.graphify/` with:
 Use `--format html` to create an interactive vis-network graph view. HTML export uses the same 5,000-node safety limit as the original Graphify viewer:
 
 ```bash
-nodesify-graphify export --graph . --format html --out graph-view.html
+astria export --graph . --format html --out graph-view.html
 ```
 
 The default `--mode standard` exports the full interactive graph when it contains at most 5,000 nodes and fails with an actionable message for larger graphs. For larger repositories, explicitly opt into the optimized large-graph viewer:
 
 ```bash
-nodesify-graphify export --graph . --format html --mode large --out graph-view.html
+astria export --graph . --format html --mode large --out graph-view.html
 ```
 
 Large mode precomputes node positions, disables physics, shows the highest-degree nodes first, supports debounced search and a “Show all nodes” toggle, caps the community legend, and disables expensive edge arrows for very large graphs. JSON and GraphML exports are unaffected by `--mode`.
@@ -150,8 +159,8 @@ Large mode precomputes node positions, disables physics, shows the highest-degre
 `--format cypher` writes an idempotent Neo4j import script (MERGE statements — safe to re-run):
 
 ```bash
-nodesify-graphify export --graph . --format cypher --out graphify.cypher
-cypher-shell -u neo4j -p <password> -f graphify.cypher
+astria export --graph . --format cypher --out astria.cypher
+cypher-shell -u neo4j -p <password> -f astria.cypher
 ```
 
 ### Learning from usage
@@ -164,25 +173,25 @@ Every `run` and `update` prints an honest cost measurement: corpus tokens (the r
 
 ### Wiki export
 
-`nodesify-graphify wiki` writes a Wikipedia-style markdown wiki into `.graphify/wiki/`: an `index.md` entry point, one article per community (key concepts ranked by connections, cross-community links, source files, EXTRACTED/INFERRED/AMBIGUOUS audit trail), and one article per god node (signature, connections grouped by relation). Articles cross-link with relative markdown links, so any agent — or GitHub, or Obsidian — can navigate the graph by reading files instead of running queries:
+`astria wiki` writes a Wikipedia-style markdown wiki into `.astria/wiki/`: an `index.md` entry point, one article per community (key concepts ranked by connections, cross-community links, source files, EXTRACTED/INFERRED/AMBIGUOUS audit trail), and one article per god node (signature, connections grouped by relation). Articles cross-link with relative markdown links, so any agent — or GitHub, or Obsidian — can navigate the graph by reading files instead of running queries:
 
 ```bash
-nodesify-graphify run . --wiki          # build graph + wiki in one step
-nodesify-graphify wiki --graph .        # (re)generate the wiki any time
-nodesify-graphify wiki --out docs/wiki  # export into docs/ for GitHub
+astria run . --wiki          # build graph + wiki in one step
+astria wiki --graph .        # (re)generate the wiki any time
+astria wiki --out docs/wiki  # export into docs/ for GitHub
 ```
 
 `update` regenerates an existing wiki automatically, so it never drifts stale.
 
-`--format obsidian` writes an Obsidian vault instead: one note per node with `graphify/*` + community tags and `[[wikilinks]]` to neighbors, `_COMMUNITY_*.md` overview notes, and a `graphify.canvas` (communities as colored groups, nodes as cards). Open the output directory as a vault in Obsidian:
+`--format obsidian` writes an Obsidian vault instead: one note per node with `astria/*` + community tags and `[[wikilinks]]` to neighbors, `_COMMUNITY_*.md` overview notes, and a `astria.canvas` (communities as colored groups, nodes as cards). Open the output directory as a vault in Obsidian:
 
 ```bash
-nodesify-graphify wiki --format obsidian --out my-vault
+astria wiki --format obsidian --out my-vault
 ```
 
-### .graphifyignore
+### .astriaignore
 
-Place a `.graphifyignore` file in your project root (gitignore syntax) to exclude files from the graph.
+Place a `.astriaignore` file in your project root (gitignore syntax) to exclude files from the graph.
 
 ## Semantic enrichment
 
@@ -193,17 +202,17 @@ Two independent semantic layers, both optional:
 - `similar_to` edges (INFERRED, cosine-scored) linking semantically related symbols across files — they flow into clustering, surprising connections, and every export
 - embedding-backed query recall: `query` merges semantic candidates with token matching, so conceptual questions with zero string overlap still find their symbols
 
-Once embeddings exist, every `run`/`update` refreshes them incrementally (offline — the refresh never downloads), and `query` picks them up automatically. Override the model cache location with `GRAPHIFY_EMBED_CACHE_DIR`.
+Once embeddings exist, every `run`/`update` refreshes them incrementally (offline — the refresh never downloads), and `query` picks them up automatically. Override the model cache location with ``ASTRIA_EMBED_CACHE_DIR` (legacy `GRAPHIFY_EMBED_CACHE_DIR` accepted)`.
 
 **LLM enrichment** — set any LLM backend and the pipeline enriches docs, papers, and images into concept nodes automatically:
 
 | Backend | Env vars | Vision |
 |---------|----------|--------|
-| Anthropic Claude (default) | `GRAPHIFY_LLM_API_KEY` | ✓ |
-| OpenAI-compatible (OpenAI, DeepSeek, Ollama, LM Studio, custom) | `GRAPHIFY_LLM_BASE_URL` + `GRAPHIFY_LLM_API_KEY`/`OPENAI_API_KEY` | ✓ |
+| Anthropic Claude (default) | `ASTRIA_LLM_API_KEY` | ✓ |
+| OpenAI-compatible (OpenAI, DeepSeek, Ollama, LM Studio, custom) | `GRAPHIFY_LLM_BASE_URL` + `ASTRIA_LLM_API_KEY`/`OPENAI_API_KEY` | ✓ |
 | Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | ✓ |
 
-`GRAPHIFY_LLM_BACKEND` selects explicitly; `GRAPHIFY_LLM_MODEL` overrides the model. Per-run: `nodesify-graphify run . --backend openai --model gpt-4o-mini`. Images (png/jpg/webp/gif, ≤5 MB) go through each backend's vision API.
+`ASTRIA_LLM_BACKEND` selects explicitly; `ASTRIA_LLM_MODEL` overrides (legacy `GRAPHIFY_*` names still honored) the model. Per-run: `astria run . --backend openai --model gpt-4o-mini`. Images (png/jpg/webp/gif, ≤5 MB) go through each backend's vision API.
 
 ## Architecture
 
@@ -211,29 +220,29 @@ Rust workspace with 14 crates + Node.js CLI:
 
 ```
 crates/
-  graphify-core/      Types, error, SQLite schema + migrations, path validation, sensitive-path denylist
-  graphify-paths/     Path normalization, .graphify directory management
-  graphify-detect/    File discovery, classification, incremental change detection
-  graphify-extract/   Tree-sitter AST extraction (21 languages)
-  graphify-build/     Merge extractions into SQLite graph, entity dedup (MinHash + Jaro-Winkler)
-  graphify-cluster/   Deterministic label propagation community detection
-  graphify-analyze/   God nodes, surprising connections, blast radius
-  graphify-query/     Query engine: BFS/DFS (optionally directed), shortest path, explain
-  graphify-mcp/       MCP stdio server exposing the graph to AI agents
-  graphify-report/    Markdown report generation
-  graphify-semantic/  LLM semantic extraction (Claude / OpenAI-compatible / Gemini), with vision
-  graphify-ingest/    URL ingestion (arXiv/tweet/webpage/image) with SSRF protection
-  graphify-pdf/       PDF text extraction
-  graphify-napi/      napi-rs bindings, pipeline orchestration, merge/diff, JSON/HTML/GraphML/tree export
+  astria-core/      Types, error, SQLite schema + migrations, path validation, sensitive-path denylist
+  astria-paths/     Path normalization, .astria directory management
+  astria-detect/    File discovery, classification, incremental change detection
+  astria-extract/   Tree-sitter AST extraction (21 languages)
+  astria-build/     Merge extractions into SQLite graph, entity dedup (MinHash + Jaro-Winkler)
+  astria-cluster/   Deterministic label propagation community detection
+  astria-analyze/   God nodes, surprising connections, blast radius
+  astria-query/     Query engine: BFS/DFS (optionally directed), shortest path, explain
+  astria-mcp/       MCP stdio server exposing the graph to AI agents
+  astria-report/    Markdown report generation
+  astria-semantic/  LLM semantic extraction (Claude / OpenAI-compatible / Gemini), with vision
+  astria-ingest/    URL ingestion (arXiv/tweet/webpage/image) with SSRF protection
+  astria-pdf/       PDF text extraction
+  astria-napi/      napi-rs bindings, pipeline orchestration, merge/diff, JSON/HTML/GraphML/tree export
 packages/
-  graphify-cli/       Node.js CLI (commander.js)
+  astria-cli/       Node.js CLI (commander.js)
 ```
 
 Pipeline: `detect() → extract() → enrich_with_semantics() → build() → dedup_nodes() → cluster() → analyze() → report()`
 
 Each stage is a pure function in its own crate; semantic enrichment is optional and activates when an LLM backend is configured. SQLite is the persistence layer (extraction cache, file manifest, graph storage, pipeline runs, query history). petgraph provides in-memory algorithms (BFS/DFS, label propagation, shortest path).
 
-Design docs: [design spec](docs/superpowers/specs/2026-04-30-nodesify-graphify-rewrite-design.md), [implementation plan](docs/superpowers/plans/2026-04-30-nodesify-graphify-implementation.md).
+Design docs: [design spec](docs/superpowers/specs/2026-04-30-astria-rewrite-design.md), [implementation plan](docs/superpowers/plans/2026-04-30-astria-implementation.md).
 
 ## Build from source
 
@@ -242,7 +251,7 @@ Design docs: [design spec](docs/superpowers/specs/2026-04-30-nodesify-graphify-r
 cargo build --release
 
 # Build Node.js CLI
-cd packages/graphify-cli && npm run build
+cd packages/astria-cli && npm run build
 ```
 
 Requires Rust 2021 edition (Rust 1.56+) and Node.js >= 20.
@@ -251,16 +260,16 @@ Requires Rust 2021 edition (Rust 1.56+) and Node.js >= 20.
 
 ```bash
 cargo test  # All Rust crates: unit tests + end-to-end pipeline integration tests
-cd packages/graphify-cli && npm run build && npm test  # CLI tests + end-to-end test of the compiled binary
+cd packages/astria-cli && npm run build && npm test  # CLI tests + end-to-end test of the compiled binary
 ```
 
-Rust crates have unit tests using in-memory SQLite (`open_db_in_memory()`) and `tempfile` for filesystem fixtures, plus integration tests in `crates/graphify-napi/tests/` that run the full pipeline over language fixtures. The CLI package has structure tests against the real Commander program, install/hook tests, and an end-to-end test that spawns the compiled CLI against a fixture project (skips automatically if `dist/` hasn't been built).
+Rust crates have unit tests using in-memory SQLite (`open_db_in_memory()`) and `tempfile` for filesystem fixtures, plus integration tests in `crates/astria-napi/tests/` that run the full pipeline over language fixtures. The CLI package has structure tests against the real Commander program, install/hook tests, and an end-to-end test that spawns the compiled CLI against a fixture project (skips automatically if `dist/` hasn't been built).
 
 ## Language support
 
 Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, CSS — via tree-sitter grammars.
 
-Each language has its own config module in `crates/graphify-extract/src/langs/`. Adding a new language means adding a new file there and registering it in `langs/mod.rs`.
+Each language has its own config module in `crates/astria-extract/src/langs/`. Adding a new language means adding a new file there and registering it in `langs/mod.rs`.
 
 ## License
 
