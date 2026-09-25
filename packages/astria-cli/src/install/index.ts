@@ -87,7 +87,7 @@ function copyFile(src: string, dst: string) {
 }
 
 function writeInstallStamp(dir: string) {
-  const stampPath = path.join(dir, '.graphify_version');
+  const stampPath = path.join(dir, '.astria_version');
   // Same guard as copyFile, applied to the exact value that is written:
   // only a normalized absolute path without traversal segments may reach
   // the filesystem, regardless of how the caller derived it.

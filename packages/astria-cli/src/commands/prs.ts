@@ -63,9 +63,9 @@ function prFiles(number: number): string[] {
 }
 
 function loadGraphNodes(graphRoot: string): { source_file: string; community: number | null }[] {
-  const graphJson = join(graphRoot, '.graphify', 'graph.json');
+  const graphJson = join(graphRoot, '.astria', 'graph.json');
   if (!existsSync(graphJson)) {
-    throw new Error(`no graph found at ${graphJson} — run 'nodesify-graphify run ${graphRoot}' first`);
+    throw new Error(`no graph found at ${graphJson} — run 'astria run ${graphRoot}' first`);
   }
   const graph = JSON.parse(readFileSync(graphJson, 'utf-8'));
   return (graph.nodes || []).map((n: any) => ({

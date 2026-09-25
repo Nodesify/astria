@@ -13,9 +13,9 @@ export async function runCommand(
     console.log(`Nodes added: ${result.nodesAdded}`);
     console.log(`Edges added: ${result.edgesAdded}`);
     console.log(`Communities: ${result.communities}`);
-    console.log(`Report written to: ${pathMod.join(path, '.graphify', 'graph_report.md')}`);
+    console.log(`Report written to: ${pathMod.join(path, '.astria', 'graph_report.md')}`);
     if (opts.wiki) {
-      const outDir = pathMod.join(path, '.graphify', 'wiki');
+      const outDir = pathMod.join(path, '.astria', 'wiki');
       const articles = exportWiki(path, outDir, 25);
       console.log(`Wiki written: ${articles} articles -> ${pathMod.join(outDir, 'index.md')}`);
     if (opts.global) {

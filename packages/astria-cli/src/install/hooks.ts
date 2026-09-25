@@ -43,7 +43,7 @@ try {
 
   const codeExts = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.go', '.java', '.c', '.h', '.cpp', '.cc', '.cxx', '.hpp']);
   const hasCode = changed.split(/\\r?\\n/).some(f => codeExts.has(path.extname(f)));
-  if (hasCode && existsSync('.graphify')) {
+  if (hasCode && existsSync('.astria')) {
     runGraphifyUpdate();
   }
 } catch {}
@@ -57,7 +57,7 @@ const path = require('path');
 ${UPDATE_HELPER}
 const branchSwitch = process.argv[3];
 if (branchSwitch !== '1') process.exit(0);
-if (!existsSync('.graphify')) process.exit(0);
+if (!existsSync('.astria')) process.exit(0);
 
 try {
   // No shell redirects — see the note in the post-commit script.

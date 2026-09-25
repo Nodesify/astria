@@ -6,7 +6,7 @@ export async function mergeCommand(pathA: string, pathB: string, outPath: string
     console.log(`Merging graphs: ${pathA} + ${pathB} -> ${outPath}`);
     const result = mergeGraphs(pathA, pathB, outPath);
     console.log(`Nodes: ${result.nodesAdded}, Edges: ${result.edgesAdded}, Communities: ${result.communities}`);
-    console.log(`Merged graph written to: ${path.join(outPath, '.graphify')}`);
+    console.log(`Merged graph written to: ${path.join(outPath, '.astria')}`);
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);
     process.exitCode = 1;

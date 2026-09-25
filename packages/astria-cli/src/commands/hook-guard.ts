@@ -31,8 +31,17 @@ function readStdinJson(): ToolInput | null {
 
 function graphDir(): string | null {
   const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const g = join(cwd, '.graphify');
+  const g = join(cwd, '.astria');
   return existsSync(join(g, 'graph.json')) ? g : null;
+}
+
+/// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`.
+function envVar(name: string): string | undefined {
+  return (
+    process.env[`ASTRIA_${name}`] ||
+    process.env[`GRAPHIFY_${name}`] ||
+    undefined
+  );
 }
 
 function orientedRecently(gdir: string): boolean {
@@ -40,7 +49,7 @@ function orientedRecently(gdir: string): boolean {
     const stamp = readFileSync(join(gdir, 'cache', 'last_query_stamp'), 'utf-8');
     const ts = Number(stamp.split('\t')[0]);
     const age = Date.now() / 1000 - ts;
-    const ttl = Number(process.env.GRAPHIFY_HOOK_STRICT_TTL || 1800);
+    const ttl = Number(envVar('HOOK_STRICT_TTL') || 1800);
     return Number.isFinite(ts) && age < ttl;
   } catch {
     return false;
@@ -84,8 +93,8 @@ export function hookGuard(mode: string, _args: string[]): void {
     if (!gdir) return;
 
     const strict =
-      process.env.GRAPHIFY_HOOK_STRICT === '1' ||
-      (process.env.GRAPHIFY_HOOK_STRICT !== '0' && _args.includes('--strict'));
+      envVar('HOOK_STRICT') === '1' ||
+      (envVar('HOOK_STRICT') !== '0' && _args.includes('--strict'));
 
     if (mode === 'search') {
       const ti = input.tool_input || {};
@@ -99,7 +108,7 @@ export function hookGuard(mode: string, _args: string[]): void {
       if (isGrepTool || isSearchBash) {
         emitNudge(
           'MANDATORY: Before searching with grep, check the knowledge graph first: ' +
-            '`nodesify-graphify query "<question>"` returns structured answers with ' +
+            '`astria query "<question>"` returns structured answers with ' +
             'file:line provenance in one call. The graph is already built for this repo.'
         );
       }
@@ -110,7 +119,7 @@ export function hookGuard(mode: string, _args: string[]): void {
       const filePath = input.tool_input?.file_path;
       if (!filePath) return;
       const resolved = resolve(filePath);
-      if (resolved.includes('.graphify')) return;
+      if (resolved.includes('.astria')) return;
       const ext = extname(resolved).toLowerCase();
       if (ext && !SOURCE_EXTS.has(ext)) return;
       // Staleness: file newer than the graph?
@@ -120,7 +129,7 @@ export function hookGuard(mode: string, _args: string[]): void {
         if (fileMtime > graphMtime) {
           emitNudge(
             `STALE GRAPH: ${filePath} changed after the last graph build. ` +
-              'Run `nodesify-graphify update .` before trusting graph answers.'
+              'Run `astria update .` before trusting graph answers.'
           );
           return;
         }
@@ -141,7 +150,7 @@ export function hookGuard(mode: string, _args: string[]): void {
           writeFileSync(marker, String(Date.now()), { flag: 'wx' });
           emitDeny(
             'ORIENT FIRST: this read is not yet covered by a graph query. ' +
-              'Run `nodesify-graphify query "<question>"` (or explain/path) once — ' +
+              'Run `astria query "<question>"` (or explain/path) once — ' +
               'further reads then proceed without interruption for 30 minutes.'
           );
         } catch {
