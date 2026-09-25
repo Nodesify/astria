@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Agent integration
-description: Connect AI coding assistants to the graph — MCP server, skill-file installers for nine platforms, git hooks, and the editor-side hook-guard.
+description: Connect AI coding assistants to the graph — MCP server, skill-file installers for ten platforms, git hooks, and the editor-side hook-guard.
 keywords: [agents, mcp, claude, codex, cursor, hooks, hook-guard, skill files]
 ---
 
@@ -32,9 +32,11 @@ nodesify-graphify install [--platform claude]
 nodesify-graphify uninstall [--platform claude]
 ```
 
-Supported platforms: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`.
+Supported platforms: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`.
 
-`install` writes the platform's skill files and injects an always-on `## graphify` instruction block into `AGENTS.md` / `CLAUDE.md` — telling agents to query the graph before grepping and to run `update` after edits. Both steps are idempotent; `uninstall` removes them.
+`install` writes the platform's skill files and injects an always-on `## graphify` instruction block into `AGENTS.md` / `CLAUDE.md` — telling agents to query the graph before grepping and to run `update` after edits. The instruction block names both access paths: MCP tools when the `graphify` server is connected, or the `nodesify-graphify` CLI from any agent.
+
+`--platform zcode` additionally registers the graphify MCP server in `.zcode/config.json` under `mcp.servers`, which ZCode trusts and auto-connects at session start — the tools (`repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`) appear natively in every session for that project. All steps are idempotent; `uninstall` removes them.
 
 ## Git hooks
 

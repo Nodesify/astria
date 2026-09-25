@@ -66,7 +66,7 @@ nodesify-graphify install      # Install skill files for AI coding assistants
 
 `mcp` exposes the graph over the Model Context Protocol, so any MCP-capable agent (Claude Code, Codex, Cursor, …) can query it — see the [MCP tools reference](./reference/mcp-tools) for the tool list. `install` writes skill files for your assistant of choice; the full setup (platforms, git hooks, the editor guard) is on [Agent integration](./guides/mcp-and-agents).
 
-Supported platforms: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`.
+Supported platforms: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`.
 
 Git hooks can keep the graph fresh automatically:
 

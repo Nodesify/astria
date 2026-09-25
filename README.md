@@ -108,7 +108,7 @@ nodesify-graphify uninstall [--platform claude]         # Uninstall skill files
 nodesify-graphify hook install|uninstall|status         # Git hook management
 ```
 
-Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`.
+Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`.
 
 Running `nodesify-graphify run .` creates `.graphify/` with:
 
