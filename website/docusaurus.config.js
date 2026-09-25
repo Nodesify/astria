@@ -25,8 +25,19 @@ const config = {
       ({
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
-          editUrl:
-            'https://github.com/Nodesify/nodesify-graphify/edit/main/website/',
+          // 0.8.0 is the latest release; website/docs tracks the next one.
+          lastVersion: '0.8.0',
+          versions: {
+            current: {
+              label: 'Next',
+              banner: 'unreleased',
+            },
+            '0.8.0': {
+              banner: 'none',
+            },
+          },
+          editUrl: ({ versionDocsDirPath, docPath }) =>
+            `https://github.com/Nodesify/nodesify-graphify/edit/main/website/${versionDocsDirPath}/${docPath}`,
         },
         blog: false,
         theme: {
@@ -35,9 +46,43 @@ const config = {
       }),
     ],
   ],
+  // Local, build-time search index — no external service. If Algolia DocSearch
+  // is applied for and approved, replace this with the algolia themeConfig block.
+  themes: [
+    [
+      require.resolve('@easyops-cn/docusaurus-search-local'),
+      /** @type {import('@easyops-cn/docusaurus-search-local').PluginOptions} */
+      ({
+        hashed: true,
+        language: ['en'],
+        indexDocs: true,
+        docsRouteBasePath: ['docs'],
+        highlightSearchTermsOnTargetPage: true,
+      }),
+    ],
+  ],
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
+      metadata: [
+        {
+          name: 'description',
+          content:
+            'Turn any folder into a queryable knowledge graph. Deterministic AST extraction in Rust, local embeddings, zero API keys.',
+        },
+        {
+          property: 'og:image',
+          content: 'https://nodesify.github.io/nodesify-graphify/img/og-image.png',
+        },
+        { property: 'og:image:width', content: '1200' },
+        { property: 'og:image:height', content: '630' },
+        { property: 'og:type', content: 'website' },
+        { name: 'twitter:card', content: 'summary_large_image' },
+        {
+          name: 'twitter:image',
+          content: 'https://nodesify.github.io/nodesify-graphify/img/og-image.png',
+        },
+      ],
       navbar: {
         title: 'nodesify-graphify',
         logo: {
@@ -50,6 +95,10 @@ const config = {
             sidebarId: 'docs',
             position: 'left',
             label: 'Docs',
+          },
+          {
+            type: 'docsVersionDropdown',
+            position: 'left',
           },
           {
             href: 'https://github.com/Nodesify/nodesify-graphify',
