@@ -86,7 +86,7 @@ pub fn build_extraction(db_name: &str, sections: &[&str]) -> Result<Extraction> 
             node_type: "code".to_string(),
         });
     }
-    for (id, _) in relation_kinds.iter() {
+    for id in relation_kinds.keys() {
         edges.push(ExtractedEdge {
             source: file_id.clone(),
             target: id.clone(),
