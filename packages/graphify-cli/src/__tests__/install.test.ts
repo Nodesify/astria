@@ -17,9 +17,11 @@ import {
   injectCursorRule, removeCursorRule,
   injectKiroSteering, removeKiroSteering,
   injectZcodeMcp, removeZcodeMcp,
+  injectAgentMcp, removeAgentMcp,
 } from '../install/settings-inject';
+import type { McpFlavor } from '../install/settings-inject';
 import {
-  injectSection, removeSection, PROJECT_MD_SECTION, SKILL_REGISTRATION,
+  injectSection, removeSection, PROJECT_MD_SECTION, SKILL_REGISTRATION, SECTION_MARKER,
 } from '../install/markdown-inject';
 
 let passed = 0;
@@ -286,6 +288,49 @@ function testZcodeMcp() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ---- Agent MCP registration (claude / cursor / gemini) ----
+
+function testAgentMcp() {
+  const flavors: Array<[McpFlavor, string, Record<string, unknown>]> = [
+    ['claude', '.mcp.json', {}],
+    ['cursor', path.join('.cursor', 'mcp.json'), {}],
+    ['gemini', path.join('.gemini', 'settings.json'), { theme: 'dark' }],
+  ];
+
+  for (const [flavor, rel, extra] of flavors) {
+    const dir = tmpDir();
+
+    assert(injectAgentMcp(dir, flavor) === true, `${flavor}: first inject returns true`);
+
+    const config = readJson(path.join(dir, rel));
+    assert(config.mcpServers.graphify.command === 'nodesify-graphify', `${flavor}: server command is nodesify-graphify`);
+    assert(JSON.stringify(config.mcpServers.graphify.args) === '["mcp"]', `${flavor}: server args are ["mcp"]`);
+
+    assert(injectAgentMcp(dir, flavor) === false, `${flavor}: second inject returns false (idempotent)`);
+
+    // merge: preserves existing servers and unrelated top-level keys
+    const dir2 = tmpDir();
+    const target = path.join(dir2, rel);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, JSON.stringify({ mcpServers: { other: { command: 'other-cli' } }, ...extra }));
+    injectAgentMcp(dir2, flavor);
+    const merged = readJson(target);
+    assert(merged.mcpServers.other.command === 'other-cli', `${flavor}: preserves existing MCP servers`);
+    assert(merged.mcpServers.graphify.command === 'nodesify-graphify', `${flavor}: adds graphify server`);
+    for (const key of Object.keys(extra)) {
+      assert((merged as any)[key] === (extra as any)[key], `${flavor}: preserves unrelated key ${key}`);
+    }
+    fs.rmSync(dir2, { recursive: true, force: true });
+
+    assert(removeAgentMcp(dir, flavor) === true, `${flavor}: remove returns true`);
+    const cleaned = readJson(path.join(dir, rel));
+    assert(!cleaned.mcpServers, `${flavor}: empty mcpServers block cleaned up after remove`);
+    assert(removeAgentMcp(dir, flavor) === false, `${flavor}: second remove returns false`);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ---- Markdown inject ----
 
 function testMarkdownInject() {
@@ -299,14 +344,57 @@ function testMarkdownInject() {
   // injectSection creates file with content
   const filePath = path.join(dir, 'CLAUDE.md');
   const result1 = injectSection(filePath, PROJECT_MD_SECTION);
-  assert(result1 === true, 'injectSection: first inject returns true');
+  assert(result1 === 'added', 'injectSection: first inject adds');
   assert(fs.existsSync(filePath), 'injectSection: file created');
   const content = fs.readFileSync(filePath, 'utf-8');
   assert(content.includes('## graphify'), 'injectSection: content includes section header');
+  assert(content.includes(SECTION_MARKER), 'injectSection: managed marker present');
 
-  // idempotent — second inject returns false
+  // idempotent — identical re-inject is unchanged
   const result2 = injectSection(filePath, PROJECT_MD_SECTION);
-  assert(result2 === false, 'injectSection: second inject returns false (idempotent)');
+  assert(result2 === 'unchanged', 'injectSection: identical re-inject is unchanged');
+
+  // legacy generated section (pre-marker) is upgraded in place
+  const legacyPath = path.join(dir, 'AGENTS.md');
+  fs.writeFileSync(
+    legacyPath,
+    '# My Project\n\n## graphify\n\nThis project has an optional nodesify-graphify knowledge graph at .graphify/.\nOld guidance.\n',
+    'utf-8'
+  );
+  assert(injectSection(legacyPath, PROJECT_MD_SECTION) === 'updated', 'injectSection: legacy section upgraded');
+  const upgraded = fs.readFileSync(legacyPath, 'utf-8');
+  assert(!upgraded.includes('optional nodesify-graphify'), 'injectSection: legacy wording replaced');
+  assert(upgraded.includes('repo_map'), 'injectSection: new wording present');
+  assert(upgraded.startsWith('# My Project'), 'injectSection: upgrade preserves surrounding content');
+
+  // older shipped wordings are recognized too
+  const mustEra = path.join(dir, 'MUST-era.md');
+  fs.writeFileSync(
+    mustEra,
+    '## graphify\n\nRules:\n- MUST read .graphify/graph_report.md before searching files for architecture questions\n',
+    'utf-8'
+  );
+  assert(injectSection(mustEra, PROJECT_MD_SECTION) === 'updated', 'injectSection: MUST-era section upgraded');
+  const forbiddenEra = path.join(dir, 'FORBIDDEN-era.md');
+  fs.writeFileSync(
+    forbiddenEra,
+    '## graphify\n\nCRITICAL RULES:\n- You are **FORBIDDEN** from using native search tools as your first step.\n',
+    'utf-8'
+  );
+  assert(injectSection(forbiddenEra, PROJECT_MD_SECTION) === 'updated', 'injectSection: FORBIDDEN-era section upgraded');
+
+  // user-customized section is left alone
+  const customPath = path.join(dir, 'CUSTOM.md');
+  fs.writeFileSync(customPath, '## graphify\n\nMy own custom rules.\n', 'utf-8');
+  assert(injectSection(customPath, PROJECT_MD_SECTION) === 'unchanged', 'injectSection: custom block preserved');
+  assert(fs.readFileSync(customPath, 'utf-8').includes('My own custom rules'), 'injectSection: custom text untouched');
+
+  // skill registration (h1) is idempotent — used to duplicate on every install
+  const regPath = path.join(dir, 'user-CLAUDE.md');
+  assert(injectSection(regPath, SKILL_REGISTRATION) === 'added', 'injectSection: h1 registration added');
+  assert(injectSection(regPath, SKILL_REGISTRATION) === 'unchanged', 'injectSection: h1 registration idempotent');
+  const regCount = (fs.readFileSync(regPath, 'utf-8').match(/^# graphify$/gm) || []).length;
+  assert(regCount === 1, 'injectSection: no duplicated registration blocks');
 
   // removeSection removes the section (file only had graphify content, so file is deleted)
   const removed = removeSection(filePath);
@@ -342,6 +430,7 @@ testOpenCodePlugin();
 testCursorRule();
 testKiroSteering();
 testZcodeMcp();
+testAgentMcp();
 testMarkdownInject();
 
 console.log(`\n${passed} passed, ${failed} failed`);
