@@ -9,6 +9,8 @@ keywords: [environment variables, ASTRIA_LLM, ASTRIA_EMBED_CACHE_DIR, ASTRIA_QUE
 
 Every variable is optional — the default pipeline is fully local and needs none of them.
 
+> Pre-1.0 `GRAPHIFY_*` names are still read everywhere as a fallback; an `ASTRIA_*` variable always takes precedence. Set the new names, then remove the old ones.
+
 ## LLM semantic enrichment
 
 Activates the `enrich_with_semantics()` pipeline stage (docs, papers, images → concept nodes). See [Semantic enrichment](../guides/semantic-enrichment) for behavior.

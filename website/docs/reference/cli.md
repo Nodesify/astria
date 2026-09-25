@@ -89,6 +89,14 @@ astria diagnose [--graph .] [--json]
 
 Read-only health report over an existing graph: dangling edge endpoints (stub vs actionable), self-loops, duplicate edges, unclassified files, and zero-cohesion communities. `--json` emits machine-readable output. Never mutates the graph.
 
+### Migrating from pre-1.0 layouts
+
+```bash
+astria migrate [--graph .]
+```
+
+One-time rename migration: moves a pre-1.0 `.graphify/` data folder to `.astria/`, renames `.graphifyignore` to `.astriaignore`, and moves `~/.nodesify-graphify/global.db` to `~/.astria/global.db`. Idempotent, and never overwrites an existing target — if the graph is locked by a running editor or MCP server it says so and can simply be re-run.
+
 ## Memory and reflection
 
 The feedback loop that complements [learned edges](#learning-from-usage): learned edges are automatic, memory is curated. Full walkthrough in [Memory and learning](../guides/memory-and-learning).

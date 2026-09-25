@@ -5,8 +5,8 @@ export async function runCommand(
   path: string,
   opts: { dedup?: boolean; backend?: string; model?: string; wiki?: boolean; embed?: boolean; global?: boolean; as?: string },
 ) {
-  if (opts.backend) process.env.GRAPHIFY_LLM_BACKEND = opts.backend;
-  if (opts.model) process.env.GRAPHIFY_LLM_MODEL = opts.model;
+  if (opts.backend) process.env.ASTRIA_LLM_BACKEND = opts.backend;
+  if (opts.model) process.env.ASTRIA_LLM_MODEL = opts.model;
   try {
     console.log(`Running astria pipeline on: ${path}`);
     const result = runPipeline(path, opts.dedup === false, opts.embed === true);

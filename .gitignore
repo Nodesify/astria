@@ -6,6 +6,7 @@ node_modules/
 .codex/
 .cursor/
 .gemini/
+.kiro/
 .graphify/
 .astria/
 .fastembed_cache/
