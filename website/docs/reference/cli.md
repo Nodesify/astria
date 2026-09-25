@@ -15,6 +15,7 @@ All commands accept `--graph .` to point at an existing `.astria/` directory (de
 astria run <path>                 # Full pipeline: detect → extract → build → cluster → analyze → report
 astria run <path> --wiki          # ...also export a markdown wiki to .astria/wiki
 astria run <path> --embed         # ...also compute local embeddings (similar_to edges + semantic query recall)
+astria run <path> --backend openai --model gpt-4o-mini  # ...with LLM semantic enrichment (see Semantic enrichment)
 astria run <path> --global --as <tag>  # ...also merge this repo into the cross-repo global graph (see Global graph)
 astria update <path>              # Incremental rebuild (only changed files; regenerates an existing wiki)
 astria watch <path> [--debounce 3000]  # Watch for file changes, auto-rebuild
@@ -22,6 +23,8 @@ astria cluster-only <path>        # Re-cluster + analyze + report without re-ext
 astria merge <pathA> <pathB> <outPath>  # Merge two graphs
 astria diff <pathA> <pathB>       # Compare two graphs
 ```
+
+`run` and `update` accept `--backend <claude|openai|gemini>` and `--model <name>` (per-run LLM enrichment without env vars) and `--no-dedup` (skip near-duplicate node merging).
 
 Builds also pick up, automatically:
 
@@ -36,7 +39,7 @@ astria explain <node> [--graph .]              # Explain a node and its connecti
 astria query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--graph .]  # BFS/DFS traversal
 astria path <A> <B> [--directed] [--detail high] [--graph .]   # Shortest path between two concepts
 astria affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - what breaks if you change this node
-astria map [--budget 2000] [--graph .]         # PageRank-ranked repo map with top symbols
+astria map [--budget 2000] [--detail high] [--graph .]  # PageRank-ranked repo map with top symbols
 astria stats [--graph .]                       # Node/edge/community counts
 astria status [--graph .]                      # Graph health and staleness
 astria history [--limit 20] [--graph .]        # Show recent query history
@@ -66,7 +69,7 @@ Every query can also append a JSONL line (ts, kind, question, nodes, duration) t
 ```bash
 astria export [--graph .] [--out graph.json] [--format json|html|graphml|cypher] [--mode standard|large]
 astria tree [--out tree.html] [--max-children 40]   # Collapsible filesystem tree of all symbols (HTML)
-astria wiki [--out .astria/wiki] [--max-nodes 25] [--graph .]  # Wikipedia-style markdown wiki
+astria wiki [--out .astria/wiki] [--max-nodes 25] [--format markdown|obsidian] [--graph .]  # Wikipedia-style markdown wiki, or an Obsidian vault
 astria prs [20] [--conflicts] [--graph .]           # Map open PRs onto the graph - impact + merge-order risk
 ```
 
