@@ -44,6 +44,7 @@ exports.PLATFORMS = {
         agentsMd: false,
         geminiMd: false,
         settingsHook: 'claude',
+        mcp: 'claude',
     },
     codex: {
         skillFile: 'skill-codex.md',
@@ -62,6 +63,7 @@ exports.PLATFORMS = {
         agentsMd: false,
         geminiMd: true,
         settingsHook: 'gemini',
+        mcp: 'gemini',
     },
     opencode: {
         skillFile: 'skill-opencode.md',
@@ -78,6 +80,7 @@ exports.PLATFORMS = {
         agentsMd: false,
         geminiMd: false,
         settingsHook: 'none',
+        mcp: 'cursor',
     },
     kiro: {
         skillFile: 'skill.md',
@@ -110,6 +113,17 @@ exports.PLATFORMS = {
         agentsMd: true,
         geminiMd: false,
         settingsHook: 'none',
+    },
+    zcode: {
+        // skill-codex.md is CLI-oriented, which is what ZCode sessions use
+        // unless the graphify MCP server is registered by the mcp flag below.
+        skillFile: 'skill-codex.md',
+        skillDst: path.join('.zcode', 'skills', 'graphify', 'SKILL.md'),
+        claudeMd: false,
+        agentsMd: true,
+        geminiMd: false,
+        settingsHook: 'none',
+        mcp: 'zcode',
     },
 };
 exports.PLATFORM_NAMES = Object.keys(exports.PLATFORMS);
