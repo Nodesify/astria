@@ -97,6 +97,44 @@ function writeInstallStamp(dir: string) {
   try { fs.writeFileSync(stampPath, require('../../package.json').version + '\n', 'utf-8'); } catch { /* ignore */ }
 }
 
+/// Pre-1.0 installs wrote skills under `skills/graphify/`. The path carries
+/// exactly one `astria` segment (the skill dir name), so the legacy
+/// destination is derivable by swapping that segment.
+function legacySkillDst(cfg: PlatformConfig): string {
+  return cfg.skillDst.replace(/([\\/])astria([\\/])/, '$1graphify$2');
+}
+
+/// Removes the pre-1.0 skill file (and its now-empty folder) so a stale
+/// graphify skill is never left behind after install or uninstall.
+function removeLegacySkillFile(platform: string, cfg: PlatformConfig): string[] {
+  const messages: string[] = [];
+  if (!cfg.skillFile) return messages;
+
+  const targets = [path.join(os.homedir(), legacySkillDst(cfg))];
+  if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
+    targets.push(path.join(CLAUDE_CONFIG_DIR, 'skills', 'graphify', 'SKILL.md'));
+  }
+
+  for (const legacy of targets) {
+    const dir = path.dirname(legacy);
+    const hadDir = fs.existsSync(dir);
+    if (fs.existsSync(legacy)) {
+      try {
+        fs.unlinkSync(legacy);
+        messages.push(`Legacy skill file removed: ${legacy}`);
+      } catch { /* unreadable — leave it */ }
+    }
+    if (!hadDir) continue;
+    // Install stamps from both eras; a folder holding only these is removed
+    // outright so no stale skill directory lingers.
+    for (const stamp of ['.astria_version', '.graphify_version']) {
+      try { fs.unlinkSync(path.join(dir, stamp)); } catch { /* absent */ }
+    }
+    try { fs.rmdirSync(dir); } catch { /* not empty — leave */ }
+  }
+  return messages;
+}
+
 export function installPlatform(platform: string, projectDir: string): string[] {
   const messages: string[] = [];
 
@@ -117,6 +155,7 @@ export function installPlatform(platform: string, projectDir: string): string[] 
   if (platform === 'kiro') {
     const cfg = PLATFORMS.kiro;
     messages.push(...copySkillFile('kiro', cfg));
+    messages.push(...removeLegacySkillFile('kiro', cfg));
     if (injectKiroSteering(projectDir)) {
       messages.push('Kiro steering -> .kiro/steering/astria.md');
     } else {
@@ -132,6 +171,7 @@ export function installPlatform(platform: string, projectDir: string): string[] 
   }
 
   messages.push(...copySkillFile(platform, cfg));
+  messages.push(...removeLegacySkillFile(platform, cfg));
 
   if (cfg.claudeMd) {
     const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
@@ -254,6 +294,7 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
       const dst = path.join(homeDir, cfg.skillDst);
       try { fs.unlinkSync(dst); messages.push(`Skill file removed: ${dst}`); } catch { messages.push('Skill file: not found'); }
     }
+    messages.push(...removeLegacySkillFile('kiro', cfg));
     if (removeKiroSteering(projectDir)) {
       messages.push('Kiro steering: removed');
     } else {
@@ -277,6 +318,7 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
     }
     try { fs.unlinkSync(dst); messages.push(`Skill file removed: ${dst}`); } catch { messages.push('Skill file: not found'); }
   }
+  messages.push(...removeLegacySkillFile(platform, cfg));
 
   if (cfg.claudeMd) {
     const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');

@@ -38,9 +38,9 @@ const pathMod = __importStar(require("path"));
 const native_1 = require("../native");
 async function runCommand(path, opts) {
     if (opts.backend)
-        process.env.GRAPHIFY_LLM_BACKEND = opts.backend;
+        process.env.ASTRIA_LLM_BACKEND = opts.backend;
     if (opts.model)
-        process.env.GRAPHIFY_LLM_MODEL = opts.model;
+        process.env.ASTRIA_LLM_MODEL = opts.model;
     try {
         console.log(`Running astria pipeline on: ${path}`);
         const result = (0, native_1.runPipeline)(path, opts.dedup === false, opts.embed === true);

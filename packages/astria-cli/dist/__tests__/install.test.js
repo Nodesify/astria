@@ -45,6 +45,7 @@ const path = __importStar(require("path"));
 const os = __importStar(require("os"));
 const settings_inject_1 = require("../install/settings-inject");
 const markdown_inject_1 = require("../install/markdown-inject");
+const install_1 = require("../install");
 let passed = 0;
 let failed = 0;
 function assert(condition, message) {
@@ -360,6 +361,44 @@ function testMarkdownInject() {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 // ---- Legacy (pre-1.0 nodesify-graphify) migration ----
+function testLegacySkillDirCleanup() {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-home-'));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-proj-'));
+    const prevUserProfile = process.env.USERPROFILE;
+    const prevHome = process.env.HOME;
+    process.env.USERPROFILE = fakeHome;
+    process.env.HOME = fakeHome;
+    try {
+        // A pre-1.0 codex install left the old skill file behind.
+        const legacy = path.join(fakeHome, '.agents', 'skills', 'graphify', 'SKILL.md');
+        fs.mkdirSync(path.dirname(legacy), { recursive: true });
+        fs.writeFileSync(legacy, 'name: graphify\n');
+        const results = (0, install_1.installPlatform)('codex', project);
+        assert(!fs.existsSync(legacy), 'Legacy skill: old codex skill removed by install');
+        assert(fs.existsSync(path.join(fakeHome, '.agents', 'skills', 'astria', 'SKILL.md')), 'Legacy skill: new codex skill installed');
+        assert(results.some((r) => r.includes('Legacy skill file removed')), 'Legacy skill: removal reported');
+        // Uninstall removes the legacy file too (recreate, then uninstall).
+        fs.mkdirSync(path.dirname(legacy), { recursive: true });
+        fs.writeFileSync(legacy, 'name: graphify\n');
+        (0, install_1.installPlatform)('codex', project);
+        const { uninstallPlatform } = require('../install');
+        uninstallPlatform('codex', project);
+        assert(!fs.existsSync(legacy), 'Legacy skill: uninstall removes the old skill file');
+        fs.rmSync(path.join(fakeHome, '.agents'), { recursive: true, force: true });
+    }
+    finally {
+        if (prevUserProfile === undefined)
+            delete process.env.USERPROFILE;
+        else
+            process.env.USERPROFILE = prevUserProfile;
+        if (prevHome === undefined)
+            delete process.env.HOME;
+        else
+            process.env.HOME = prevHome;
+        fs.rmSync(fakeHome, { recursive: true, force: true });
+        fs.rmSync(project, { recursive: true, force: true });
+    }
+}
 function testLegacyMigration() {
     // Claude: a 0.9-era PostToolUse hook is replaced by the astria hook.
     const claudeDir = tmpDir();
@@ -484,6 +523,7 @@ testZcodeMcp();
 testAgentMcp();
 testMarkdownInject();
 testLegacyMigration();
+testLegacySkillDirCleanup();
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {
     process.exit(1);

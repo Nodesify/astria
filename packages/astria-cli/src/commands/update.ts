@@ -6,8 +6,8 @@ export async function updateCommand(
   path: string,
   opts: { dedup?: boolean; backend?: string; model?: string; embed?: boolean },
 ) {
-  if (opts.backend) process.env.GRAPHIFY_LLM_BACKEND = opts.backend;
-  if (opts.model) process.env.GRAPHIFY_LLM_MODEL = opts.model;
+  if (opts.backend) process.env.ASTRIA_LLM_BACKEND = opts.backend;
+  if (opts.model) process.env.ASTRIA_LLM_MODEL = opts.model;
   try {
     console.log(`Running incremental rebuild on: ${path}`);
     const result = updatePipeline(path, opts.dedup === false, opts.embed === true);

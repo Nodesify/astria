@@ -122,6 +122,7 @@ astria wiki [--out .astria/wiki] [--max-nodes 25] [--graph .]  # Wikipedia-style
 astria prs [20] [--conflicts] [--graph .]         # Map open PRs onto the graph - impact + merge-order risk
 astria stats [--graph .]                     # Node/edge/community counts
 astria status [--graph .]                    # Graph health and staleness
+astria migrate [--graph .]                   # One-time pre-1.0 layout migration (.graphify -> .astria)
 astria export [--graph .] [--out graph.json] [--format json|html|graphml|cypher] [--mode standard|large] # Export graph; HTML defaults to standard
 astria cluster-only <path>                   # Re-cluster + analyze + report without re-extracting
 astria merge <pathA> <pathB> <outPath>       # Merge two graphs
