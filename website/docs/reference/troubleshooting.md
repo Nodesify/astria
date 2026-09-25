@@ -9,10 +9,10 @@ keywords: [troubleshooting, faq, diagnose, stale graph, native binary]
 
 ## The graph is empty or `graph_stats` reports 0 nodes
 
-The graph has not been built in that directory. Read-only commands never create a `.graphify/` directory — run the pipeline first:
+The graph has not been built in that directory. Read-only commands never create a `.astria/` directory — run the pipeline first:
 
 ```bash
-nodesify-graphify run <path>
+astria run <path>
 ```
 
 ## Install fails or the native binary is missing
@@ -25,8 +25,8 @@ nodesify-graphify run <path>
 Every `query` output reports when the graph was last built, so you can judge freshness directly. To refresh:
 
 ```bash
-nodesify-graphify update <path>          # incremental — only changed files
-nodesify-graphify watch <path>           # or keep it fresh automatically
+astria update <path>          # incremental — only changed files
+astria watch <path>           # or keep it fresh automatically
 ```
 
 ## `export --format html` refuses on a large repo
@@ -34,7 +34,7 @@ nodesify-graphify watch <path>           # or keep it fresh automatically
 That is the safety limit: the default `--mode standard` interactive viewer is capped at 5,000 nodes (the same limit as the original Graphify viewer) and fails with an actionable message beyond that. Explicitly opt into the optimized viewer:
 
 ```bash
-nodesify-graphify export --graph . --format html --mode large --out graph-view.html
+astria export --graph . --format html --mode large --out graph-view.html
 ```
 
 ## `add --postgres` fails
@@ -43,24 +43,24 @@ Postgres introspection shells out to `psql` (read-only over `information_schema`
 
 ## First `run --embed` is slow
 
-The one-time ~90 MB local model download. After it, embedding refreshes are incremental and fully offline. To relocate the cache (e.g. onto a persistent dir in CI), set `GRAPHIFY_EMBED_CACHE_DIR` — see [Environment variables](./env-vars).
+The one-time ~90 MB local model download. After it, embedding refreshes are incremental and fully offline. To relocate the cache (e.g. onto a persistent dir in CI), set `ASTRIA_EMBED_CACHE_DIR` — see [Environment variables](./env-vars).
 
 ## A graph looks wrong
 
 Run `diagnose` first — it is a read-only health report over the existing graph: dangling edge endpoints, self-loops, duplicate edges, unclassified files, and zero-cohesion communities. `--json` for tooling.
 
 ```bash
-nodesify-graphify diagnose --graph .
+astria diagnose --graph .
 ```
 
-For noise from fixtures, generated code, or vendored assets, exclude them with a `.graphifyignore` file (gitignore syntax) in the project root and rebuild.
+For noise from fixtures, generated code, or vendored assets, exclude them with a `.astriaignore` file (gitignore syntax) in the project root and rebuild.
 
 ## Too much inferred content in answers
 
 Every edge carries a confidence class (`EXTRACTED` / `INFERRED` / `AMBIGUOUS`). Use the high-fidelity tier to see declared facts only:
 
 ```bash
-nodesify-graphify query "..." --detail high
+astria query "..." --detail high
 ```
 
 or `detail: "high"` on any MCP traversal tool.

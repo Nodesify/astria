@@ -1,21 +1,21 @@
 ---
 sidebar_position: 2
 title: MCP tools reference
-description: The nine tools exposed by the nodesify-graphify MCP stdio server, with arguments, defaults, and example calls.
+description: The nine tools exposed by the astria MCP stdio server, with arguments, defaults, and example calls.
 keywords: [mcp, tools, query_graph, repo_map, explain, affected, model context protocol]
 ---
 
 # MCP tools reference
 
-`nodesify-graphify mcp` runs an MCP stdio server (newline-delimited JSON-RPC 2.0, protocol `2025-06-18`, server name `nodesify-graphify`). Any MCP-capable agent — Claude Code, Codex, Cursor, … — can point at it and query the graph without shelling out to the CLI.
+`astria mcp` runs an MCP stdio server (newline-delimited JSON-RPC 2.0, protocol `2025-06-18`, server name `astria`). Any MCP-capable agent — Claude Code, Codex, Cursor, … — can point at it and query the graph without shelling out to the CLI.
 
 Point your agent's MCP config at it:
 
 ```json
 {
   "mcpServers": {
-    "graphify": {
-      "command": "nodesify-graphify",
+    "astria": {
+      "command": "astria",
       "args": ["mcp"]
     }
   }
@@ -99,7 +99,7 @@ All communities with their hub-based labels, sizes, and cohesion. No arguments.
 
 ### `graph_stats`
 
-Node/edge/community/file counts for the graph. No arguments. If it reports 0 nodes, the graph has not been built yet — run `nodesify-graphify run <path>` first.
+Node/edge/community/file counts for the graph. No arguments. If it reports 0 nodes, the graph has not been built yet — run `astria run <path>` first.
 
 ## Example session
 

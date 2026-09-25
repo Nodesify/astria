@@ -1,13 +1,13 @@
 ---
 sidebar_position: 1
 title: Introduction
-description: nodesify-graphify turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local embeddings, zero API keys.
+description: astria turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local embeddings, zero API keys.
 keywords: [knowledge graph, codebase, ast, tree-sitter, rust, agents, mcp]
 ---
 
 # Introduction
 
-**nodesify-graphify** turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
+**astria** turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
 
 You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run; varies by corpus — see [Benchmarks and evidence](./explanation/benchmarks)).
 
@@ -31,4 +31,4 @@ You drop into an unfamiliar repo and need to know: what is load-bearing here, wh
 - [Benchmarks and evidence](./explanation/benchmarks) — measured numbers and the head-to-head vs the original Graphify
 - [Architecture](./explanation/architecture) — how the pipeline works under the hood
 
-Worked examples with honest reviews — the tool run on itself and on its Python ancestor, including what the graph got *wrong* — live in the [`worked/`](https://github.com/Nodesify/nodesify-graphify/tree/main/worked) directory of the repository, alongside a [head-to-head comparison](https://github.com/Nodesify/nodesify-graphify/tree/main/worked/head-to-head) against the original Python Graphify on the same corpus.
+Worked examples with honest reviews — the tool run on itself and on its Python ancestor, including what the graph got *wrong* — live in the [`worked/`](https://github.com/Nodesify/astria/tree/main/worked) directory of the repository, alongside a [head-to-head comparison](https://github.com/Nodesify/astria/tree/main/worked/head-to-head) against the original Python Graphify on the same corpus.

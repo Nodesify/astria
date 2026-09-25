@@ -47,6 +47,9 @@ pub(crate) fn extract_markdown_from_string(
 
     // Track heading nesting: stack of (level, id)
     let mut heading_stack: Vec<(usize, String)> = Vec::new();
+    // Repeated section titles in one file (e.g. several "## Changes") get
+    // ordinal suffixes so ids stay unique within the extraction.
+    let mut seen_section_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (line_no, line) in content.lines().enumerate() {
         // Parse headings
@@ -55,7 +58,21 @@ pub(crate) fn extract_markdown_from_string(
             let title = caps.get(2).unwrap().as_str().trim().to_string();
             let level = hashes;
             let slug = make_target_id(&title);
-            let section_id = make_node_id(&[&fid, &slug]);
+            let section_id = {
+                let base = make_node_id(&[&fid, &slug]);
+                if seen_section_ids.insert(base.clone()) {
+                    base
+                } else {
+                    let mut n = 2usize;
+                    loop {
+                        let candidate = make_node_id(&[&fid, &format!("{slug}-{n}")]);
+                        if seen_section_ids.insert(candidate.clone()) {
+                            break candidate;
+                        }
+                        n += 1;
+                    }
+                }
+            };
 
             nodes.push(ExtractedNode {
                 id: section_id.clone(),
