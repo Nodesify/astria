@@ -1,7 +1,0 @@
-[package]
-name = "graphify-paths"
-version = "0.8.0"
-edition = "2021"
-
-[dev-dependencies]
-tempfile = "3"

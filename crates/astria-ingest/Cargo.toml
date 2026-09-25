@@ -1,0 +1,16 @@
+[package]
+name = "astria-ingest"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+astria-core = { workspace = true }
+astria-extract = { workspace = true }
+sha2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

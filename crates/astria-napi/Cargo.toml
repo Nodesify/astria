@@ -1,0 +1,42 @@
+[package]
+name = "astria-napi"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+napi = { version = "3", features = ["tokio_rt"] }
+napi-derive = "3"
+astria-core = { workspace = true }
+astria-detect = { workspace = true }
+astria-extract = { workspace = true }
+astria-build = { workspace = true }
+astria-cluster = { workspace = true }
+astria-analyze = { workspace = true }
+astria-report = { workspace = true }
+astria-query = { workspace = true }
+astria-mcp = { workspace = true }
+astria-ingest = { workspace = true }
+astria-paths = { workspace = true }
+astria-semantic = { workspace = true }
+astria-embed = { workspace = true, optional = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+petgraph = { workspace = true }
+sha2 = { workspace = true }
+
+[features]
+# Local embeddings (fastembed/ONNX). Off for release targets where ONNX
+# Runtime ships no prebuilt binaries (x86_64-apple-darwin) — those builds
+# error clearly when --embed is requested.
+default = ["embed"]
+embed = ["dep:astria-embed"]
+
+[build-dependencies]
+napi-build = "2"
+
+[dev-dependencies]
+tempfile = "3"

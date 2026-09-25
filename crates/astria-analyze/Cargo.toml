@@ -1,0 +1,10 @@
+[package]
+name = "astria-analyze"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+astria-core = { workspace = true }
+astria-paths = { workspace = true }
+rusqlite = { workspace = true }
+petgraph = { workspace = true }
