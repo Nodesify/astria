@@ -71,7 +71,7 @@ function loadNativeBinding(): any {
   }
 
   throw new Error(
-    `@nodesify/graphify: failed to load native module for ${process.platform}-${process.arch}.\n` +
+    `@nodesify/astria: failed to load native module for ${process.platform}-${process.arch}.\n` +
     `Tried: local astria.node and the platform fallback package\n` +
     `Ensure the correct platform package is installed.`,
   );

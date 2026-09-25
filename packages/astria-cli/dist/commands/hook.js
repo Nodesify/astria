@@ -21,7 +21,7 @@ function registerHookCommand(program) {
     });
     hook
         .command('uninstall')
-        .description('Remove nodesify-graphify git hooks')
+        .description('Remove astria git hooks')
         .action(() => {
         try {
             const results = (0, hooks_1.uninstallGitHooks)('.');

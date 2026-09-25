@@ -21,7 +21,7 @@ async function saveResultCommand(question, opts) {
         const saved = (0, native_1.saveQueryResult)(opts.graph, question, answer, opts.outcome, opts.correction, sourceNodes.length > 0 ? sourceNodes : undefined);
         console.log(`Memory saved: ${saved.memoryPath}`);
         console.log(`Graph node: ${saved.nodeId}`);
-        console.log('Run `nodesify-graphify update .` to re-embed and re-cluster.');
+        console.log('Run `astria update .` to re-embed and re-cluster.');
     }
     catch (e) {
         console.error(`Error: ${e.message || e}`);

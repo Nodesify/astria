@@ -8,14 +8,14 @@ export interface PlatformConfig {
   agentsMd: boolean;
   geminiMd: boolean;
   settingsHook: 'claude' | 'codex' | 'gemini' | 'opencode' | 'none';
-  /** Register the graphify MCP server in this platform's project-scoped config. */
+  /** Register the astria MCP server in this platform's project-scoped config. */
   mcp?: 'zcode' | 'claude' | 'cursor' | 'gemini';
 }
 
 export const PLATFORMS: Record<string, PlatformConfig> = {
   claude: {
     skillFile: 'skill.md',
-    skillDst: path.join('.claude', 'skills', 'graphify', 'SKILL.md'),
+    skillDst: path.join('.claude', 'skills', 'astria', 'SKILL.md'),
     claudeMd: true,
     agentsMd: false,
     geminiMd: false,
@@ -24,7 +24,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   },
   codex: {
     skillFile: 'skill-codex.md',
-    skillDst: path.join('.agents', 'skills', 'graphify', 'SKILL.md'),
+    skillDst: path.join('.agents', 'skills', 'astria', 'SKILL.md'),
     claudeMd: false,
     agentsMd: true,
     geminiMd: false,
@@ -33,8 +33,8 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   gemini: {
     skillFile: 'skill-gemini.md',
     skillDst: os.platform() === 'win32'
-      ? path.join('.agents', 'skills', 'graphify', 'SKILL.md')
-      : path.join('.gemini', 'skills', 'graphify', 'SKILL.md'),
+      ? path.join('.agents', 'skills', 'astria', 'SKILL.md')
+      : path.join('.gemini', 'skills', 'astria', 'SKILL.md'),
     claudeMd: false,
     agentsMd: false,
     geminiMd: true,
@@ -43,7 +43,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   },
   opencode: {
     skillFile: 'skill-opencode.md',
-    skillDst: path.join('.config', 'opencode', 'skills', 'graphify', 'SKILL.md'),
+    skillDst: path.join('.config', 'opencode', 'skills', 'astria', 'SKILL.md'),
     claudeMd: false,
     agentsMd: true,
     geminiMd: false,
@@ -60,7 +60,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   },
   kiro: {
     skillFile: 'skill.md',
-    skillDst: path.join('.kiro', 'skills', 'graphify', 'SKILL.md'),
+    skillDst: path.join('.kiro', 'skills', 'astria', 'SKILL.md'),
     claudeMd: false,
     agentsMd: false,
     geminiMd: false,
@@ -68,7 +68,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   },
   aider: {
     skillFile: 'skill-aider.md',
-    skillDst: path.join('.aider', 'skills', 'graphify', 'SKILL.md'),
+    skillDst: path.join('.aider', 'skills', 'astria', 'SKILL.md'),
     claudeMd: false,
     agentsMd: true,
     geminiMd: false,
@@ -76,7 +76,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   },
   copilot: {
     skillFile: 'skill-copilot.md',
-    skillDst: path.join('.github', 'skills', 'graphify', 'SKILL.md'),
+    skillDst: path.join('.github', 'skills', 'astria', 'SKILL.md'),
     claudeMd: false,
     agentsMd: true,
     geminiMd: false,
@@ -84,7 +84,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   },
   trae: {
     skillFile: 'skill-trae.md',
-    skillDst: path.join('.trae', 'skills', 'graphify', 'SKILL.md'),
+    skillDst: path.join('.trae', 'skills', 'astria', 'SKILL.md'),
     claudeMd: false,
     agentsMd: true,
     geminiMd: false,
@@ -92,9 +92,9 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   },
   zcode: {
     // skill-codex.md is CLI-oriented, which is what ZCode sessions use
-    // unless the graphify MCP server is registered by the mcp flag below.
+    // unless the astria MCP server is registered by the mcp flag below.
     skillFile: 'skill-codex.md',
-    skillDst: path.join('.zcode', 'skills', 'graphify', 'SKILL.md'),
+    skillDst: path.join('.zcode', 'skills', 'astria', 'SKILL.md'),
     claudeMd: false,
     agentsMd: true,
     geminiMd: false,

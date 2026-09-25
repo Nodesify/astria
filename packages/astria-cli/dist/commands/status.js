@@ -6,11 +6,11 @@ const native_1 = require("../native");
 const STALE_THRESHOLD = 30;
 const VERY_STALE_THRESHOLD = 120;
 async function statusCommand(opts) {
-    const dbPath = `${opts.graph}/.graphify/db.sqlite`;
-    const graphJsonPath = `${opts.graph}/.graphify/graph.json`;
+    const dbPath = `${opts.graph}/.astria/db.sqlite`;
+    const graphJsonPath = `${opts.graph}/.astria/graph.json`;
     if (!(0, fs_1.existsSync)(dbPath)) {
         console.log('Status: no graph found');
-        console.log('Run `nodesify-graphify run .` to build the graph');
+        console.log('Run `astria run .` to build the graph');
         return;
     }
     let stats;
@@ -25,12 +25,12 @@ async function statusCommand(opts) {
     }
     if (stats.nodeCount === 0) {
         console.log('Status: empty graph (0 nodes)');
-        console.log('Run `nodesify-graphify run .` to populate the graph');
+        console.log('Run `astria run .` to populate the graph');
         return;
     }
     if (!(0, fs_1.existsSync)(graphJsonPath)) {
         console.log(`Status: incomplete (db has ${stats.nodeCount} nodes but no graph.json)`);
-        console.log('Run `nodesify-graphify run .` to complete the build');
+        console.log('Run `astria run .` to complete the build');
         return;
     }
     const mtime = (0, fs_1.statSync)(graphJsonPath).mtimeMs;
@@ -51,7 +51,7 @@ async function statusCommand(opts) {
     console.log(`Communities: ${stats.communityCount}`);
     console.log(`Files tracked: ${stats.fileCount}`);
     if (staleness === 'stale' || staleness === 'very_stale') {
-        console.log(`Recommendation: run \`nodesify-graphify update .\` to refresh`);
+        console.log(`Recommendation: run \`astria update .\` to refresh`);
     }
 }
 //# sourceMappingURL=status.js.map

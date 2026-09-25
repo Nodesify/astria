@@ -6,7 +6,7 @@ const platforms_1 = require("../install/platforms");
 function registerInstallCommand(program) {
     program
         .command('install')
-        .description('Install nodesify-graphify skill for an AI platform')
+        .description('Install astria skill for an AI platform')
         .option('--platform <name>', `Platform: ${platforms_1.PLATFORM_NAMES.join(', ')}`, 'claude')
         .action(async (opts) => {
         try {
@@ -22,7 +22,7 @@ function registerInstallCommand(program) {
     });
     program
         .command('uninstall')
-        .description('Uninstall nodesify-graphify skill for an AI platform')
+        .description('Uninstall astria skill for an AI platform')
         .option('--platform <name>', `Platform: ${platforms_1.PLATFORM_NAMES.join(', ')}`, 'claude')
         .action(async (opts) => {
         try {

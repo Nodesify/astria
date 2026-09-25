@@ -31,7 +31,7 @@ async function globalListCommand() {
     try {
         const entries = (0, native_1.globalList)();
         if (entries.length === 0) {
-            console.log('Global graph is empty. Add repos with: nodesify-graphify global add <path>');
+            console.log('Global graph is empty. Add repos with: astria global add <path>');
             return;
         }
         console.log('Global graph repos:');

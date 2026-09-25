@@ -44,7 +44,7 @@ async function wikiCommand(opts) {
         if (opts.format === 'obsidian') {
             const notes = (0, native_1.exportObsidian)(opts.graph, opts.out);
             console.log(`Obsidian vault exported: ${notes} notes -> ${resolved}`);
-            console.log(`Open ${resolved} as a vault in Obsidian (graphify.canvas included)`);
+            console.log(`Open ${resolved} as a vault in Obsidian (astria.canvas included)`);
             return;
         }
         const maxNodes = parseInt(opts.maxNodes, 10) || 25;

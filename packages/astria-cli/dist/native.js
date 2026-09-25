@@ -33,19 +33,19 @@ function getPlatformSuffix() {
 function requirePlatformPackage(suffix) {
     switch (suffix) {
         case 'win32-x64-msvc':
-            return require('@nodesify/graphify-win32-x64-msvc');
+            return require('@nodesify/astria-win32-x64-msvc');
         case 'darwin-x64':
-            return require('@nodesify/graphify-darwin-x64');
+            return require('@nodesify/astria-darwin-x64');
         case 'darwin-arm64':
-            return require('@nodesify/graphify-darwin-arm64');
+            return require('@nodesify/astria-darwin-arm64');
         case 'linux-x64-gnu':
-            return require('@nodesify/graphify-linux-x64-gnu');
+            return require('@nodesify/astria-linux-x64-gnu');
         case 'linux-arm64-gnu':
-            return require('@nodesify/graphify-linux-arm64-gnu');
+            return require('@nodesify/astria-linux-arm64-gnu');
         case 'linux-x64-musl':
-            return require('@nodesify/graphify-linux-x64-musl');
+            return require('@nodesify/astria-linux-x64-musl');
         case 'linux-arm64-musl':
-            return require('@nodesify/graphify-linux-arm64-musl');
+            return require('@nodesify/astria-linux-arm64-musl');
         default:
             return undefined;
     }
@@ -54,22 +54,22 @@ function requirePlatformPackage(suffix) {
 /// below uses a literal relative specifier, guarded by existsSync so a
 /// missing binary never throws at load time.
 function loadNativeBinding() {
-    const local = (0, path_1.join)(__dirname, '..', 'graphify.node');
+    const local = (0, path_1.join)(__dirname, '..', 'astria.node');
     if ((0, fs_1.existsSync)(local))
-        return require('../graphify.node');
+        return require('../astria.node');
     // tsx runs tests from src/, where CI's built binary lands in dist/
-    const localDist = (0, path_1.join)(__dirname, '..', 'dist', 'graphify.node');
+    const localDist = (0, path_1.join)(__dirname, '..', 'dist', 'astria.node');
     if ((0, fs_1.existsSync)(localDist))
-        return require('../dist/graphify.node');
-    const localSrc = (0, path_1.join)(__dirname, 'graphify.node');
+        return require('../dist/astria.node');
+    const localSrc = (0, path_1.join)(__dirname, 'astria.node');
     if ((0, fs_1.existsSync)(localSrc))
-        return require('./graphify.node');
+        return require('./astria.node');
     const platformBinding = requirePlatformPackage(getPlatformSuffix());
     if (platformBinding) {
         return platformBinding;
     }
-    throw new Error(`@nodesify/graphify: failed to load native module for ${process.platform}-${process.arch}.\n` +
-        `Tried: local graphify.node and the platform fallback package\n` +
+    throw new Error(`@nodesify/astria: failed to load native module for ${process.platform}-${process.arch}.\n` +
+        `Tried: local astria.node and the platform fallback package\n` +
         `Ensure the correct platform package is installed.`);
 }
 const binding = loadNativeBinding();

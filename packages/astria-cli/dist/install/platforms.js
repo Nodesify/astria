@@ -39,7 +39,7 @@ const os = __importStar(require("os"));
 exports.PLATFORMS = {
     claude: {
         skillFile: 'skill.md',
-        skillDst: path.join('.claude', 'skills', 'graphify', 'SKILL.md'),
+        skillDst: path.join('.claude', 'skills', 'astria', 'SKILL.md'),
         claudeMd: true,
         agentsMd: false,
         geminiMd: false,
@@ -48,7 +48,7 @@ exports.PLATFORMS = {
     },
     codex: {
         skillFile: 'skill-codex.md',
-        skillDst: path.join('.agents', 'skills', 'graphify', 'SKILL.md'),
+        skillDst: path.join('.agents', 'skills', 'astria', 'SKILL.md'),
         claudeMd: false,
         agentsMd: true,
         geminiMd: false,
@@ -57,8 +57,8 @@ exports.PLATFORMS = {
     gemini: {
         skillFile: 'skill-gemini.md',
         skillDst: os.platform() === 'win32'
-            ? path.join('.agents', 'skills', 'graphify', 'SKILL.md')
-            : path.join('.gemini', 'skills', 'graphify', 'SKILL.md'),
+            ? path.join('.agents', 'skills', 'astria', 'SKILL.md')
+            : path.join('.gemini', 'skills', 'astria', 'SKILL.md'),
         claudeMd: false,
         agentsMd: false,
         geminiMd: true,
@@ -67,7 +67,7 @@ exports.PLATFORMS = {
     },
     opencode: {
         skillFile: 'skill-opencode.md',
-        skillDst: path.join('.config', 'opencode', 'skills', 'graphify', 'SKILL.md'),
+        skillDst: path.join('.config', 'opencode', 'skills', 'astria', 'SKILL.md'),
         claudeMd: false,
         agentsMd: true,
         geminiMd: false,
@@ -84,7 +84,7 @@ exports.PLATFORMS = {
     },
     kiro: {
         skillFile: 'skill.md',
-        skillDst: path.join('.kiro', 'skills', 'graphify', 'SKILL.md'),
+        skillDst: path.join('.kiro', 'skills', 'astria', 'SKILL.md'),
         claudeMd: false,
         agentsMd: false,
         geminiMd: false,
@@ -92,7 +92,7 @@ exports.PLATFORMS = {
     },
     aider: {
         skillFile: 'skill-aider.md',
-        skillDst: path.join('.aider', 'skills', 'graphify', 'SKILL.md'),
+        skillDst: path.join('.aider', 'skills', 'astria', 'SKILL.md'),
         claudeMd: false,
         agentsMd: true,
         geminiMd: false,
@@ -100,7 +100,7 @@ exports.PLATFORMS = {
     },
     copilot: {
         skillFile: 'skill-copilot.md',
-        skillDst: path.join('.github', 'skills', 'graphify', 'SKILL.md'),
+        skillDst: path.join('.github', 'skills', 'astria', 'SKILL.md'),
         claudeMd: false,
         agentsMd: true,
         geminiMd: false,
@@ -108,7 +108,7 @@ exports.PLATFORMS = {
     },
     trae: {
         skillFile: 'skill-trae.md',
-        skillDst: path.join('.trae', 'skills', 'graphify', 'SKILL.md'),
+        skillDst: path.join('.trae', 'skills', 'astria', 'SKILL.md'),
         claudeMd: false,
         agentsMd: true,
         geminiMd: false,
@@ -116,9 +116,9 @@ exports.PLATFORMS = {
     },
     zcode: {
         // skill-codex.md is CLI-oriented, which is what ZCode sessions use
-        // unless the graphify MCP server is registered by the mcp flag below.
+        // unless the astria MCP server is registered by the mcp flag below.
         skillFile: 'skill-codex.md',
-        skillDst: path.join('.zcode', 'skills', 'graphify', 'SKILL.md'),
+        skillDst: path.join('.zcode', 'skills', 'astria', 'SKILL.md'),
         claudeMd: false,
         agentsMd: true,
         geminiMd: false,
