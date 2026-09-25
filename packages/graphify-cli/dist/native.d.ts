@@ -20,4 +20,13 @@ export declare const exportTree: any;
 export declare const exportWiki: any;
 export declare const exportObsidian: any;
 export declare const ingestUrl: any;
+export declare const diagnoseGraph: any;
+export declare const saveQueryResult: any;
+export declare const reflectGraph: any;
+export declare const globalAdd: any;
+export declare const globalRemove: any;
+export declare const globalList: any;
+export declare const globalPath: any;
+export declare const ingestScip: any;
+export declare const ingestPostgres: any;
 //# sourceMappingURL=native.d.ts.map

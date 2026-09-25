@@ -1,0 +1,42 @@
+{
+  "generated_at": "2026-09-25T09:17:51.598Z",
+  "runner": "ubuntu-latest (GitHub Actions)",
+  "corpus": {
+    "repo": "https://github.com/safishamsi/graphify",
+    "commit": "91f4d12",
+    "files_detected": 90
+  },
+  "versions": {
+    "nodesify_graphify": "0.8.0",
+    "original": "graphify @ 91f4d12",
+    "python": "Python 3.12.3"
+  },
+  "original_tool": {
+    "build_seconds": 16.76,
+    "nodes": 719,
+    "edges": 1196,
+    "communities": 45,
+    "benchmark": {
+      "corpus_tokens": 87005,
+      "avg_query_tokens": 2010,
+      "reduction": 43.3
+    }
+  },
+  "nodesify_graphify_structural": {
+    "build_seconds": 0.89,
+    "nodes": 1479,
+    "edges": 5789,
+    "communities": 91,
+    "benchmark": {
+      "corpus_tokens": 153768,
+      "avg_query_tokens": 3061,
+      "reduction": 50.2
+    }
+  },
+  "methodology_notes": [
+    "Structural pipeline only on both sides (no LLM enrichment): detect -> AST extract -> build -> cluster -> analyze -> report.",
+    "The original is driven by scripts/bench/orig_run.py, replicating its own skill.md stage-for-stage.",
+    "Each token benchmark is its own implementation; the ratio, not absolute tokens, is the comparable metric.",
+    "Single cold run per tool on shared hardware - treat as trend data, not a microbenchmark."
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "label": "Guides",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "description": "Task-oriented walkthroughs: exports, semantic enrichment, agent integration, the cross-repo global graph, and the memory loop."
+  }
+}

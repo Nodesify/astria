@@ -2,7 +2,7 @@
 
 Understand a codebase before you touch it. `nodesify-graphify` turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
 
-You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **73–79x fewer tokens per query** on real repos (printed honestly after every run, computed from real file sizes vs actual query output).
+You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run, computed from real file sizes vs actual query output — [methodology and head-to-head](worked/head-to-head/)).
 
 Three things a folder full of files can't give you:
 
@@ -10,7 +10,9 @@ Three things a folder full of files can't give you:
 2. **An honest audit trail** — every edge is labeled EXTRACTED / INFERRED / AMBIGUOUS with a numeric confidence score. You always know what was found in the source versus deduced, and `--detail high` filters to only declared facts.
 3. **Answers for agents and humans** — query it from the CLI, from any AI agent via MCP, or just read the exported markdown wiki with plain file links.
 
-[Worked examples with honest reviews](worked/) — the tool run on itself and on its Python ancestor, including what the graph got *wrong*.
+[Worked examples with honest reviews](worked/) — the tool run on itself and on its Python ancestor, including what the graph got *wrong* — plus a [head-to-head benchmark](worked/head-to-head/) against the original Python Graphify on the same corpus.
+
+**Docs:** [nodesify.github.io/nodesify-graphify](https://nodesify.github.io/nodesify-graphify/)
 
 ## Install
 
@@ -19,6 +21,13 @@ npm install -g @nodesify/graphify
 ```
 
 Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
+
+## What's new (unreleased)
+
+- **Hypergraph, deterministically** — n-ary `hyperedges` (schema v7/v8) produced without an LLM: community `participate_in` groups and `shares_reference` literal groups; consumed by graph.json, report, wiki, HTML hulls, and `explain`. The official's hyperedges are LLM-produced; ours are local and reproducible.
+- **Cross-repo global graph** — `~/.nodesify-graphify/global.db`: `global add/remove/list/path`, repo-tag prefixed merging that unifies external symbols across repos, `same_type_as` type edges, cross-repo call resolution (fail closed on ambiguity), `run --global --as <tag>`, and `query/explain/path --graph` against the merged store.
+- **Graph health + feedback loop** — `diagnose` (read-only health report, `--json`), `save-result`/`reflect` curated memory (`.graphify/memory/` → graph nodes → `LESSONS.md`) alongside automatic learned edges, build-time validation, JSONL query log (`GRAPHIFY_QUERY_LOG`), and always-on instruction blocks in `AGENTS.md`/`CLAUDE.md`.
+- **Ingest breadth (offline-first)** — Cargo workspace + path-dep topology (auto), `.mcp.json`/`mcp_servers.json`/`claude_desktop_config.json` (env names only, never values), `add --scip <index.json>`, `add --postgres <dsn>` (read-only introspection, requires `psql`), and transcript sidecars (`.graphify/transcripts/*.txt|md`).
 
 ## What's new in 0.8.0
 
@@ -67,6 +76,7 @@ Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 nodesify-graphify run <path>                            # Full pipeline: detect → extract → build → cluster → analyze → report
 nodesify-graphify run <path> --wiki                     # ...also export a markdown wiki to .graphify/wiki
 nodesify-graphify run <path> --embed                    # ...also compute local embeddings (similar_to edges + semantic query recall)
+nodesify-graphify run <path> --global --as <tag>        # ...also merge into the cross-repo global graph
 nodesify-graphify update <path>                         # Incremental rebuild (only changed files; regenerates an existing wiki)
 nodesify-graphify watch <path> [--debounce 3000]        # Watch for file changes, auto-rebuild
 nodesify-graphify explain <node> [--graph .]            # Explain a node and its connections
@@ -74,7 +84,14 @@ nodesify-graphify query <question> [--dfs] [--depth 2] [--budget 2000] [--direct
 nodesify-graphify path <A> <B> [--directed] [--detail high] [--graph .]  # Shortest path between two concepts
 nodesify-graphify affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - what breaks if you change this node
 nodesify-graphify map [--budget 2000] [--graph .]       # PageRank-ranked repo map with top symbols
+nodesify-graphify diagnose [--graph .] [--json]         # Read-only graph health report
+nodesify-graphify save-result <question> --answer <text> [--outcome useful|dead_end|corrected]  # Curate a Q/A into graph memory
+nodesify-graphify reflect [--graph .]                   # Aggregate memory outcomes into LESSONS.md
+nodesify-graphify global add <path> [--as <tag>]        # Merge a repo into the cross-repo global graph
+nodesify-graphify global remove <tag> | list | path <A> <B>  # Manage and query the global graph
 nodesify-graphify add <url> [--author] [--contributor]     # Fetch arXiv/tweet/webpage/image/PDF into ./raw + update graph
+nodesify-graphify add --scip <index.json>                  # Ingest a simplified SCIP JSON index instead of a URL
+nodesify-graphify add --postgres <dsn>                     # Introspect a live PostgreSQL schema (requires psql)
 nodesify-graphify mcp [--graph .]                             # Run MCP stdio server - query the graph from any AI agent
 nodesify-graphify tree [--out tree.html] [--max-children 40] # Collapsible filesystem tree of all symbols (HTML)
 nodesify-graphify wiki [--out .graphify/wiki] [--max-nodes 25] [--graph .]  # Wikipedia-style markdown wiki (agent-crawlable)
@@ -91,7 +108,7 @@ nodesify-graphify uninstall [--platform claude]         # Uninstall skill files
 nodesify-graphify hook install|uninstall|status         # Git hook management
 ```
 
-Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`.
+Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`.
 
 Running `nodesify-graphify run .` creates `.graphify/` with:
 
@@ -128,7 +145,7 @@ The graph compounds in value as you query it. Every query records which (seed, d
 
 ### Token reduction benchmark
 
-Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository: ~221,000 corpus tokens vs ~3,000 per query — **73x fewer tokens per query**. On tiny corpora it will honestly report <1x; there the graph's value is structure, not compression, and the output says so.
+Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository at v0.8.0: ~333,000 corpus tokens vs ~3,000 per query — **110× fewer tokens per query**; on the original Python Graphify's codebase: **52×**. On tiny corpora it will honestly report <1x; there the graph's value is structure, not compression, and the output says so. Numbers vary per run and corpus — [methodology, head-to-head, and the embedding experiment](worked/head-to-head/).
 
 ### Wiki export
 

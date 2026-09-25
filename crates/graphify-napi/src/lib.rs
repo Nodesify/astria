@@ -1,10 +1,220 @@
 pub mod benchmark;
+pub mod diagnose;
 pub mod export_cypher;
 pub mod export_graphml;
 pub mod export_html;
 pub mod export_obsidian;
 pub mod export_tree;
 pub mod export_wiki;
+// ---------------------------------------------------------------------------
+// Diagnose, feedback, global graph, and extra ingest sources
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct DiagnoseReportJs {
+    pub node_count: i64,
+    pub edge_count: i64,
+    pub dangling_edges: i64,
+    pub self_loops: i64,
+    pub duplicate_edges: i64,
+    pub stub_nodes: i64,
+    pub unlinked_nodes: i64,
+    pub file_type_counts: Vec<String>,
+    pub top_dangling_targets: Vec<String>,
+    pub text: String,
+}
+
+#[napi]
+pub fn diagnose_graph(root: String) -> napi::Result<DiagnoseReportJs> {
+    let root_pb = PathBuf::from(&root);
+    let (db, _) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let report = diagnose::diagnose(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(DiagnoseReportJs {
+        node_count: report.node_count as i64,
+        edge_count: report.edge_count as i64,
+        dangling_edges: report.dangling_edges as i64,
+        self_loops: report.self_loops as i64,
+        duplicate_edges: report.duplicate_edges as i64,
+        stub_nodes: report.stub_nodes as i64,
+        unlinked_nodes: report.unlinked_nodes as i64,
+        file_type_counts: report
+            .file_type_counts
+            .iter()
+            .map(|(ft, c)| format!("{ft}:{c}"))
+            .collect(),
+        top_dangling_targets: report
+            .top_dangling_targets
+            .iter()
+            .map(|(t, c)| format!("{t}:{c}"))
+            .collect(),
+        text: diagnose::render(&report),
+    })
+}
+
+#[napi(object)]
+pub struct SavedResultJs {
+    pub memory_path: String,
+    pub node_id: String,
+}
+
+#[napi]
+pub fn save_query_result(
+    root: String,
+    question: String,
+    answer: String,
+    outcome: Option<String>,
+    correction: Option<String>,
+    source_nodes: Option<Vec<String>>,
+) -> napi::Result<SavedResultJs> {
+    let root_pb = PathBuf::from(&root);
+    let (db, graphify_dir) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let dir = graphify_dir.ok_or_else(|| {
+        napi::Error::from_reason("save-result needs a repo graph (not a bare db file)".to_string())
+    })?;
+    let saved = feedback::save_result(
+        &db,
+        &dir,
+        &question,
+        &answer,
+        outcome.as_deref(),
+        correction.as_deref(),
+        source_nodes.as_deref().unwrap_or(&[]),
+    )
+    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(SavedResultJs {
+        memory_path: graphify_paths::normalize(&saved.memory_path),
+        node_id: saved.node_id,
+    })
+}
+
+#[napi]
+pub fn reflect(root: String) -> napi::Result<String> {
+    let root_pb = PathBuf::from(&root);
+    let (_, graphify_dir) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let dir = graphify_dir.ok_or_else(|| {
+        napi::Error::from_reason("reflect needs a repo graph (not a bare db file)".to_string())
+    })?;
+    feedback::reflect(&dir).map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+#[napi(object)]
+pub struct GlobalAddResultJs {
+    pub tag: String,
+    pub nodes_added: i64,
+    pub edges_added: i64,
+    pub same_type_edges: i64,
+    pub cross_repo_call_edges: i64,
+}
+
+#[napi]
+pub fn global_add(root: String, tag: Option<String>) -> napi::Result<GlobalAddResultJs> {
+    let repo_root = PathBuf::from(&root);
+    let store = global::open_global_store().map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let result = global::global_add(&repo_root, tag.as_deref(), &store)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(GlobalAddResultJs {
+        tag: result.tag,
+        nodes_added: result.nodes_added as i64,
+        edges_added: result.edges_added as i64,
+        same_type_edges: result.same_type_edges as i64,
+        cross_repo_call_edges: result.cross_repo_call_edges as i64,
+    })
+}
+
+#[napi]
+pub fn global_remove(tag: String) -> napi::Result<i64> {
+    let store = global::open_global_store().map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let removed =
+        global::global_remove(&store, &tag).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(removed as i64)
+}
+
+#[napi(object)]
+pub struct GlobalListEntryJs {
+    pub tag: String,
+    pub nodes: i64,
+    pub edges: i64,
+}
+
+#[napi]
+pub fn global_list() -> napi::Result<Vec<GlobalListEntryJs>> {
+    let store = global::open_global_store().map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(global::global_list(&store)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?
+        .into_iter()
+        .map(|e| GlobalListEntryJs {
+            tag: e.tag,
+            nodes: e.nodes as i64,
+            edges: e.edges as i64,
+        })
+        .collect())
+}
+
+#[napi]
+pub fn global_path(source: String, target: String) -> napi::Result<Option<String>> {
+    let store = global::open_global_store().map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    global::global_path(&store, &source, &target)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// Ingest a simplified SCIP JSON index into the repo graph.
+#[napi(object)]
+pub struct IngestCountsJs {
+    pub nodes_added: i64,
+    pub edges_added: i64,
+}
+
+#[napi]
+pub fn ingest_scip(root: String, scip_path: String) -> napi::Result<IngestCountsJs> {
+    let root_pb = PathBuf::from(&root);
+    let graphify_dir = root_pb.join(".graphify");
+    if !graphify_dir.exists() {
+        return Err(napi::Error::from_reason(format!(
+            "No graph found at {} — run `nodesify-graphify run <path>` first",
+            graphify_dir.display()
+        )));
+    }
+    let db = graphify_core::db::open_db(&graphify_dir.join("db.sqlite"))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let extraction = graphify_ingest::scip::parse_scip_file(&PathBuf::from(&scip_path))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let result = graphify_build::build(std::slice::from_ref(&extraction), &db)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(IngestCountsJs {
+        nodes_added: result.nodes_added as i64,
+        edges_added: result.edges_added as i64,
+    })
+}
+
+/// Introspect a live PostgreSQL schema via the `psql` CLI and merge it into
+/// the repo graph. Read-only; requires psql on PATH.
+#[napi]
+pub fn ingest_postgres(root: String, dsn: String) -> napi::Result<IngestCountsJs> {
+    let root_pb = PathBuf::from(&root);
+    let graphify_dir = root_pb.join(".graphify");
+    if !graphify_dir.exists() {
+        return Err(napi::Error::from_reason(format!(
+            "No graph found at {} — run `nodesify-graphify run <path>` first",
+            graphify_dir.display()
+        )));
+    }
+    let db = graphify_core::db::open_db(&graphify_dir.join("db.sqlite"))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let extraction = graphify_ingest::postgres::ingest_postgres(&dsn)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let result = graphify_build::build(std::slice::from_ref(&extraction), &db)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(IngestCountsJs {
+        nodes_added: result.nodes_added as i64,
+        edges_added: result.edges_added as i64,
+    })
+}
+
+pub mod feedback;
+pub mod global;
 pub mod merge;
 pub mod pipeline;
 pub mod query;
@@ -72,6 +282,7 @@ pub struct ExplainResultJs {
     pub source_file: String,
     pub source_line: Option<i64>,
     pub community: Option<i64>,
+    pub hyperedges: Vec<String>,
     pub neighbor_count: i64,
     pub neighbors: Vec<EdgeInfoJs>,
 }
@@ -266,9 +477,13 @@ pub fn query_graph(
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     // Load before touching path helpers: a missing graph must error without
     // creating an empty `.graphify/` directory as a side effect.
-    let db =
-        pipeline::load_graph_db(&root_pb).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let db_path_str = graphify_paths::normalize(&root_pb.join(".graphify").join("db.sqlite"));
+    let (db, graphify_dir) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let db_path_str = graphify_dir
+        .as_ref()
+        .map(|d| graphify_paths::normalize(&d.join("db.sqlite")))
+        .unwrap_or_else(|| root.clone());
+    let started = std::time::Instant::now();
 
     // Hybrid recall: when node embeddings exist and the model is cached,
     // semantic candidates rescue questions with zero string overlap.
@@ -308,6 +523,13 @@ pub fn query_graph(
             |row| row.get::<_, String>(0),
         )
         .ok();
+    pipeline::record_query_feedback(
+        graphify_dir.as_deref(),
+        "query",
+        &question,
+        node_count,
+        started.elapsed().as_millis(),
+    );
     Ok(QueryResultJs {
         text,
         node_count: node_count as i64,
@@ -350,9 +572,13 @@ pub fn find_path(
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     // Load before touching path helpers: a missing graph must error without
     // creating an empty `.graphify/` directory as a side effect.
-    let db =
-        pipeline::load_graph_db(&root_pb).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let db_path_str = graphify_paths::normalize(&root_pb.join(".graphify").join("db.sqlite"));
+    let (db, graphify_dir) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let db_path_str = graphify_dir
+        .as_ref()
+        .map(|d| graphify_paths::normalize(&d.join("db.sqlite")))
+        .unwrap_or_else(|| root.clone());
+    let started = std::time::Instant::now();
     let (found, hops, text) = query::find_shortest_path(
         &db,
         &db_path_str,
@@ -362,6 +588,13 @@ pub fn find_path(
         min_strength_for(&detail),
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    pipeline::record_query_feedback(
+        graphify_dir.as_deref(),
+        "path",
+        &format!("{source} -> {target}"),
+        hops,
+        started.elapsed().as_millis(),
+    );
     Ok(PathResultJs {
         found,
         hops: hops as i64,
@@ -377,17 +610,31 @@ pub fn explain_node(root: String, node_id: String) -> napi::Result<Option<Explai
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     // Load before touching path helpers: a missing graph must error without
     // creating an empty `.graphify/` directory as a side effect.
-    let db =
-        pipeline::load_graph_db(&root_pb).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let db_path_str = graphify_paths::normalize(&root_pb.join(".graphify").join("db.sqlite"));
+    let (db, graphify_dir) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let db_path_str = graphify_dir
+        .as_ref()
+        .map(|d| graphify_paths::normalize(&d.join("db.sqlite")))
+        .unwrap_or_else(|| root.clone());
+    let started = std::time::Instant::now();
     let result = query::explain_with_neighbors(&db, &db_path_str, &node_id)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    if let Some(r) = &result {
+        pipeline::record_query_feedback(
+            graphify_dir.as_deref(),
+            "explain",
+            &node_id,
+            r.neighbor_count,
+            started.elapsed().as_millis(),
+        );
+    }
     Ok(result.map(|r| ExplainResultJs {
         id: r.id,
         label: r.label,
         source_file: r.source_file,
         source_line: r.source_line,
         community: r.community,
+        hyperedges: r.hyperedges,
         neighbor_count: r.neighbor_count as i64,
         neighbors: r
             .neighbors

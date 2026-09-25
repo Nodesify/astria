@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Workflows pin actions to commit SHAs (#version comments); Dependabot
+  # raises PRs that move the SHAs when new versions ship.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

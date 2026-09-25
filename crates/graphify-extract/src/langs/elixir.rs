@@ -19,6 +19,7 @@ pub fn config() -> &'static LanguageConfig {
         class_call_names: &["defmodule"],
         function_call_names: &["def", "defp", "defmacro"],
         import_call_names: &["use", "import", "alias", "require"],
+        closure_types: &[],
     };
     &CONFIG
 }

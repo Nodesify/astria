@@ -248,6 +248,37 @@ export function removeCursorRule(projectDir: string): boolean {
   return true;
 }
 
+// ---- ZCode (.zcode/config.json mcp.servers) ----
+
+export function injectZcodeMcp(projectDir: string): boolean {
+  const configPath = path.join(projectDir, '.zcode', 'config.json');
+  const data = readJson(configPath);
+  if (!data.mcp) data.mcp = {};
+  if (!data.mcp.servers) data.mcp.servers = {};
+  if (data.mcp.servers.graphify) return false;
+
+  data.mcp.servers.graphify = {
+    type: 'stdio',
+    command: 'nodesify-graphify',
+    args: ['mcp'],
+  };
+  writeJson(configPath, data);
+  return true;
+}
+
+export function removeZcodeMcp(projectDir: string): boolean {
+  const configPath = path.join(projectDir, '.zcode', 'config.json');
+  if (!fs.existsSync(configPath)) return false;
+
+  const data = readJson(configPath);
+  if (!data.mcp?.servers?.graphify) return false;
+  delete data.mcp.servers.graphify;
+  if (Object.keys(data.mcp.servers).length === 0) delete data.mcp.servers;
+  if (Object.keys(data.mcp).length === 0) delete data.mcp;
+  writeJson(configPath, data);
+  return true;
+}
+
 // ---- Kiro (.kiro/steering/graphify.md) ----
 
 const KIRO_STEERING = `---

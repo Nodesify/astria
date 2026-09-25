@@ -1,9 +1,9 @@
 import * as pathMod from 'path';
-import { runPipeline, exportWiki, tokenBenchmark } from '../native';
+import { runPipeline, exportWiki, tokenBenchmark, globalAdd } from '../native';
 
 export async function runCommand(
   path: string,
-  opts: { dedup?: boolean; backend?: string; model?: string; wiki?: boolean; embed?: boolean },
+  opts: { dedup?: boolean; backend?: string; model?: string; wiki?: boolean; embed?: boolean; global?: boolean; as?: string },
 ) {
   if (opts.backend) process.env.GRAPHIFY_LLM_BACKEND = opts.backend;
   if (opts.model) process.env.GRAPHIFY_LLM_MODEL = opts.model;
@@ -18,6 +18,10 @@ export async function runCommand(
       const outDir = pathMod.join(path, '.graphify', 'wiki');
       const articles = exportWiki(path, outDir, 25);
       console.log(`Wiki written: ${articles} articles -> ${pathMod.join(outDir, 'index.md')}`);
+    if (opts.global) {
+      const merged = globalAdd(path, opts.as);
+      console.log(`Global graph: repo '${merged.tag}' merged (${merged.nodesAdded} nodes, ${merged.edgesAdded} edges, ${merged.sameTypeEdges} same_type_as, ${merged.crossRepoCallEdges} cross-repo calls)`);
+    }
     }
     const benchmark = tokenBenchmark(path);
     if (benchmark) console.log(benchmark);

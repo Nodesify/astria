@@ -8,3 +8,12 @@ node_modules/
 .gemini/
 .graphify/
 .fastembed_cache/
+
+# benchmark scratch workspace
+bench-work/
+
+# local tooling state (agent sessions, browser tests)
+.mimosa/
+.playwright-mcp/
+.zcode/
+docs/motion-docs.db

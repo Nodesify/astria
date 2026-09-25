@@ -2,31 +2,42 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   workflow_call:
 
-# NOTE: do NOT declare a permissions block here. Called workflows may
-# downgrade but not elevate the caller's token scopes; requesting
-# checks:write here makes release.yml runs fail at startup. The grant
-# lives on the `ci` job in release.yml. Plain push/PR runs use the
-# repo's default permissive token and need nothing.
+# audit-check needs checks:write: when it finds warnings (unmaintained /
+# yanked crates) it creates a check run with annotations, which fails with
+# "Resource not accessible by integration" under a read-only token (#38).
+# Called workflows may downgrade but not elevate the caller's token scopes,
+# so the `ci` job in release.yml grants the same two scopes. Keep them in
+# sync if either side changes.
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@stable # branch ref on purpose: tracks latest stable Rust; not SHA-pinned so updates keep flowing
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ hashFiles('**/Cargo.lock') }}
       - name: Security audit
-        uses: rustsec/audit-check@v2
+        # OS-independent: run once, not per matrix leg.
+        if: matrix.os == 'ubuntu-latest'
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # ttf-parser (via lopdf <- pdf-extract) is unmaintained upstream with
@@ -35,33 +46,38 @@ jobs:
           # when pdf-extract migrates (suggested successor: skrifa).
           ignore: RUSTSEC-2026-0192
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --locked -- -D warnings
 
   cli-test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-    needs: test
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '22'
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Check @napi-rs/cli version drift
+        run: node scripts/check-napi-version.mjs
+      - uses: dtolnay/rust-toolchain@stable # branch ref on purpose: tracks latest stable Rust; not SHA-pinned so updates keep flowing
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ hashFiles('**/Cargo.lock') }}
       - name: Install dependencies
+        # npm install (not ci) is deliberate: --install-strategy=nested shapes
+        # node_modules for the napi build; the drift check above guards the
+        # lockfile dependency this bypasses.
         run: cd packages/graphify-cli && npm install --install-strategy=nested
       - name: Build native module
         env:
           NAPI_RS_CLI_VERSION: '2.18.4'
-        run: cargo build --release -p graphify-napi
+        run: cargo build --release --locked -p graphify-napi
       - name: Copy native module
         shell: bash
         run: |

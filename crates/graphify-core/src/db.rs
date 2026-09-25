@@ -99,6 +99,18 @@ CREATE TABLE IF NOT EXISTS query_pairs (
 );
 ";
 
+const SCHEMA_V7: &str = "
+CREATE TABLE IF NOT EXISTS hyperedges (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    nodes TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    confidence_score REAL,
+    source_file TEXT NOT NULL DEFAULT ''
+);
+";
+
 /// Run any pending schema migrations.
 fn run_migrations(conn: &Connection) -> Result<()> {
     let version: i64 = conn
@@ -154,6 +166,28 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(SCHEMA_V6)?;
         conn.execute(
             "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '6')",
+            [],
+        )?;
+    }
+    if version < 7 {
+        // v7: hyperedges — N-ary group relationships (communities, shared
+        // reference groups). nodes is a JSON array of member node ids.
+        conn.execute_batch(SCHEMA_V7)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '7')",
+            [],
+        )?;
+    }
+    if version < 8 {
+        // v8: cross-repo plumbing — nodes.metadata holds parked unresolved
+        // call info for the global-graph resolver, nodes.repo tags the owning
+        // repo in a merged global store, edges.context marks pass-generated
+        // edges (e.g. cross_repo) so they can be re-run idempotently.
+        conn.execute_batch("ALTER TABLE nodes ADD COLUMN metadata TEXT;")?;
+        conn.execute_batch("ALTER TABLE nodes ADD COLUMN repo TEXT;")?;
+        conn.execute_batch("ALTER TABLE edges ADD COLUMN context TEXT;")?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '8')",
             [],
         )?;
     }
@@ -255,7 +289,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "6");
+        assert_eq!(version, "8");
         conn.execute(
             "INSERT INTO nodes (id, label, file_type, source_file, signature) VALUES ('a', 'A', 'code', 'f.rs', 'fn a()')",
             [],
