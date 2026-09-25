@@ -73,25 +73,25 @@ jobs:
         # npm install (not ci) is deliberate: --install-strategy=nested shapes
         # node_modules for the napi build; the drift check above guards the
         # lockfile dependency this bypasses.
-        run: cd packages/graphify-cli && npm install --install-strategy=nested
+        run: cd packages/astria-cli && npm install --install-strategy=nested
       - name: Build native module
         env:
           NAPI_RS_CLI_VERSION: '2.18.4'
-        run: cargo build --release --locked -p graphify-napi
+        run: cargo build --release --locked -p astria-napi
       - name: Copy native module
         shell: bash
         run: |
-          mkdir -p packages/graphify-cli/dist
-          for lib in target/release/libgraphify_napi.so target/release/libgraphify_napi.dylib target/release/graphify_napi.dll; do
+          mkdir -p packages/astria-cli/dist
+          for lib in target/release/libastria_napi.so target/release/libastria_napi.dylib target/release/astria_napi.dll; do
             if [ -f "$lib" ]; then
-              cp "$lib" packages/graphify-cli/dist/graphify.node
+              cp "$lib" packages/astria-cli/dist/astria.node
               break
             fi
           done
       - name: Build CLI
-        run: cd packages/graphify-cli && npm run build
+        run: cd packages/astria-cli && npm run build
       - name: Run CLI tests
-        run: cd packages/graphify-cli && npm test
+        run: cd packages/astria-cli && npm test
 
   npm-audit:
     # JS-side dependency audit: cargo has rustsec/audit-check, the CLI's npm
