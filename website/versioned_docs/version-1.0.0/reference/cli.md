@@ -1,0 +1,160 @@
+---
+sidebar_position: 1
+title: CLI reference
+description: Every astria command and flag — building, querying, exporting, memory, the cross-repo global graph, and assistant integration.
+keywords: [cli, commands, flags, reference]
+---
+
+# CLI reference
+
+All commands accept `--graph .` to point at an existing `.astria/` directory (defaults to the current directory).
+
+## Building the graph
+
+```bash
+astria run <path>                 # Full pipeline: detect → extract → build → cluster → analyze → report
+astria run <path> --wiki          # ...also export a markdown wiki to .astria/wiki
+astria run <path> --embed         # ...also compute local embeddings (similar_to edges + semantic query recall)
+astria run <path> --global --as <tag>  # ...also merge this repo into the cross-repo global graph (see Global graph)
+astria update <path>              # Incremental rebuild (only changed files; regenerates an existing wiki)
+astria watch <path> [--debounce 3000]  # Watch for file changes, auto-rebuild
+astria cluster-only <path>        # Re-cluster + analyze + report without re-extracting
+astria merge <pathA> <pathB> <outPath>  # Merge two graphs
+astria diff <pathA> <pathB>       # Compare two graphs
+```
+
+Builds also pick up, automatically:
+
+- **Cargo workspaces** — when a `Cargo.toml` is present, workspace members and internal path dependencies become `crate::*` nodes with `crate_depends_on` edges (honoring `package =` renames and `workspace = true` inheritance). No LLM involved — dependency structure is fact.
+- **MCP configs** — `.mcp.json`, `mcp_servers.json`, and `claude_desktop_config.json` become `mcp_server`/`mcp_command`/`mcp_package` nodes with `requires_env` edges (env **names only** — values are never read).
+- **Transcript sidecars** — any `.txt`/`.md` you drop into `.astria/transcripts/` is ingested as document nodes on the next run/update. The contract for external transcribers: run any tool you like, write the text there, let the graph index it.
+
+## Querying
+
+```bash
+astria explain <node> [--graph .]              # Explain a node and its connections
+astria query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--graph .]  # BFS/DFS traversal
+astria path <A> <B> [--directed] [--detail high] [--graph .]   # Shortest path between two concepts
+astria affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - what breaks if you change this node
+astria map [--budget 2000] [--graph .]         # PageRank-ranked repo map with top symbols
+astria stats [--graph .]                       # Node/edge/community counts
+astria status [--graph .]                      # Graph health and staleness
+astria history [--limit 20] [--graph .]        # Show recent query history
+```
+
+### Query flags {#query-flags}
+
+- `--dfs` — depth-first instead of breadth-first traversal
+- `--depth N` — maximum traversal depth
+- `--budget N` — output token budget (default 2000)
+- `--directed` — follow edge direction instead of treating the graph as undirected
+- `--detail high` — fidelity tier: only declared (`EXTRACTED`) facts
+- `--cursor N` — continuation cursor for truncated traversals
+
+Query output reports when the graph was last built, so agents can judge freshness. Repeated queries promote recurring node pairs into `learned` edges — see [learning from usage](#learning-from-usage).
+
+### Query log (for tooling)
+
+Every query can also append a JSONL line (ts, kind, question, nodes, duration) to a log file for agent/tooling consumption:
+
+- `ASTRIA_QUERY_LOG=<path>` — log to a specific file; `ASTRIA_QUERY_LOG=1` uses the default location
+- `ASTRIA_QUERY_LOG_ENABLE=1` — turn on logging without choosing a path
+- `ASTRIA_QUERY_LOG_DISABLE=1` — always wins; logging never breaks a query (fails silent)
+
+## Exports and visualization
+
+```bash
+astria export [--graph .] [--out graph.json] [--format json|html|graphml|cypher] [--mode standard|large]
+astria tree [--out tree.html] [--max-children 40]   # Collapsible filesystem tree of all symbols (HTML)
+astria wiki [--out .astria/wiki] [--max-nodes 25] [--graph .]  # Wikipedia-style markdown wiki
+astria prs [20] [--conflicts] [--graph .]           # Map open PRs onto the graph - impact + merge-order risk
+```
+
+`export --format html` creates an interactive vis-network graph view. The default `--mode standard` exports the full interactive graph when it contains at most 5,000 nodes and fails with an actionable message for larger graphs. `--mode large` opts into a precomputed-layout viewer (physics-free, key nodes first, batched search) that opens instantly on any repo size.
+
+`--format cypher` writes an idempotent Neo4j import script (MERGE statements — safe to re-run):
+
+```bash
+astria export --graph . --format cypher --out astria.cypher
+cypher-shell -u neo4j -p <password> -f astria.cypher
+```
+
+See [Wiki and exports](../guides/wiki-and-exports) for details.
+
+## Graph health
+
+```bash
+astria diagnose [--graph .] [--json]
+```
+
+Read-only health report over an existing graph: dangling edge endpoints (stub vs actionable), self-loops, duplicate edges, unclassified files, and zero-cohesion communities. `--json` emits machine-readable output. Never mutates the graph.
+
+### Migrating from pre-1.0 layouts
+
+```bash
+astria migrate [--graph .]
+```
+
+One-time rename migration: moves a pre-1.0 `.graphify/` data folder to `.astria/`, renames `.graphifyignore` to `.astriaignore`, and moves `~/.nodesify-graphify/global.db` to `~/.astria/global.db`. Idempotent, and never overwrites an existing target — if the graph is locked by a running editor or MCP server it says so and can simply be re-run.
+
+## Memory and reflection
+
+The feedback loop that complements [learned edges](#learning-from-usage): learned edges are automatic, memory is curated. Full walkthrough in [Memory and learning](../guides/memory-and-learning).
+
+```bash
+astria save-result <question> --answer <text> [--answer-file <path>] \
+    [--outcome useful|dead_end|corrected] [--correction <text>] [--nodes <ids>] [--graph .]
+astria reflect [--graph .]
+```
+
+- `save-result` writes a Q/A memory doc (with outcome and corrections) into `.astria/memory/`. Cited node ids link the answer to the graph.
+- The next `run`/`update` ingests memory docs as graph nodes, so settled questions become part of the graph.
+- `reflect` aggregates outcomes into `.astria/reflections/LESSONS.md` with outcome tallies.
+
+## Global graph (cross-repo)
+
+Merge many repo graphs into one queryable store at `~/.astria/global.db` — merging behavior in detail in [Global graph](../guides/global-graph):
+
+```bash
+astria run <path> --global --as <tag>   # build, then merge into the global store
+astria global add <path> [--as <tag>]   # same merge, standalone (idempotent per tag)
+astria global remove <tag>              # prune a repo from the global graph
+astria global list                      # registered repos
+astria global path <A> <B>              # shortest path across repos
+```
+
+Design notes: sourced node ids are prefixed with the repo tag (`<tag>::<id>`); external/stub symbols stay unprefixed and dedupe by label, so `serde_json::Value` means the same thing in every repo. Types sharing `(namespace, label)` across repos get `same_type_as` edges, and parked unresolved calls are resolved when exactly one cross-repo candidate exists (fail closed on ambiguity). Query against the merged store with the usual `--graph` flag pointed at the global db:
+
+```bash
+astria query "where is the shared auth type" --graph ~/.astria/global.db
+```
+
+## Knowledge ingestion
+
+```bash
+astria add <url> [--author] [--contributor]         # Fetch arXiv/tweet/webpage/image/PDF into ./raw + update graph
+astria add --scip <index.json>                      # Ingest a simplified SCIP JSON index (rust-analyzer & co.)
+astria add --postgres <dsn>                         # Introspect a live PostgreSQL schema (requires psql on PATH)
+```
+
+Both `--scip` and `--postgres` are offline/local alternatives to URL fetching: SCIP indexes bring external toolchain symbols into the graph (`scip_impl`/`scip_typed`/`scip_def`/`scip_ref` edges, deterministic ids); Postgres introspection is read-only over `information_schema` (tables/views/routines/FKs → `contains` + `references` edges, no credentials stored). The Postgres DSN is opt-in by flag — nothing calls the network by default.
+
+URL fetching is SSRF-guarded: only `http`/`https` schemes are accepted; each host is checked by name *and* DNS-resolved, and any loopback/private/CGNAT/link-local address (IPv4 or IPv6, including mapped forms like `::ffff:127.0.0.1`) is rejected — so cloud metadata endpoints and localhost services are unreachable no matter how the URL is spelled. Redirects are followed manually (max 5 hops) and every hop is re-validated, meaning a public server cannot bounce a fetch to an internal address. Downloads are capped at 50 MB with a 30-second timeout, and saved filenames are slugified from the URL, so a hostile URL segment cannot escape the output directory.
+
+## Assistant integration
+
+```bash
+astria mcp [--graph .]              # Run MCP stdio server - query the graph from any AI agent
+astria install [--platform claude]  # Install skill files for AI coding assistants
+astria uninstall [--platform claude]  # Uninstall skill files
+astria hook install|uninstall|status  # Git hook management
+astria hook-guard <mode>            # Editor PreToolUse guard (search | read | gemini) — installed into .claude/settings.json
+```
+
+Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`. Setup walkthrough in [Agent integration](../guides/mcp-and-agents); the nine MCP tools are documented in the [MCP tools reference](./mcp-tools).
+
+`install` also injects an always-on `## astria` instruction block into `AGENTS.md`/`CLAUDE.md` (query before grep, run `update` after edits) — idempotent, removed by `uninstall`. `hook-guard` is the editor-side companion to git hooks: it nudges agents toward `query` before raw searches and can (strict mode, opt-in) gate un-indexed reads. It fails open — any error means the tool call proceeds untouched.
+
+## Learning from usage {#learning-from-usage}
+
+The graph compounds in value as you query it. Every query records which (seed, discovered) node pairs its traversal connected; when the same pair recurs across **at least 2 distinct questions with 3+ total hits**, the next `run`/`update` promotes it to a `learned` edge (`INFERRED`, hits-scored, provenance `query_history`). Learned edges flow into clustering, analysis, and every export — the graph remembers which connections you actually keep asking about. High-fidelity traversals (`--detail high`) can filter them like any `INFERRED` fact.

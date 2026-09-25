@@ -31,7 +31,7 @@ astria watch <path>           # or keep it fresh automatically
 
 ## `export --format html` refuses on a large repo
 
-That is the safety limit: the default `--mode standard` interactive viewer is capped at 5,000 nodes (the same limit as the original Graphify viewer) and fails with an actionable message beyond that. Explicitly opt into the optimized viewer:
+That is the safety limit: the default `--mode standard` interactive viewer is capped at 5,000 nodes and fails with an actionable message beyond that. Explicitly opt into the optimized viewer:
 
 ```bash
 astria export --graph . --format html --mode large --out graph-view.html

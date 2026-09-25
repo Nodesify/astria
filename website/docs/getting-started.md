@@ -93,6 +93,6 @@ Place a `.astriaignore` file in your project root (gitignore syntax) to exclude 
 
 ## Where the token savings come from
 
-Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository at v0.8.0: ~333,000 corpus tokens vs ~3,000 per query — **110× fewer tokens per query**; on the original Python Graphify's codebase: **52×**. On tiny corpora it will honestly report &lt;1×; there the graph's value is structure, not compression, and the output says so.
+Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository at v0.8.0: ~333,000 corpus tokens vs ~3,000 per query — **110× fewer tokens per query**; on the Python Graphify codebase: **52×**. On tiny corpora it will honestly report &lt;1×; there the graph's value is structure, not compression, and the output says so.
 
-Numbers vary per run and per corpus — the full methodology, a head-to-head against the original Python Graphify, and the embedding experiment are on the [Benchmarks and evidence](./explanation/benchmarks) page.
+Numbers vary per run and per corpus — the full methodology, a head-to-head against the Python Graphify project that inspired astria, and the embedding experiment are on the [Benchmarks and evidence](./explanation/benchmarks) page.

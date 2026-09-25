@@ -35,7 +35,7 @@ On this repository the vault produced 2,040 notes and 5,000 canvas edges.
 astria export --graph . --format html --out graph-view.html
 ```
 
-The default `--mode standard` exports the full interactive vis-network graph when it contains at most 5,000 nodes (the same safety limit as the original Graphify viewer) and fails with an actionable message for larger graphs. For larger repositories, explicitly opt into the optimized large-graph viewer:
+The default `--mode standard` exports the full interactive vis-network graph when it contains at most 5,000 nodes and fails with an actionable message for larger graphs. For larger repositories, explicitly opt into the optimized large-graph viewer:
 
 ```bash
 astria export --graph . --format html --mode large --out graph-view.html
@@ -60,7 +60,7 @@ The Neo4j export writes an idempotent import script (`MERGE` statements — safe
 
 Hyperedges are n-ary node groups produced deterministically at build time (no LLM): one per community (`participate_in`, top-degree members) and one per identifier-shaped literal referenced from ≥ 3 distinct files (`shares_reference`). Every export surface shows them:
 
-- `graph.json` carries a `hyperedges` array (shape-compatible with the official Graphify consumer)
+- `graph.json` carries a `hyperedges` array (shape-compatible with Graphify's consumer)
 - the HTML viewer shades a convex hull over each hyperedge's member nodes (large mode draws labeled circles)
 - the wiki index lists them; `explain` shows a node's hyperedge memberships
 - the `GRAPH_REPORT.md` gains a hyperedge section

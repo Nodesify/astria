@@ -45,7 +45,7 @@ Each stage is a pure function in its own crate; semantic enrichment is optional 
 
 | Crate | Responsibility |
 | :--- | :--- |
-| `astria-core` | Shared types (`FileType`, `GraphStats`), `GraphifyError`, SQLite schema + migrations, path validation, sanitization, sensitive-path denylist. |
+| `astria-core` | Shared types (`FileType`, `GraphStats`), `AstriaError`, SQLite schema + migrations, path validation, sanitization, sensitive-path denylist. |
 | `astria-paths` | Path normalization and `.astria` directory management. |
 | `astria-detect` | File system scanning, `.astriaignore` support, and incremental change detection via SHA-256 hashes. |
 | `astria-extract` | Tree-sitter AST traversal logic. Each language defines its own extraction rules (nodes, edges, docstrings). |
