@@ -23,9 +23,7 @@ pub fn global_store_path() -> PathBuf {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home)
-        .join(".astria")
-        .join("global.db")
+    PathBuf::from(home).join(".astria").join("global.db")
 }
 
 pub fn open_global_store() -> Result<GlobalStore> {

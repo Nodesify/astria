@@ -219,8 +219,7 @@ pub fn run_pipeline_with(
     embed: bool,
 ) -> astria_core::Result<PipelineResult> {
     let root = if root.exists() {
-        root.canonicalize()
-            .map_err(astria_core::AstriaError::Io)?
+        root.canonicalize().map_err(astria_core::AstriaError::Io)?
     } else {
         return Err(astria_core::AstriaError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -243,9 +242,7 @@ pub fn run_pipeline_with(
         .ok();
     match &stored_version {
         Some(prev) if prev != this_version => {
-            eprintln!(
-                "[astria] graph was last built by v{prev}, rebuilding with v{this_version}"
-            );
+            eprintln!("[astria] graph was last built by v{prev}, rebuilding with v{this_version}");
         }
         _ => {}
     }

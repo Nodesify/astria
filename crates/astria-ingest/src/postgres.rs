@@ -163,9 +163,7 @@ pub fn ingest_postgres(dsn: &str) -> Result<Extraction> {
             .arg(dsn)
             .args(["-A", "-t", "-F", &FIELD_SEP.to_string(), "-c", sql])
             .output()
-            .map_err(|e| {
-                AstriaError::Graph(format!("failed to run psql (is it on PATH?): {e}"))
-            })?;
+            .map_err(|e| AstriaError::Graph(format!("failed to run psql (is it on PATH?): {e}")))?;
         if !out.status.success() {
             return Err(AstriaError::Graph(format!(
                 "psql introspection failed: {}",

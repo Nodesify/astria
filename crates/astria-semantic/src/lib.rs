@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use base64::Engine as _;
 use astria_core::AstriaError;
 use astria_core::Result;
+use base64::Engine as _;
 
 /// Maximum image size sent to vision endpoints (5 MB, matching upstream).
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
@@ -402,9 +402,8 @@ impl ClaudeBackend {
     }
 
     fn parse_messages_response(&self, response: &str) -> Result<SemanticExtraction> {
-        let json: serde_json::Value = serde_json::from_str(response).map_err(|e| {
-            AstriaError::Graph(format!("Failed to parse Claude API response: {e}"))
-        })?;
+        let json: serde_json::Value = serde_json::from_str(response)
+            .map_err(|e| AstriaError::Graph(format!("Failed to parse Claude API response: {e}")))?;
         let text = json
             .get("content")
             .and_then(|c| c.get(0))
@@ -470,8 +469,8 @@ impl OpenAiBackend {
         let base_url = astria_core::env_var("LLM_BASE_URL")
             .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
             .unwrap_or_else(|| "https://api.openai.com/v1".into());
-        let api_key = astria_core::env_var("LLM_API_KEY")
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok());
+        let api_key =
+            astria_core::env_var("LLM_API_KEY").or_else(|| std::env::var("OPENAI_API_KEY").ok());
         let model = astria_core::env_var("LLM_MODEL").unwrap_or_else(|| "gpt-4o-mini".into());
         if api_key.is_none() && base_url.contains("api.openai.com") {
             return Err(AstriaError::Graph(
