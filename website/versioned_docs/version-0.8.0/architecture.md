@@ -79,5 +79,3 @@ The graph is stored in `.graphify/db.sqlite` with the following tables:
 - **SQLite** — chosen for its zero-config nature and robust ACID properties, making it perfect for local analysis.
 - **Incremental rebuilds** — the system only re-extracts files that have changed, drastically reducing analysis time for large projects.
 - **napi-rs** — provides near-native performance for the CLI while maintaining the ease of use of an npm package.
-
-Design docs: [design spec](https://github.com/Nodesify/nodesify-graphify/blob/main/docs/superpowers/specs/2026-04-30-nodesify-graphify-rewrite-design.md) and [implementation plan](https://github.com/Nodesify/nodesify-graphify/blob/main/docs/superpowers/plans/2026-04-30-nodesify-graphify-implementation.md).
