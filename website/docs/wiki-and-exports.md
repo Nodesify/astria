@@ -52,6 +52,15 @@ cypher-shell -u neo4j -p <password> -f graphify.cypher
 
 The Neo4j export writes an idempotent import script (`MERGE` statements — safe to re-run). JSON and GraphML exports are unaffected by `--mode`.
 
+## Hyperedges in exports
+
+Hyperedges are n-ary node groups produced deterministically at build time (no LLM): one per community (`participate_in`, top-degree members) and one per identifier-shaped literal referenced from ≥ 3 distinct files (`shares_reference`). Every export surface shows them:
+
+- `graph.json` carries a `hyperedges` array (shape-compatible with the official Graphify consumer)
+- the HTML viewer shades a convex hull over each hyperedge's member nodes (large mode draws labeled circles)
+- the wiki index lists them; `explain` shows a node's hyperedge memberships
+- the `GRAPH_REPORT.md` gains a hyperedge section
+
 ## PR impact analysis
 
 ```bash

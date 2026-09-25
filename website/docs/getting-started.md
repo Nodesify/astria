@@ -72,6 +72,19 @@ Git hooks can keep the graph fresh automatically:
 nodesify-graphify hook install|uninstall|status
 ```
 
+## Health, memory, and many repos at once
+
+Three more loops worth knowing about (full flags in the [CLI reference](./cli)):
+
+```bash
+nodesify-graphify diagnose                        # read-only graph health report (--json for tooling)
+nodesify-graphify save-result "Q" --answer "A"    # curate a settled Q/A into graph memory
+nodesify-graphify reflect                         # aggregate memory outcomes into LESSONS.md
+nodesify-graphify run . --global --as myrepo      # merge this repo into the cross-repo global graph
+```
+
+`diagnose` is the first stop when a graph looks wrong. The memory loop (`save-result` → `update` → `reflect`) turns settled questions into graph nodes — curated, on top of the automatic learned edges. And the global graph merges many repos into one queryable store, unifying shared external symbols across repos.
+
 ## Excluding files
 
 Place a `.graphifyignore` file in your project root (gitignore syntax) to exclude files from the graph.

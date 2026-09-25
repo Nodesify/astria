@@ -22,6 +22,13 @@ npm install -g @nodesify/graphify
 
 Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 
+## What's new (unreleased)
+
+- **Hypergraph, deterministically** — n-ary `hyperedges` (schema v7/v8) produced without an LLM: community `participate_in` groups and `shares_reference` literal groups; consumed by graph.json, report, wiki, HTML hulls, and `explain`. The official's hyperedges are LLM-produced; ours are local and reproducible.
+- **Cross-repo global graph** — `~/.nodesify-graphify/global.db`: `global add/remove/list/path`, repo-tag prefixed merging that unifies external symbols across repos, `same_type_as` type edges, cross-repo call resolution (fail closed on ambiguity), `run --global --as <tag>`, and `query/explain/path --graph` against the merged store.
+- **Graph health + feedback loop** — `diagnose` (read-only health report, `--json`), `save-result`/`reflect` curated memory (`.graphify/memory/` → graph nodes → `LESSONS.md`) alongside automatic learned edges, build-time validation, JSONL query log (`GRAPHIFY_QUERY_LOG`), and always-on instruction blocks in `AGENTS.md`/`CLAUDE.md`.
+- **Ingest breadth (offline-first)** — Cargo workspace + path-dep topology (auto), `.mcp.json`/`mcp_servers.json`/`claude_desktop_config.json` (env names only, never values), `add --scip <index.json>`, `add --postgres <dsn>` (read-only introspection, requires `psql`), and transcript sidecars (`.graphify/transcripts/*.txt|md`).
+
 ## What's new in 0.8.0
 
 - **Markdown wiki export** — `wiki` / `run --wiki`: an agent-crawlable wiki (`index.md` + one article per community and god node, relative markdown links GitHub and Obsidian both navigate); `update` regenerates it so it never drifts stale
@@ -69,6 +76,7 @@ Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 nodesify-graphify run <path>                            # Full pipeline: detect → extract → build → cluster → analyze → report
 nodesify-graphify run <path> --wiki                     # ...also export a markdown wiki to .graphify/wiki
 nodesify-graphify run <path> --embed                    # ...also compute local embeddings (similar_to edges + semantic query recall)
+nodesify-graphify run <path> --global --as <tag>        # ...also merge into the cross-repo global graph
 nodesify-graphify update <path>                         # Incremental rebuild (only changed files; regenerates an existing wiki)
 nodesify-graphify watch <path> [--debounce 3000]        # Watch for file changes, auto-rebuild
 nodesify-graphify explain <node> [--graph .]            # Explain a node and its connections
@@ -76,7 +84,14 @@ nodesify-graphify query <question> [--dfs] [--depth 2] [--budget 2000] [--direct
 nodesify-graphify path <A> <B> [--directed] [--detail high] [--graph .]  # Shortest path between two concepts
 nodesify-graphify affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - what breaks if you change this node
 nodesify-graphify map [--budget 2000] [--graph .]       # PageRank-ranked repo map with top symbols
+nodesify-graphify diagnose [--graph .] [--json]         # Read-only graph health report
+nodesify-graphify save-result <question> --answer <text> [--outcome useful|dead_end|corrected]  # Curate a Q/A into graph memory
+nodesify-graphify reflect [--graph .]                   # Aggregate memory outcomes into LESSONS.md
+nodesify-graphify global add <path> [--as <tag>]        # Merge a repo into the cross-repo global graph
+nodesify-graphify global remove <tag> | list | path <A> <B>  # Manage and query the global graph
 nodesify-graphify add <url> [--author] [--contributor]     # Fetch arXiv/tweet/webpage/image/PDF into ./raw + update graph
+nodesify-graphify add --scip <index.json>                  # Ingest a simplified SCIP JSON index instead of a URL
+nodesify-graphify add --postgres <dsn>                     # Introspect a live PostgreSQL schema (requires psql)
 nodesify-graphify mcp [--graph .]                             # Run MCP stdio server - query the graph from any AI agent
 nodesify-graphify tree [--out tree.html] [--max-children 40] # Collapsible filesystem tree of all symbols (HTML)
 nodesify-graphify wiki [--out .graphify/wiki] [--max-nodes 25] [--graph .]  # Wikipedia-style markdown wiki (agent-crawlable)

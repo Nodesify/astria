@@ -19,9 +19,9 @@ The project is a Rust workspace with 14 domain-specific crates and a Node.js CLI
 detect() → extract() → enrich_with_semantics() → build() → dedup_nodes() → cluster() → analyze() → report()
 ```
 
-The pipeline is orchestrated in `crates/graphify-napi/src/pipeline.rs`.
+The pipeline is orchestrated in `crates/graphify-napi/src/pipeline.rs`. Validation runs before graph assembly: every node needs id/label/file_type/source_file, every edge needs existing endpoints and a valid confidence class — a corrupted extraction fails the run with the full violation list (`diagnose` reports the same classes of problem read-only on an existing graph).
 
-1. **detect()** (`graphify-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run.
+1. **detect()** (`graphify-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run. Manifest ingestion also covers dependency manifests — including Cargo workspace members and internal path dependencies (`crate::*` nodes with `crate_depends_on` edges).
 2. **extract()** (`graphify-extract`): Performs AST-based extraction using tree-sitter. Supports 21 languages with per-language configurations in `src/langs/`.
 3. **enrich_with_semantics()** (`graphify-semantic`, optional): When an LLM backend is configured, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results.
 4. **build()** (`graphify-build`): Merges extracted nodes and edges into the SQLite graph database, handles deduplication and cross-file reference resolution.
@@ -58,7 +58,8 @@ Each stage is a pure function in its own crate; semantic enrichment is optional 
 The graph is stored in `.graphify/db.sqlite` with the following tables:
 
 - `nodes`: `id`, `label`, `file_type`, `source_file`, `source_line`, `docstring`, `community`
-- `edges`: `source`, `target`, `relation`, `confidence`, `confidence_score`, `source_file`, `source_line`
+- `edges`: `source`, `target`, `relation`, `confidence`, `confidence_score`, `source_file`, `source_line`, `context`
+- `hyperedges`: `id`, `label`, `nodes` (json array), `relation`, `confidence`, `confidence_score`, `source_file` — n-ary groups produced deterministically (see below)
 - `communities`: detected community labels and cohesion scores
 - `file_manifest`: `path`, `hash`, `last_extracted_at` — used for incremental updates
 - `extraction_cache`: cached per-file extraction results keyed by content hash
@@ -73,6 +74,13 @@ The graph is stored in `.graphify/db.sqlite` with the following tables:
 - `Uses` — variable or type usage
 - `Defines` — containment (e.g., class defines a method)
 - `Inherits` — class inheritance or interface implementation
+
+Hyperedge relations (n-ary, deterministic producers — no LLM):
+
+- `participate_in` — a community's top-degree members grouped as one hyperedge
+- `shares_reference` — files referencing the same identifier-shaped literal (≥ 3 distinct files)
+
+Ingest also contributes relation families when the relevant inputs exist: `crate_depends_on` (Cargo workspace topology), `requires_env` (MCP configs, env names only), `scip_impl`/`scip_typed`/`scip_def`/`scip_ref` (SCIP indexes), and `same_type_as` plus cross-repo call edges (global graph).
 
 ## Persistence and performance
 

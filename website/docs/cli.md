@@ -13,12 +13,19 @@ All commands accept `--graph .` to point at an existing `.graphify/` directory (
 nodesify-graphify run <path>                 # Full pipeline: detect → extract → build → cluster → analyze → report
 nodesify-graphify run <path> --wiki          # ...also export a markdown wiki to .graphify/wiki
 nodesify-graphify run <path> --embed         # ...also compute local embeddings (similar_to edges + semantic query recall)
+nodesify-graphify run <path> --global --as <tag>  # ...also merge this repo into the cross-repo global graph (see Global graph)
 nodesify-graphify update <path>              # Incremental rebuild (only changed files; regenerates an existing wiki)
 nodesify-graphify watch <path> [--debounce 3000]  # Watch for file changes, auto-rebuild
 nodesify-graphify cluster-only <path>        # Re-cluster + analyze + report without re-extracting
 nodesify-graphify merge <pathA> <pathB> <outPath>  # Merge two graphs
 nodesify-graphify diff <pathA> <pathB>       # Compare two graphs
 ```
+
+Builds also pick up, automatically:
+
+- **Cargo workspaces** — when a `Cargo.toml` is present, workspace members and internal path dependencies become `crate::*` nodes with `crate_depends_on` edges (honoring `package =` renames and `workspace = true` inheritance). No LLM involved — dependency structure is fact.
+- **MCP configs** — `.mcp.json`, `mcp_servers.json`, and `claude_desktop_config.json` become `mcp_server`/`mcp_command`/`mcp_package` nodes with `requires_env` edges (env **names only** — values are never read).
+- **Transcript sidecars** — any `.txt`/`.md` you drop into `.graphify/transcripts/` is ingested as document nodes on the next run/update. The contract for external transcribers: run any tool you like, write the text there, let the graph index it.
 
 ## Querying
 
@@ -44,6 +51,14 @@ nodesify-graphify history [--limit 20] [--graph .]        # Show recent query hi
 
 Query output reports when the graph was last built, so agents can judge freshness. Repeated queries promote recurring node pairs into `learned` edges — see [learning from usage](#learning-from-usage).
 
+### Query log (for tooling)
+
+Every query can also append a JSONL line (ts, kind, question, nodes, duration) to a log file for agent/tooling consumption:
+
+- `GRAPHIFY_QUERY_LOG=<path>` — log to a specific file; `GRAPHIFY_QUERY_LOG=1` uses the default location
+- `GRAPHIFY_QUERY_LOG_ENABLE=1` — turn on logging without choosing a path
+- `GRAPHIFY_QUERY_LOG_DISABLE=1` — always wins; logging never breaks a query (fails silent)
+
 ## Exports and visualization
 
 ```bash
@@ -64,11 +79,55 @@ cypher-shell -u neo4j -p <password> -f graphify.cypher
 
 See [Wiki and exports](./wiki-and-exports) for details.
 
+## Graph health
+
+```bash
+nodesify-graphify diagnose [--graph .] [--json]
+```
+
+Read-only health report over an existing graph: dangling edge endpoints (stub vs actionable), self-loops, duplicate edges, unclassified files, and zero-cohesion communities. `--json` emits machine-readable output. Never mutates the graph.
+
+## Memory and reflection
+
+The feedback loop that complements [learned edges](#learning-from-usage): learned edges are automatic, memory is curated.
+
+```bash
+nodesify-graphify save-result <question> --answer <text> [--answer-file <path>] \
+    [--outcome useful|dead_end|corrected] [--correction <text>] [--nodes <ids>] [--graph .]
+nodesify-graphify reflect [--graph .]
+```
+
+- `save-result` writes a Q/A memory doc (with outcome and corrections) into `.graphify/memory/`. Cited node ids link the answer to the graph.
+- The next `run`/`update` ingests memory docs as graph nodes, so settled questions become part of the graph.
+- `reflect` aggregates outcomes into `.graphify/reflections/LESSONS.md` with outcome tallies.
+
+## Global graph (cross-repo)
+
+Merge many repo graphs into one queryable store at `~/.nodesify-graphify/global.db`:
+
+```bash
+nodesify-graphify run <path> --global --as <tag>   # build, then merge into the global store
+nodesify-graphify global add <path> [--as <tag>]   # same merge, standalone (idempotent per tag)
+nodesify-graphify global remove <tag>              # prune a repo from the global graph
+nodesify-graphify global list                      # registered repos
+nodesify-graphify global path <A> <B>              # shortest path across repos
+```
+
+Design notes: sourced node ids are prefixed with the repo tag (`<tag>::<id>`); external/stub symbols stay unprefixed and dedupe by label, so `serde_json::Value` means the same thing in every repo. Types sharing `(namespace, label)` across repos get `same_type_as` edges, and parked unresolved calls are resolved when exactly one cross-repo candidate exists (fail closed on ambiguity). Query against the merged store with the usual `--graph` flag pointed at the global db:
+
+```bash
+nodesify-graphify query "where is the shared auth type" --graph ~/.nodesify-graphify/global.db
+```
+
 ## Knowledge ingestion
 
 ```bash
-nodesify-graphify add <url> [--author] [--contributor]  # Fetch arXiv/tweet/webpage/image/PDF into ./raw + update graph
+nodesify-graphify add <url> [--author] [--contributor]         # Fetch arXiv/tweet/webpage/image/PDF into ./raw + update graph
+nodesify-graphify add --scip <index.json>                      # Ingest a simplified SCIP JSON index (rust-analyzer & co.)
+nodesify-graphify add --postgres <dsn>                         # Introspect a live PostgreSQL schema (requires psql on PATH)
 ```
+
+Both `--scip` and `--postgres` are offline/local alternatives to URL fetching: SCIP indexes bring external toolchain symbols into the graph (`scip_impl`/`scip_typed`/`scip_def`/`scip_ref` edges, deterministic ids); Postgres introspection is read-only over `information_schema` (tables/views/routines/FKs → `contains` + `references` edges, no credentials stored). The Postgres DSN is opt-in by flag — nothing calls the network by default.
 
 ## Assistant integration
 
@@ -77,9 +136,12 @@ nodesify-graphify mcp [--graph .]              # Run MCP stdio server - query th
 nodesify-graphify install [--platform claude]  # Install skill files for AI coding assistants
 nodesify-graphify uninstall [--platform claude]  # Uninstall skill files
 nodesify-graphify hook install|uninstall|status  # Git hook management
+nodesify-graphify hook-guard <mode>            # Editor PreToolUse guard (search | read | gemini) — installed into .claude/settings.json
 ```
 
 Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`.
+
+`install` also injects an always-on `## graphify` instruction block into `AGENTS.md`/`CLAUDE.md` (query before grep, run `update` after edits) — idempotent, removed by `uninstall`. `hook-guard` is the editor-side companion to git hooks: it nudges agents toward `query` before raw searches and can (strict mode, opt-in) gate un-indexed reads. It fails open — any error means the tool call proceeds untouched.
 
 ## Learning from usage
 
