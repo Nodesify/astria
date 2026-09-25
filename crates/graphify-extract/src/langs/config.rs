@@ -17,4 +17,10 @@ pub struct LanguageConfig {
     pub class_call_names: &'static [&'static str],
     pub function_call_names: &'static [&'static str],
     pub import_call_names: &'static [&'static str],
+    /// Anonymous function kinds that get synthesized names — a route-derived
+    /// `VERB /path` label or a stable per-scope `{closure#N}` ordinal — and
+    /// become call-attribution boundaries: calls made inside them attribute
+    /// to the closure, not the enclosing function. Empty for languages that
+    /// still drop anonymous functions (add kinds here to opt in).
+    pub closure_types: &'static [&'static str],
 }

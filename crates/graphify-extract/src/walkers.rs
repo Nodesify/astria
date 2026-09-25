@@ -2,7 +2,7 @@
 // functions), inline call-graph pass, rationale comments, and the
 // single-file driver that ties them together.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use tree_sitter::{Node, Parser};
@@ -122,10 +122,18 @@ pub(crate) struct ExtractionState<'a> {
     pub nodes: Vec<ExtractedNode>,
     pub edges: Vec<ExtractedEdge>,
     pub current_class_id: Option<String>,
+    /// Display label of the enclosing class, for scope-qualified closure
+    /// labels (`PriceCalc::{closure#1}()`) that stay unique corpus-wide so
+    /// the build's fuzzy label-dedup cannot merge two different closures.
+    pub current_class_label: Option<String>,
     /// Identifier-shaped string literals already indexed for this file,
     /// keyed by lowercased literal (one reference node per distinct literal
     /// per file; the node itself is global across files).
     pub string_refs_seen: HashSet<String>,
+    /// Anonymous-closure ordinals per scope (class id or file id). Ordinals
+    /// are stable under line edits — only reordering or inserting a closure
+    /// earlier in the same scope shifts later ones.
+    pub closure_counts: HashMap<String, usize>,
 }
 
 /// Maximum reference nodes extracted from one file — bounds the graph cost
@@ -219,6 +227,180 @@ fn collect_string_refs(state: &mut ExtractionState<'_>, node: &Node<'_>) {
         source_file: state.file_path.clone(),
         source_line: Some(line),
     });
+}
+
+// ---------------------------------------------------------------------------
+// Anonymous closures (PHP): synthesized names and attribution boundaries
+// ---------------------------------------------------------------------------
+
+/// PHP routing verbs whose first string argument is a route path. A closure
+/// passed directly to one of these gets a `VERB /path` label instead of an
+/// ordinal (#3409).
+const PHP_ROUTING_VERBS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "options", "any", "match", "map",
+];
+
+/// First string literal among `arg_list`'s children, stopping at `before`
+/// (the argument the closure itself sits in) when given. Handles both bare
+/// string children and `argument`-wrapped strings.
+fn first_string_arg<'a>(
+    arg_list: &Node<'a>,
+    before: Option<&Node<'_>>,
+    source: &'a [u8],
+) -> Option<String> {
+    let mut cursor = arg_list.walk();
+    for child in arg_list.children(&mut cursor) {
+        if before.is_some_and(|b| child.id() == b.id()) {
+            break;
+        }
+        let target = if child.kind() == "argument" {
+            let mut c = child.walk();
+            let found = child
+                .children(&mut c)
+                .find(|g| g.kind() == "string" || g.kind() == "encapsed_string");
+            drop(c);
+            found
+        } else if child.kind() == "string" || child.kind() == "encapsed_string" {
+            Some(child)
+        } else {
+            None
+        };
+        if let Some(t) = target {
+            return Some(unquote_literal(node_text(&t, source)).to_string());
+        }
+    }
+    None
+}
+
+/// Route-derived name for a PHP closure passed to a routing call: walk up the
+/// AST collecting the innermost route's verb/path plus any enclosing
+/// `group()`/`prefix()` path arguments and fluent-chain prefixes, composing
+/// e.g. `GET /api/v1/users/{id}`. Returns None when the innermost enclosing
+/// call is not a route (so `$cache->get('key', fn)` stays an ordinal).
+fn php_route_name(closure: &Node<'_>, source: &[u8]) -> Option<String> {
+    let mut prefixes: Vec<String> = Vec::new();
+    let mut verb: Option<String> = None;
+    let mut curr = closure.parent();
+
+    while let Some(n) = curr {
+        let kind = n.kind();
+        if matches!(
+            kind,
+            "function_definition" | "method_declaration" | "class_declaration"
+        ) {
+            break;
+        }
+        if kind == "argument" {
+            let arg_list = n.parent().filter(|a| a.kind() == "arguments");
+            let call = arg_list.and_then(|a| a.parent());
+            if let Some(call) = call.filter(|c| {
+                matches!(
+                    c.kind(),
+                    "member_call_expression"
+                        | "function_call_expression"
+                        | "scoped_call_expression"
+                )
+            }) {
+                let name_node = call
+                    .child_by_field_name("name")
+                    .or_else(|| call.child_by_field_name("function"));
+                let raw_method = name_node
+                    .map(|m| node_text(&m, source))
+                    .unwrap_or("")
+                    .to_lowercase();
+                let path_text = first_string_arg(&arg_list.unwrap(), Some(&n), source);
+                if verb.is_none() {
+                    // The innermost call must be a routing verb whose path
+                    // starts with '/', or this closure is not a route.
+                    match path_text {
+                        Some(p)
+                            if p.starts_with('/')
+                                && PHP_ROUTING_VERBS.contains(&raw_method.as_str()) =>
+                        {
+                            verb = Some(raw_method.to_uppercase());
+                            prefixes.push(p);
+                        }
+                        _ => return None,
+                    }
+                } else if let Some(p) = path_text.filter(|p| !p.is_empty()) {
+                    // Outer calls (group()/prefix()) contribute path prefixes.
+                    prefixes.push(if p.starts_with('/') {
+                        p
+                    } else {
+                        format!("/{}", p)
+                    });
+                }
+
+                // Fluent chain prefixes on the same statement
+                // (Route::prefix('/x')->group(...)).
+                let mut fluent = call.child_by_field_name("object");
+                while let Some(f) = fluent.filter(|f| f.kind() == "member_call_expression") {
+                    if let Some(f_args) = f.child_by_field_name("arguments") {
+                        if let Some(p) = first_string_arg(&f_args, None, source) {
+                            if !p.is_empty() {
+                                prefixes.push(if p.starts_with('/') {
+                                    p
+                                } else {
+                                    format!("/{}", p)
+                                });
+                            }
+                        }
+                    }
+                    fluent = f.child_by_field_name("object");
+                }
+
+                curr = call.parent();
+                continue;
+            }
+        } else if kind == "anonymous_function" || kind == "arrow_function" {
+            // A non-route closure nested inside another closure never adopts
+            // the outer one's route; with a route already found, jump across
+            // the closure boundary to its own argument.
+            verb.as_ref()?;
+            curr = n.parent();
+            continue;
+        }
+        curr = n.parent();
+    }
+
+    let verb = verb?;
+    // Prefixes are collected inside-out; join outermost-first under '/'.
+    let full = format!(
+        "/{}",
+        prefixes
+            .iter()
+            .rev()
+            .map(|p| p.trim_matches('/'))
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("/")
+    );
+    Some(format!("{} {}", verb, full))
+}
+
+/// Synthesized name for an anonymous closure node: route label when PHP
+/// routing detection matches, else a stable per-scope ordinal. The ordinal
+/// label carries its scope (`PriceCalc::{closure#1}()`, or
+/// `<file-stem>::{closure#1}()` at file scope) so two closures never share a
+/// label — the build's fuzzy dedup merges same-label nodes and would
+/// otherwise misattribute one closure's call edges onto the other.
+fn synthesize_closure_name(state: &mut ExtractionState<'_>, node: &Node<'_>) -> String {
+    if state.cfg.name == "PHP" {
+        if let Some(route) = php_route_name(node, state.source) {
+            return route;
+        }
+    }
+    // ponytail: class-scope labels use the bare class label, so two
+    // same-named classes can still collide; qualify by class id if that
+    // shows up in practice.
+    let (scope_key, scope_display) = match (&state.current_class_id, &state.current_class_label) {
+        (Some(id), Some(label)) => (id.clone(), label.clone()),
+        (Some(id), None) => (id.clone(), id.clone()),
+        (None, _) => (state.file_id.clone(), state.file_id.clone()),
+    };
+    let count = state.closure_counts.entry(scope_key).or_insert(0);
+    *count += 1;
+    format!("{}::{{closure#{}}}", scope_display, count)
 }
 
 pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'a>) {
@@ -317,14 +499,60 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
 
                 // Walk children inside this class context
                 let prev_class = state.current_class_id.replace(class_id);
+                let prev_label = state.current_class_label.replace(name.clone());
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     walk_structural(state, &child);
                 }
                 state.current_class_id = prev_class;
+                state.current_class_label = prev_label;
                 return;
             }
         }
+    }
+
+    // --- Anonymous closures (closure_types): route names / ordinals ---
+    // These are function-attribution boundaries: calls inside attribute to
+    // the closure itself, so walk_calls on the enclosing function skips them.
+    if state.cfg.closure_types.contains(&kind) {
+        let name = synthesize_closure_name(state, node);
+        let parent_id = state
+            .current_class_id
+            .clone()
+            .unwrap_or_else(|| state.file_id.clone());
+        let func_id = make_node_id(&[&parent_id, &name]);
+
+        state.nodes.push(ExtractedNode {
+            id: func_id.clone(),
+            label: format!("{}()", name),
+            source_file: state.file_path.clone(),
+            source_line: Some(node.start_position().row as u32),
+            docstring: extract_docstring(node, state.source, state.cfg),
+            signature: node_signature(node, state.source, state.cfg),
+            node_type: "function".to_string(),
+        });
+
+        state.edges.push(ExtractedEdge {
+            source: parent_id,
+            target: func_id.clone(),
+            relation: "contains".to_string(),
+            confidence: "EXTRACTED".to_string(),
+            confidence_score: Some(1.0),
+            source_file: state.file_path.clone(),
+            source_line: Some(node.start_position().row as u32),
+        });
+
+        // Pass 2 inline: calls inside attribute to the closure.
+        if let Some(body) = find_body(node, state.cfg) {
+            walk_calls(state, &func_id, &body);
+        }
+
+        // Walk children for nested closures.
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk_structural(state, &child);
+        }
+        return;
     }
 
     // --- Functions / methods ---
@@ -555,9 +783,14 @@ fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, body: &Node<
         }
     }
 
-    // Recurse into children
+    // Recurse into children. Closures are attribution boundaries: their inner
+    // calls are attributed by walk_structural when it names the closure, so
+    // they must not also attribute to the enclosing function.
     let mut cursor = body.walk();
     for child in body.children(&mut cursor) {
+        if state.cfg.closure_types.contains(&child.kind()) {
+            continue;
+        }
         walk_calls(state, caller_id, &child);
     }
 }
@@ -707,7 +940,9 @@ pub(crate) fn extract_single(
         nodes: Vec::new(),
         edges: Vec::new(),
         current_class_id: None,
+        current_class_label: None,
         string_refs_seen: HashSet::new(),
+        closure_counts: HashMap::new(),
     };
 
     // Add file node
