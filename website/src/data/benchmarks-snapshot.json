@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-25T08:45:00Z",
-  "runner": "Windows 11 x64 workstation (manual run)",
+  "generated_at": "2026-09-25T09:14:32.552Z",
+  "runner": "ubuntu-latest (GitHub Actions)",
   "corpus": {
     "repo": "https://github.com/safishamsi/graphify",
     "commit": "91f4d12",
@@ -9,28 +9,28 @@
   "versions": {
     "nodesify_graphify": "0.8.0",
     "original": "graphify @ 91f4d12",
-    "python": "Python 3.12.12"
+    "python": "Python 3.12.3"
   },
   "original_tool": {
-    "build_seconds": 21.92,
+    "build_seconds": 16.13,
     "nodes": 719,
     "edges": 1196,
-    "communities": 45,
+    "communities": 46,
     "benchmark": {
       "corpus_tokens": 87005,
-      "avg_query_tokens": 1738,
-      "reduction": 50.1
+      "avg_query_tokens": 2010,
+      "reduction": 43.3
     }
   },
   "nodesify_graphify_structural": {
-    "build_seconds": 4.68,
+    "build_seconds": 0.82,
     "nodes": 1479,
     "edges": 5789,
-    "communities": 161,
+    "communities": 91,
     "benchmark": {
-      "corpus_tokens": 157712,
-      "avg_query_tokens": 3058,
-      "reduction": 51.6
+      "corpus_tokens": 153768,
+      "avg_query_tokens": 3065,
+      "reduction": 50.2
     }
   },
   "methodology_notes": [
