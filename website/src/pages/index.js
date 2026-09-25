@@ -178,7 +178,7 @@ function StatsBand() {
           ))}
         </div>
         <div className={styles.statsFoot}>
-          <Link to="/docs/benchmarks">
+          <Link to="/docs/explanation/benchmarks">
             The numbers, the methodology, and a head-to-head vs the original Graphify →
           </Link>
         </div>
@@ -247,7 +247,7 @@ function CtaBand() {
           <Link className={clsx('button', 'button--lg', styles.primaryBtn)} to="/docs/getting-started">
             Read the docs
           </Link>
-          <Link className={clsx('button button--lg', styles.ghostBtn)} to="/docs/cli">
+          <Link className={clsx('button button--lg', styles.ghostBtn)} to="/docs/reference/cli">
             CLI reference
           </Link>
         </div>

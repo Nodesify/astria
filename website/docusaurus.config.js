@@ -175,7 +175,7 @@ const config = {
               },
               {
                 label: 'CLI reference',
-                to: '/docs/cli',
+                to: '/docs/reference/cli',
               },
             ],
           },
