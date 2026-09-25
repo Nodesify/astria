@@ -191,13 +191,17 @@ const config = {
                 href: 'https://www.npmjs.com/package/@nodesify/astria',
               },
               {
+                label: 'Website',
+                href: 'https://nodesify.com',
+              },
+              {
                 label: 'Release notes',
                 to: '/blog',
               },
             ],
           },
         ],
-        copyright: `Copyright © ${new Date().getFullYear()} Nodesify. Built with Docusaurus.`,
+        copyright: `Copyright © ${new Date().getFullYear()} <a href="https://nodesify.com">Nodesify</a>. Built with Docusaurus.`,
       },
       prism: {
         theme: lightCodeTheme,
