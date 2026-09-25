@@ -11,3 +11,9 @@ node_modules/
 
 # benchmark scratch workspace
 bench-work/
+
+# local tooling state (agent sessions, browser tests)
+.mimosa/
+.playwright-mcp/
+.zcode/
+docs/motion-docs.db
