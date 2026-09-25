@@ -25,8 +25,13 @@ jobs:
     env:
       BENCH_RUNNER_LABEL: ubuntu-latest (GitHub Actions)
     steps:
+      # Always bench and commit on develop: the snapshot push must go to an
+      # unprotected branch (main is PR-only), and the benchmark measures the
+      # published npm CLI, not repo HEAD, so the checkout ref doesn't skew
+      # results.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: develop
           fetch-depth: 0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -48,7 +53,7 @@ jobs:
           git diff --cached --quiet || git commit -m "chore(bench): update benchmark snapshot"
           # The bench run is long enough that develop may have moved; rebase
           # our snapshot commit (if any) before pushing.
-          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git pull --rebase origin develop
           git push
       - name: Redeploy docs site
         run: gh workflow run "Deploy docs site" --ref develop
