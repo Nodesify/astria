@@ -1,6 +1,6 @@
 {
-  "name": "nodesify-graphify",
-  "version": "0.9.0",
+  "name": "astria",
+  "version": "1.0.0",
   "private": true,
   "workspaces": [
     "packages/*"

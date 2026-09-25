@@ -31,7 +31,7 @@ import { registerHookCommand } from './commands/hook';
 const program = new Command();
 
 program
-  .name('nodesify-graphify')
+  .name('astria')
   .description('Turn any folder into a queryable knowledge graph')
   .version(require('../package.json').version);
 

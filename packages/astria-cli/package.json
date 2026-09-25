@@ -1,11 +1,11 @@
 {
-  "name": "@nodesify/graphify",
-  "version": "0.9.0",
+  "name": "@nodesify/astria",
+  "version": "1.0.0",
   "description": "Turn any folder into a queryable knowledge graph",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "nodesify-graphify": "dist/index.js"
+    "astria": "dist/index.js"
   },
   "files": [
     "dist/**/*",
@@ -13,7 +13,7 @@
     "skills/**/*",
     "README.md",
     "LICENSE",
-    "!dist/graphify.node"
+    "!dist/astria.node"
   ],
   "scripts": {
     "build": "tsc",
@@ -34,11 +34,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Nodesify/nodesify-graphify.git"
+    "url": "git+https://github.com/Nodesify/astria.git"
   },
-  "homepage": "https://github.com/Nodesify/nodesify-graphify#readme",
+  "homepage": "https://github.com/Nodesify/astria#readme",
   "bugs": {
-    "url": "https://github.com/Nodesify/nodesify-graphify/issues"
+    "url": "https://github.com/Nodesify/astria/issues"
   },
   "dependencies": {
     "commander": "^12"
@@ -53,7 +53,7 @@
     "node": ">=20"
   },
   "napi": {
-    "name": "graphify",
+    "name": "astria",
     "triples": {
       "defaults": true,
       "additional": [
@@ -63,10 +63,10 @@
     }
   },
   "optionalDependencies": {
-    "@nodesify/graphify-win32-x64-msvc": "0.9.0",
-    "@nodesify/graphify-darwin-x64": "0.9.0",
-    "@nodesify/graphify-linux-x64-gnu": "0.9.0",
-    "@nodesify/graphify-darwin-arm64": "0.9.0",
-    "@nodesify/graphify-linux-arm64-gnu": "0.9.0"
+    "@nodesify/astria-win32-x64-msvc": "1.0.0",
+    "@nodesify/astria-darwin-x64": "1.0.0",
+    "@nodesify/astria-linux-x64-gnu": "1.0.0",
+    "@nodesify/astria-darwin-arm64": "1.0.0",
+    "@nodesify/astria-linux-arm64-gnu": "1.0.0"
   }
 }
