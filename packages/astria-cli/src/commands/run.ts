@@ -8,7 +8,7 @@ export async function runCommand(
   if (opts.backend) process.env.GRAPHIFY_LLM_BACKEND = opts.backend;
   if (opts.model) process.env.GRAPHIFY_LLM_MODEL = opts.model;
   try {
-    console.log(`Running graphify pipeline on: ${path}`);
+    console.log(`Running astria pipeline on: ${path}`);
     const result = runPipeline(path, opts.dedup === false, opts.embed === true);
     console.log(`Nodes added: ${result.nodesAdded}`);
     console.log(`Edges added: ${result.edgesAdded}`);

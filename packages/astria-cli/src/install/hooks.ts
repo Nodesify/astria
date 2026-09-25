@@ -3,24 +3,24 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 
 const UPDATE_HELPER = `
-const GRAPHIFY_HOOK_VERSION = '2';
+const ASTRIA_HOOK_VERSION = '3';
 // Prefer a workspace-local CLI, then a locally-installed package, and only
 // then whatever is on PATH — a stale global install would rebuild the graph
 // with old pipeline code and silently regress the report.
-function runGraphifyUpdate() {
-  if (existsSync(path.join('packages', 'graphify-cli', 'dist', 'index.js'))) {
-    execSync('node packages/graphify-cli/dist/index.js update .', { stdio: 'inherit' });
+function runAstriaUpdate() {
+  if (existsSync(path.join('packages', 'astria-cli', 'dist', 'index.js'))) {
+    execSync('node packages/astria-cli/dist/index.js update .', { stdio: 'inherit' });
     return;
   }
   try {
-    execSync('npx --no-install nodesify-graphify update .', { stdio: 'inherit' });
+    execSync('npx --no-install astria update .', { stdio: 'inherit' });
   } catch {
-    execSync('nodesify-graphify update .', { stdio: 'inherit' });
+    execSync('astria update .', { stdio: 'inherit' });
   }
 }
 `;
 
-const POST_COMMIT_SCRIPT = `// nodesify-graphify-hook-start
+const POST_COMMIT_SCRIPT = `// astria-hook-start
 const { execSync } = require('child_process');
 const { existsSync } = require('fs');
 const path = require('path');
@@ -44,13 +44,13 @@ try {
   const codeExts = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.go', '.java', '.c', '.h', '.cpp', '.cc', '.cxx', '.hpp']);
   const hasCode = changed.split(/\\r?\\n/).some(f => codeExts.has(path.extname(f)));
   if (hasCode && existsSync('.astria')) {
-    runGraphifyUpdate();
+    runAstriaUpdate();
   }
 } catch {}
-// nodesify-graphify-hook-end
+// astria-hook-end
 `;
 
-const POST_CHECKOUT_SCRIPT = `// nodesify-graphify-checkout-hook-start
+const POST_CHECKOUT_SCRIPT = `// astria-checkout-hook-start
 const { execSync } = require('child_process');
 const { existsSync } = require('fs');
 const path = require('path');
@@ -64,10 +64,10 @@ try {
   const gitDir = execSync('git rev-parse --git-dir', { encoding: 'utf-8' }).trim();
   if (existsSync(path.join(gitDir, 'rebase-merge')) || existsSync(path.join(gitDir, 'rebase-apply'))) process.exit(0);
 
-  console.log('[nodesify-graphify] Branch switched - rebuilding knowledge graph...');
-  runGraphifyUpdate();
+  console.log('[astria] Branch switched - rebuilding knowledge graph...');
+  runAstriaUpdate();
 } catch {}
-// nodesify-graphify-checkout-hook-end
+// astria-checkout-hook-end
 `;
 
 interface HookDef {
@@ -75,29 +75,38 @@ interface HookDef {
   script: string;
   startMarker: string;
   endMarker: string;
-  // Releases before 0.3.0 wrote shell-format hooks with '#' markers. The
-  // current JS-format installer must recognize and replace them, otherwise
-  // it appends JS to a #!/bin/sh file and every hook invocation errors.
-  legacyStartMarker: string;
-  legacyEndMarker: string;
+  // Older releases wrote sections under other markers: 0.3–0.9 shipped the
+  // nodesify-graphify-named JS hooks, and pre-0.3 wrote shell-format hooks
+  // with '#' markers. The current installer must recognize and replace both,
+  // otherwise it appends a second section that runs the graph twice.
+  legacyMarkers: Array<{ startMarker: string; endMarker: string }>;
 }
+
+const LEGACY_HOOK_PREFIXES = [
+  { js: 'nodesify-graphify' }, // 0.3–0.9 JS-format hooks
+  { shell: 'nodesify-graphify' }, // pre-0.3 shell-format hooks
+];
 
 const HOOK_DEFS: HookDef[] = [
   {
     hookName: 'post-commit',
     script: POST_COMMIT_SCRIPT,
-    startMarker: '// nodesify-graphify-hook-start',
-    endMarker: '// nodesify-graphify-hook-end',
-    legacyStartMarker: '# nodesify-graphify-hook-start',
-    legacyEndMarker: '# nodesify-graphify-hook-end',
+    startMarker: '// astria-hook-start',
+    endMarker: '// astria-hook-end',
+    legacyMarkers: [
+      { startMarker: '// nodesify-graphify-hook-start', endMarker: '// nodesify-graphify-hook-end' },
+      { startMarker: '# nodesify-graphify-hook-start', endMarker: '# nodesify-graphify-hook-end' },
+    ],
   },
   {
     hookName: 'post-checkout',
     script: POST_CHECKOUT_SCRIPT,
-    startMarker: '// nodesify-graphify-checkout-hook-start',
-    endMarker: '// nodesify-graphify-checkout-hook-end',
-    legacyStartMarker: '# nodesify-graphify-checkout-hook-start',
-    legacyEndMarker: '# nodesify-graphify-checkout-hook-end',
+    startMarker: '// astria-checkout-hook-start',
+    endMarker: '// astria-checkout-hook-end',
+    legacyMarkers: [
+      { startMarker: '// nodesify-graphify-checkout-hook-start', endMarker: '// nodesify-graphify-checkout-hook-end' },
+      { startMarker: '# nodesify-graphify-checkout-hook-start', endMarker: '# nodesify-graphify-checkout-hook-end' },
+    ],
   },
 ];
 
@@ -113,6 +122,17 @@ function stripMarkerSection(content: string, startMarker: string, endMarker: str
     'g'
   );
   return content.replace(regex, '\n');
+}
+
+function stripAllLegacySections(content: string, def: HookDef): string {
+  for (const legacy of def.legacyMarkers) {
+    content = stripMarkerSection(content, legacy.startMarker, legacy.endMarker);
+  }
+  return content;
+}
+
+function hasLegacyMarker(content: string, def: HookDef): boolean {
+  return def.legacyMarkers.some((l) => content.includes(l.startMarker));
 }
 
 function isOwnShebangOnly(content: string): boolean {
@@ -167,9 +187,9 @@ function installHook(hooksDir: string, def: HookDef): string {
 
   if (fs.existsSync(hookPath)) {
     let content = fs.readFileSync(hookPath, 'utf-8');
-    const hadLegacy = content.includes(def.legacyStartMarker);
+    const hadLegacy = hasLegacyMarker(content, def);
     if (hadLegacy) {
-      content = stripMarkerSection(content, def.legacyStartMarker, def.legacyEndMarker);
+      content = stripAllLegacySections(content, def);
     }
 
     if (isOwnShebangOnly(content)) {
@@ -182,9 +202,9 @@ function installHook(hooksDir: string, def: HookDef): string {
 
     if (content.includes(def.startMarker)) {
       // Refresh the script body when it predates the current template
-      // (sentinel: runGraphifyUpdate resolver). Without this, fixed
+      // (sentinel: ASTRIA_HOOK_VERSION resolver). Without this, fixed
       // templates would never reach already-installed hooks.
-      if (!content.includes("GRAPHIFY_HOOK_VERSION = '2'")) {
+      if (!content.includes("ASTRIA_HOOK_VERSION = '3'")) {
         content = stripMarkerSection(content, def.startMarker, def.endMarker);
         const refreshed =
           content.trim() === '' || SHEBANGS.includes(content.trim())
@@ -219,12 +239,12 @@ function uninstallHook(hooksDir: string, def: HookDef): string {
   }
 
   let content = fs.readFileSync(hookPath, 'utf-8');
-  if (!content.includes(def.startMarker) && !content.includes(def.legacyStartMarker)) {
+  if (!content.includes(def.startMarker) && !hasLegacyMarker(content, def)) {
     return `${def.hookName}: not installed`;
   }
 
   content = stripMarkerSection(content, def.startMarker, def.endMarker);
-  content = stripMarkerSection(content, def.legacyStartMarker, def.legacyEndMarker);
+  content = stripAllLegacySections(content, def);
 
   if (isOwnShebangOnly(content)) {
     fs.unlinkSync(hookPath);
@@ -268,7 +288,7 @@ export function statusGitHooks(projectDir: string): string[] {
       const content = fs.readFileSync(hookPath, 'utf-8');
       if (content.includes(def.startMarker)) {
         results.push(`${def.hookName}: installed`);
-      } else if (content.includes(def.legacyStartMarker)) {
+      } else if (hasLegacyMarker(content, def)) {
         results.push(`${def.hookName}: installed (legacy format - run hook install to migrate)`);
       } else {
         results.push(`${def.hookName}: not installed`);
@@ -280,3 +300,7 @@ export function statusGitHooks(projectDir: string): string[] {
 
   return results;
 }
+
+// Kept for reference in tests: the legacy marker families this installer
+// recognizes (nodesify-graphify JS hooks, and pre-0.3 shell hooks).
+export { LEGACY_HOOK_PREFIXES };

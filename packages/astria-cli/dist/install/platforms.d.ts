@@ -5,7 +5,7 @@ export interface PlatformConfig {
     agentsMd: boolean;
     geminiMd: boolean;
     settingsHook: 'claude' | 'codex' | 'gemini' | 'opencode' | 'none';
-    /** Register the graphify MCP server in this platform's project-scoped config. */
+    /** Register the astria MCP server in this platform's project-scoped config. */
     mcp?: 'zcode' | 'claude' | 'cursor' | 'gemini';
 }
 export declare const PLATFORMS: Record<string, PlatformConfig>;

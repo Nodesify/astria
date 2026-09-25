@@ -1,6 +1,6 @@
 "use strict";
 /**
- * End-to-end test — runs the COMPILED CLI (dist/index.js + dist/graphify.node)
+ * End-to-end test — runs the COMPILED CLI (dist/index.js + dist/astria.node)
  * against a real fixture project: full pipeline, stats, query, status, and
  * export, all through the actual binary the user installs. Skips when dist
  * has not been built yet (CI builds the native module and the CLI before
@@ -14,7 +14,7 @@ const fs_1 = require("fs");
 const os_1 = require("os");
 const path_1 = require("path");
 const cliEntry = (0, path_1.resolve)(__dirname, '..', '..', 'dist', 'index.js');
-const nativeBin = (0, path_1.resolve)(__dirname, '..', '..', 'dist', 'graphify.node');
+const nativeBin = (0, path_1.resolve)(__dirname, '..', '..', 'dist', 'astria.node');
 const fixtureDir = (0, path_1.resolve)(__dirname, '..', '..', '..', '..', 'tests', 'fixtures', 'python');
 let passed = 0;
 let failed = 0;
@@ -35,21 +35,21 @@ function runCli(args, cwd) {
     });
 }
 if (!(0, fs_1.existsSync)(cliEntry) || !(0, fs_1.existsSync)(nativeBin)) {
-    console.log('(dist not built - skipping CLI e2e tests; run `npm run build` and copy graphify.node)');
+    console.log('(dist not built - skipping CLI e2e tests; run `npm run build` and copy astria.node)');
 }
 else if (!(0, fs_1.existsSync)(fixtureDir)) {
     console.log(`(fixture missing: ${fixtureDir} - skipping CLI e2e tests)`);
 }
 else {
-    const tmp = (0, fs_1.mkdtempSync)((0, path_1.join)((0, os_1.tmpdir)(), 'graphify-e2e-'));
+    const tmp = (0, fs_1.mkdtempSync)((0, path_1.join)((0, os_1.tmpdir)(), 'astria-e2e-'));
     const project = (0, path_1.join)(tmp, 'project');
     (0, fs_1.cpSync)(fixtureDir, project, { recursive: true });
     // 1. Full pipeline through the binary
     const run = runCli(['run', '.'], project);
     assert(run.status === 0, `run should exit 0, got ${run.status}: ${String(run.stderr).slice(0, 200)}`);
-    assert((0, fs_1.existsSync)((0, path_1.join)(project, '.graphify', 'db.sqlite')), 'run should create .graphify/db.sqlite');
-    assert((0, fs_1.existsSync)((0, path_1.join)(project, '.graphify', 'graph_report.md')), 'run should create graph_report.md');
-    assert((0, fs_1.existsSync)((0, path_1.join)(project, '.graphify', 'graph.json')), 'run should create graph.json');
+    assert((0, fs_1.existsSync)((0, path_1.join)(project, '.astria', 'db.sqlite')), 'run should create .astria/db.sqlite');
+    assert((0, fs_1.existsSync)((0, path_1.join)(project, '.astria', 'graph_report.md')), 'run should create graph_report.md');
+    assert((0, fs_1.existsSync)((0, path_1.join)(project, '.astria', 'graph.json')), 'run should create graph.json');
     // 2. Incremental run adds nothing on unchanged files
     const rerun = runCli(['update', '.'], project);
     assert(rerun.status === 0, `update should exit 0 on unchanged files`);
@@ -83,25 +83,25 @@ else {
     // 6b. wiki writes an agent-crawlable markdown wiki with a valid index
     const wiki = runCli(['wiki', '--graph', '.'], project);
     assert(wiki.status === 0, `wiki should exit 0, got ${wiki.status}: ${String(wiki.stderr).slice(0, 200)}`);
-    const wikiIndex = (0, path_1.join)(project, '.graphify', 'wiki', 'index.md');
-    assert((0, fs_1.existsSync)(wikiIndex), 'wiki should create .graphify/wiki/index.md');
+    const wikiIndex = (0, path_1.join)(project, '.astria', 'wiki', 'index.md');
+    assert((0, fs_1.existsSync)(wikiIndex), 'wiki should create .astria/wiki/index.md');
     const index = (0, fs_1.readFileSync)(wikiIndex, 'utf-8');
     assert(index.includes('## Communities'), 'wiki index should list communities');
     // every relative link in the index resolves to a real article
     const links = [...index.matchAll(/\]\(([^)]+\.md)\)/g)].map((m) => m[1]);
     assert(links.length > 0, 'wiki index should contain article links');
     for (const link of links) {
-        assert((0, fs_1.existsSync)((0, path_1.join)(project, '.graphify', 'wiki', link)), `wiki index link should resolve: ${link}`);
+        assert((0, fs_1.existsSync)((0, path_1.join)(project, '.astria', 'wiki', link)), `wiki index link should resolve: ${link}`);
     }
     // 7. a missing graph fails with a non-zero exit, not a silent success
     const missing = runCli(['stats', '--graph', (0, path_1.join)(tmp, 'nowhere')], tmp);
     assert(missing.status !== 0, 'stats on a nonexistent graph should exit non-zero');
     assert(String(missing.stderr).length > 0 || String(missing.stdout).length > 0, 'stats on a nonexistent graph should print an error');
-    assert(!(0, fs_1.existsSync)((0, path_1.join)(tmp, 'nowhere', '.graphify')), 'failed stats must not create a .graphify directory');
+    assert(!(0, fs_1.existsSync)((0, path_1.join)(tmp, 'nowhere', '.astria')), 'failed stats must not create a .astria directory');
     // 8. the MCP server refuses to serve (or create) a graph that was never built
     const mcpMissing = runCli(['mcp', '--graph', (0, path_1.join)(tmp, 'nowhere2')], tmp);
     assert(mcpMissing.status !== 0, 'mcp on a nonexistent graph should exit non-zero');
-    assert(!(0, fs_1.existsSync)((0, path_1.join)(tmp, 'nowhere2', '.graphify')), 'failed mcp must not create a .graphify directory');
+    assert(!(0, fs_1.existsSync)((0, path_1.join)(tmp, 'nowhere2', '.astria')), 'failed mcp must not create a .astria directory');
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failed > 0) {
         process.exit(1);

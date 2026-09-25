@@ -42,14 +42,14 @@ async function runCommand(path, opts) {
     if (opts.model)
         process.env.GRAPHIFY_LLM_MODEL = opts.model;
     try {
-        console.log(`Running graphify pipeline on: ${path}`);
+        console.log(`Running astria pipeline on: ${path}`);
         const result = (0, native_1.runPipeline)(path, opts.dedup === false, opts.embed === true);
         console.log(`Nodes added: ${result.nodesAdded}`);
         console.log(`Edges added: ${result.edgesAdded}`);
         console.log(`Communities: ${result.communities}`);
-        console.log(`Report written to: ${pathMod.join(path, '.graphify', 'graph_report.md')}`);
+        console.log(`Report written to: ${pathMod.join(path, '.astria', 'graph_report.md')}`);
         if (opts.wiki) {
-            const outDir = pathMod.join(path, '.graphify', 'wiki');
+            const outDir = pathMod.join(path, '.astria', 'wiki');
             const articles = (0, native_1.exportWiki)(path, outDir, 25);
             console.log(`Wiki written: ${articles} articles -> ${pathMod.join(outDir, 'index.md')}`);
             if (opts.global) {

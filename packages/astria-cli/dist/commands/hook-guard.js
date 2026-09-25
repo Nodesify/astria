@@ -25,15 +25,21 @@ function readStdinJson() {
 }
 function graphDir() {
     const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    const g = (0, path_1.join)(cwd, '.graphify');
+    const g = (0, path_1.join)(cwd, '.astria');
     return (0, fs_1.existsSync)((0, path_1.join)(g, 'graph.json')) ? g : null;
+}
+/// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`.
+function envVar(name) {
+    return (process.env[`ASTRIA_${name}`] ||
+        process.env[`GRAPHIFY_${name}`] ||
+        undefined);
 }
 function orientedRecently(gdir) {
     try {
         const stamp = (0, fs_1.readFileSync)((0, path_1.join)(gdir, 'cache', 'last_query_stamp'), 'utf-8');
         const ts = Number(stamp.split('\t')[0]);
         const age = Date.now() / 1000 - ts;
-        const ttl = Number(process.env.GRAPHIFY_HOOK_STRICT_TTL || 1800);
+        const ttl = Number(envVar('HOOK_STRICT_TTL') || 1800);
         return Number.isFinite(ts) && age < ttl;
     }
     catch {
@@ -70,8 +76,8 @@ function hookGuard(mode, _args) {
         const gdir = graphDir();
         if (!gdir)
             return;
-        const strict = process.env.GRAPHIFY_HOOK_STRICT === '1' ||
-            (process.env.GRAPHIFY_HOOK_STRICT !== '0' && _args.includes('--strict'));
+        const strict = envVar('HOOK_STRICT') === '1' ||
+            (envVar('HOOK_STRICT') !== '0' && _args.includes('--strict'));
         if (mode === 'search') {
             const ti = input.tool_input || {};
             const isGrepTool = Boolean(ti.pattern);
@@ -82,7 +88,7 @@ function hookGuard(mode, _args) {
                 : SEARCH_COMMANDS.has(first);
             if (isGrepTool || isSearchBash) {
                 emitNudge('MANDATORY: Before searching with grep, check the knowledge graph first: ' +
-                    '`nodesify-graphify query "<question>"` returns structured answers with ' +
+                    '`astria query "<question>"` returns structured answers with ' +
                     'file:line provenance in one call. The graph is already built for this repo.');
             }
             return;
@@ -92,7 +98,7 @@ function hookGuard(mode, _args) {
             if (!filePath)
                 return;
             const resolved = (0, path_1.resolve)(filePath);
-            if (resolved.includes('.graphify'))
+            if (resolved.includes('.astria'))
                 return;
             const ext = (0, path_1.extname)(resolved).toLowerCase();
             if (ext && !SOURCE_EXTS.has(ext))
@@ -103,7 +109,7 @@ function hookGuard(mode, _args) {
                 const graphMtime = require('fs').statSync((0, path_1.join)(gdir, 'db.sqlite')).mtimeMs;
                 if (fileMtime > graphMtime) {
                     emitNudge(`STALE GRAPH: ${filePath} changed after the last graph build. ` +
-                        'Run `nodesify-graphify update .` before trusting graph answers.');
+                        'Run `astria update .` before trusting graph answers.');
                     return;
                 }
             }
@@ -122,7 +128,7 @@ function hookGuard(mode, _args) {
                     (0, fs_1.mkdirSync)((0, path_1.join)(gdir, 'cache', 'hook_sessions'), { recursive: true });
                     (0, fs_1.writeFileSync)(marker, String(Date.now()), { flag: 'wx' });
                     emitDeny('ORIENT FIRST: this read is not yet covered by a graph query. ' +
-                        'Run `nodesify-graphify query "<question>"` (or explain/path) once — ' +
+                        'Run `astria query "<question>"` (or explain/path) once — ' +
                         'further reads then proceed without interruption for 30 minutes.');
                 }
                 catch {

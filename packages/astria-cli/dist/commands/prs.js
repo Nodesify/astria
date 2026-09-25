@@ -38,9 +38,9 @@ function prFiles(number) {
     }
 }
 function loadGraphNodes(graphRoot) {
-    const graphJson = (0, path_1.join)(graphRoot, '.graphify', 'graph.json');
+    const graphJson = (0, path_1.join)(graphRoot, '.astria', 'graph.json');
     if (!(0, fs_1.existsSync)(graphJson)) {
-        throw new Error(`no graph found at ${graphJson} — run 'nodesify-graphify run ${graphRoot}' first`);
+        throw new Error(`no graph found at ${graphJson} — run 'astria run ${graphRoot}' first`);
     }
     const graph = JSON.parse((0, fs_1.readFileSync)(graphJson, 'utf-8'));
     return (graph.nodes || []).map((n) => ({

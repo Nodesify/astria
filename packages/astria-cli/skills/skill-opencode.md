@@ -1,44 +1,44 @@
 ---
-name: graphify
-description: Turn any directory into a queryable knowledge graph. Trigger: /graphify
+name: astria
+description: Turn any directory into a queryable knowledge graph. Trigger: /astria
 ---
 
-# graphify skill (OpenCode)
+# astria skill (OpenCode)
 
-When the user types `/graphify`, run the nodesify-graphify knowledge graph pipeline.
+When the user types `/astria`, run the astria knowledge graph pipeline.
 
 ## Step 1 - Build or update the graph
 
 Run via bash:
 ```bash
-node -e "const fs=require('fs');if(!fs.existsSync('.graphify/graph.json')){console.log('missing')}else{const age=Math.round((Date.now()-fs.statSync('.graphify/graph.json').mtimeMs)/60000);console.log(age>30?'stale':'fresh')}"
+node -e "const fs=require('fs');if(!fs.existsSync('.astria/graph.json')){console.log('missing')}else{const age=Math.round((Date.now()-fs.statSync('.astria/graph.json').mtimeMs)/60000);console.log(age>30?'stale':'fresh')}"
 ```
 
-- `missing` → run `nodesify-graphify run .`
-- `stale` → run `nodesify-graphify update .`
+- `missing` → run `astria run .`
+- `stale` → run `astria update .`
 - `fresh` → skip to Step 2
 
 ## Step 2 - Read the report
 
-Read `.graphify/graph_report.md` and summarize: hub nodes, communities, surprising connections.
+Read `.astria/graph_report.md` and summarize: hub nodes, communities, surprising connections.
 ## Prefer MCP tools when connected
 
-If the `graphify` MCP server is connected (registered by `nodesify-graphify install` for claude, cursor, gemini, and zcode), prefer its native tools over shell commands: `repo_map` to orient, `query_graph` for a natural-language question, `explain`/`get_neighbors` for one symbol, `shortest_path` to trace a connection, `affected` before changing a shared symbol. Use the CLI commands below only when the server is not connected.
+If the `astria` MCP server is connected (registered by `astria install` for claude, cursor, gemini, and zcode), prefer its native tools over shell commands: `repo_map` to orient, `query_graph` for a natural-language question, `explain`/`get_neighbors` for one symbol, `shortest_path` to trace a connection, `affected` before changing a shared symbol. Use the CLI commands below only when the server is not connected.
 
 
 ## Enforcement Rules
 
-When `.graphify/` exists, the graphify plugin intercepts `view`, `grep`, `glob`, `ls`, and `bash` tools. You MUST use graphify commands first:
+When `.astria/` exists, the astria plugin intercepts `view`, `grep`, `glob`, `ls`, and `bash` tools. You MUST use astria commands first:
 
 | Question | Command |
 |----------|---------|
-| Where is X? | `nodesify-graphify query "X"` |
-| How does X connect to Y? | `nodesify-graphify path "X" "Y"` |
-| What breaks if X changes? | `nodesify-graphify affected "X"` |
-| How does X reach Y (call direction)? | `nodesify-graphify path "X" "Y" --directed` |
-| What does X do? | `nodesify-graphify explain "X"` |
-| Architecture overview? | Read `.graphify/graph_report.md` |
+| Where is X? | `astria query "X"` |
+| How does X connect to Y? | `astria path "X" "Y"` |
+| What breaks if X changes? | `astria affected "X"` |
+| How does X reach Y (call direction)? | `astria path "X" "Y" --directed` |
+| What does X do? | `astria explain "X"` |
+| Architecture overview? | Read `.astria/graph_report.md` |
 
 ## After editing code
 
-Run `nodesify-graphify update .` to keep the graph current.
+Run `astria update .` to keep the graph current.

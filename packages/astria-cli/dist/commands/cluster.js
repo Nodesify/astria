@@ -41,7 +41,7 @@ async function clusterCommand(path) {
         console.log(`Running cluster + analyze on: ${path}`);
         const result = (0, native_1.clusterOnly)(path);
         console.log(`Communities: ${result.communities}`);
-        console.log(`Report updated at: ${pathMod.join(path, '.graphify', 'graph_report.md')}`);
+        console.log(`Report updated at: ${pathMod.join(path, '.astria', 'graph_report.md')}`);
     }
     catch (e) {
         console.error(`Error: ${e.message || e}`);

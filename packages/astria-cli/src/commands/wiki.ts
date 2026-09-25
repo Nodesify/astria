@@ -15,7 +15,7 @@ export async function wikiCommand(opts: {
     if (opts.format === 'obsidian') {
       const notes = exportObsidian(opts.graph, opts.out);
       console.log(`Obsidian vault exported: ${notes} notes -> ${resolved}`);
-      console.log(`Open ${resolved} as a vault in Obsidian (graphify.canvas included)`);
+      console.log(`Open ${resolved} as a vault in Obsidian (astria.canvas included)`);
       return;
     }
 

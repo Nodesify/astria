@@ -20,6 +20,7 @@ const diagnose_1 = require("./commands/diagnose");
 const feedback_1 = require("./commands/feedback");
 const global_1 = require("./commands/global");
 const hook_guard_1 = require("./commands/hook-guard");
+const migrate_1 = require("./commands/migrate");
 const update_1 = require("./commands/update");
 const watch_1 = require("./commands/watch");
 const cluster_1 = require("./commands/cluster");
@@ -32,7 +33,7 @@ const hook_1 = require("./commands/hook");
 const program = new commander_1.Command();
 exports.program = program;
 program
-    .name('nodesify-graphify')
+    .name('astria')
     .description('Turn any folder into a queryable knowledge graph')
     .version(require('../package.json').version);
 program
@@ -42,7 +43,7 @@ program
     .option('--no-dedup', 'Skip near-duplicate node merging')
     .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), or gemini')
     .option('--model <name>', 'Semantic LLM model name (backend-specific)')
-    .option('--wiki', 'Also export a markdown wiki to .graphify/wiki')
+    .option('--wiki', 'Also export a markdown wiki to .astria/wiki')
     .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
     .option('--global', 'After building, merge this repo into the cross-repo global graph')
     .option('--as <tag>', 'Repo tag for --global (defaults to the directory name)')
@@ -157,7 +158,7 @@ program
     .command('wiki')
     .description('Export a Wikipedia-style markdown wiki (index.md + one article per community and god node)')
     .option('--graph <path>', 'Path to project root', '.')
-    .option('--out <dir>', 'Output directory', '.graphify/wiki')
+    .option('--out <dir>', 'Output directory', '.astria/wiki')
     .option('--max-nodes <n>', 'Max key concepts listed per community article', '25')
     .option('--format <type>', 'markdown (wiki articles) or obsidian (vault: per-node notes + canvas)', 'markdown')
     .action(wiki_1.wikiCommand);
@@ -183,6 +184,11 @@ program
     .description('Check graph health and staleness')
     .option('--graph <path>', 'Path to project root', '.')
     .action(status_1.statusCommand);
+program
+    .command('migrate')
+    .description('Migrate a pre-1.0 .graphify layout to .astria (renames the data folder, ignore file, and global store)')
+    .option('--graph <path>', 'Path to project root', '.')
+    .action(migrate_1.migrateCommand);
 (0, install_1.registerInstallCommand)(program);
 (0, hook_1.registerHookCommand)(program);
 program
@@ -204,7 +210,7 @@ program
     .action(feedback_1.saveResultCommand);
 program
     .command('reflect')
-    .description('Aggregate memory outcomes into .graphify/reflections/LESSONS.md')
+    .description('Aggregate memory outcomes into .astria/reflections/LESSONS.md')
     .option('--graph <path>', 'Path to project root', '.')
     .action(feedback_1.reflectCommand);
 const globalCmd = program
@@ -213,7 +219,7 @@ const globalCmd = program
 globalCmd
     .command('add')
     .description('Merge a repo graph into the global store (idempotent by tag)')
-    .argument('<path>', 'Repo root with a .graphify directory')
+    .argument('<path>', 'Repo root with a .astria directory')
     .option('--as <tag>', 'Repo tag (defaults to the directory name)')
     .action(global_1.globalAddCommand);
 globalCmd

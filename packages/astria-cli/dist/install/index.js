@@ -84,7 +84,7 @@ function copySkillFile(platform, cfg) {
     const homeDir = os.homedir();
     const dst = path.join(homeDir, cfg.skillDst);
     if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
-        const overrideDst = path.join(CLAUDE_CONFIG_DIR, 'skills', 'graphify', 'SKILL.md');
+        const overrideDst = path.join(CLAUDE_CONFIG_DIR, 'skills', 'astria', 'SKILL.md');
         copyFile(src, overrideDst);
         messages.push(`Skill file -> ${overrideDst}`);
         return messages;
@@ -106,7 +106,7 @@ function copyFile(src, dst) {
     fs.copyFileSync(src, dst);
 }
 function writeInstallStamp(dir) {
-    const stampPath = path.join(dir, '.graphify_version');
+    const stampPath = path.join(dir, '.astria_version');
     // Same guard as copyFile, applied to the exact value that is written:
     // only a normalized absolute path without traversal segments may reach
     // the filesystem, regardless of how the caller derived it.
@@ -122,7 +122,7 @@ function installPlatform(platform, projectDir) {
     const messages = [];
     if (platform === 'cursor') {
         if ((0, settings_inject_1.injectCursorRule)(projectDir)) {
-            messages.push('Cursor rule -> .cursor/rules/graphify.mdc');
+            messages.push('Cursor rule -> .cursor/rules/astria.mdc');
         }
         else {
             messages.push('Cursor rule: already installed');
@@ -136,7 +136,7 @@ function installPlatform(platform, projectDir) {
         const cfg = platforms_1.PLATFORMS.kiro;
         messages.push(...copySkillFile('kiro', cfg));
         if ((0, settings_inject_1.injectKiroSteering)(projectDir)) {
-            messages.push('Kiro steering -> .kiro/steering/graphify.md');
+            messages.push('Kiro steering -> .kiro/steering/astria.md');
         }
         else {
             messages.push('Kiro steering: already installed');
@@ -158,17 +158,17 @@ function installPlatform(platform, projectDir) {
     if (cfg.claudeMd || cfg.agentsMd || cfg.geminiMd) {
         if (cfg.claudeMd) {
             const result = (0, markdown_inject_1.injectSection)(projectMd, markdown_inject_1.PROJECT_MD_SECTION);
-            messages.push(sectionMessage(result, 'Project CLAUDE.md: graphify section added', 'Project CLAUDE.md: graphify section updated', 'Project CLAUDE.md: graphify section unchanged'));
+            messages.push(sectionMessage(result, 'Project CLAUDE.md: astria section added', 'Project CLAUDE.md: astria section updated', 'Project CLAUDE.md: astria section unchanged'));
         }
         if (cfg.agentsMd) {
             const agentsMd = path.join(projectDir, 'AGENTS.md');
             const result = (0, markdown_inject_1.injectSection)(agentsMd, markdown_inject_1.PROJECT_MD_SECTION);
-            messages.push(sectionMessage(result, 'Project AGENTS.md: graphify section added', 'Project AGENTS.md: graphify section updated', 'Project AGENTS.md: graphify section unchanged'));
+            messages.push(sectionMessage(result, 'Project AGENTS.md: astria section added', 'Project AGENTS.md: astria section updated', 'Project AGENTS.md: astria section unchanged'));
         }
         if (cfg.geminiMd) {
             const geminiMd = path.join(projectDir, 'GEMINI.md');
             const result = (0, markdown_inject_1.injectSection)(geminiMd, markdown_inject_1.PROJECT_MD_SECTION);
-            messages.push(sectionMessage(result, 'Project GEMINI.md: graphify section added', 'Project GEMINI.md: graphify section updated', 'Project GEMINI.md: graphify section unchanged'));
+            messages.push(sectionMessage(result, 'Project GEMINI.md: astria section added', 'Project GEMINI.md: astria section updated', 'Project GEMINI.md: astria section unchanged'));
         }
     }
     switch (cfg.settingsHook) {
@@ -198,7 +198,7 @@ function installPlatform(platform, projectDir) {
             break;
         case 'opencode':
             if ((0, settings_inject_1.injectOpenCodePlugin)(projectDir)) {
-                messages.push('OpenCode plugin -> .opencode/plugins/graphify.js');
+                messages.push('OpenCode plugin -> .opencode/plugins/astria.js');
             }
             else {
                 messages.push('OpenCode plugin: already installed');
@@ -259,7 +259,7 @@ function uninstallPlatform(platform, projectDir) {
         if (platform === 'claude') {
             const configDir = process.env.CLAUDE_CONFIG_DIR;
             if (configDir)
-                dst = path.join(configDir, 'skills', 'graphify', 'SKILL.md');
+                dst = path.join(configDir, 'skills', 'astria', 'SKILL.md');
         }
         try {
             fs.unlinkSync(dst);
@@ -272,19 +272,19 @@ function uninstallPlatform(platform, projectDir) {
     if (cfg.claudeMd) {
         const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
         (0, markdown_inject_1.removeSection)(claudeMdPath);
-        messages.push('User CLAUDE.md: graphify section removed');
+        messages.push('User CLAUDE.md: astria section removed');
     }
     if (cfg.claudeMd) {
         (0, markdown_inject_1.removeSection)(path.join(projectDir, 'CLAUDE.md'));
-        messages.push('Project CLAUDE.md: graphify section removed');
+        messages.push('Project CLAUDE.md: astria section removed');
     }
     if (cfg.agentsMd) {
         (0, markdown_inject_1.removeSection)(path.join(projectDir, 'AGENTS.md'));
-        messages.push('Project AGENTS.md: graphify section removed');
+        messages.push('Project AGENTS.md: astria section removed');
     }
     if (cfg.geminiMd) {
         (0, markdown_inject_1.removeSection)(path.join(projectDir, 'GEMINI.md'));
-        messages.push('Project GEMINI.md: graphify section removed');
+        messages.push('Project GEMINI.md: astria section removed');
     }
     switch (cfg.settingsHook) {
         case 'claude':
