@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: #0b1220;
+    color: #e2e8f0;
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(148,163,184,0.055) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148,163,184,0.055) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+  .glow1 { position: absolute; width: 900px; height: 500px; left: -180px; top: -200px;
+    background: radial-gradient(closest-side, rgba(16,185,129,0.16), transparent); }
+  .glow2 { position: absolute; width: 700px; height: 460px; right: -160px; bottom: -220px;
+    background: radial-gradient(closest-side, rgba(45,212,191,0.12), transparent); }
+  .wrap { position: relative; display: flex; align-items: center; gap: 64px; padding: 0 72px; width: 100%; }
+  .left { flex: 1.15; }
+  .logoRow { display: flex; align-items: center; gap: 18px; margin-bottom: 28px; }
+  .logoRow img { width: 74px; height: 74px; }
+  .brand { font-size: 40px; font-weight: 800; letter-spacing: -0.02em; color: #f1f5f9; }
+  h1 { font-size: 62px; line-height: 1.06; font-weight: 800; letter-spacing: -0.028em; margin-bottom: 22px; }
+  h1 .accent { background: linear-gradient(92deg, #34d399, #2dd4bf); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  p { font-size: 23px; line-height: 1.5; color: #94a3b8; max-width: 560px; }
+  .chips { display: flex; gap: 12px; margin-top: 30px; }
+  .chip { font-size: 15px; font-weight: 600; color: #6ee7b7; background: rgba(16,185,129,0.09);
+    border: 1px solid rgba(52,211,153,0.35); border-radius: 999px; padding: 8px 18px; }
+  .term { flex: 0.85; background: #0d1526; border: 1px solid rgba(148,163,184,0.22); border-radius: 16px;
+    box-shadow: 0 30px 60px -20px rgba(2,44,34,0.55); overflow: hidden; }
+  .bar { display: flex; gap: 8px; padding: 13px 16px; background: rgba(148,163,184,0.08);
+    border-bottom: 1px solid rgba(148,163,184,0.12); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .d1 { background: #f87171; } .d2 { background: #fbbf24; } .d3 { background: #34d399; }
+  .body { padding: 20px 22px; font-family: 'JetBrains Mono', monospace; font-size: 15.5px; line-height: 1.85; color: #94a3b8; }
+  .p { color: #34d399; font-weight: 700; } .c { color: #e2e8f0; font-weight: 600; } .a { color: #a5b4fc; }
+  .n { color: #34d399; font-weight: 700; } .r { color: #fbbf24; } .l { color: #64748b; }
+  .meta { border-top: 1px solid rgba(148,163,184,0.14); margin-top: 10px; padding-top: 12px; font-size: 13.5px; color: #64748b; }
+</style>
+</head>
+<body>
+  <div class="grid"></div><div class="glow1"></div><div class="glow2"></div>
+  <div class="wrap">
+    <div class="left">
+      <div class="logoRow">
+        <img src="https://nodesify.github.io/nodesify-graphify/img/logo.svg" alt="">
+        <span class="brand">nodesify-graphify</span>
+      </div>
+      <h1>Understand a codebase <span class="accent">before you touch it</span></h1>
+      <p>Turn any folder into a queryable knowledge graph — deterministic AST extraction in Rust, zero API keys.</p>
+      <div class="chips">
+        <span class="chip">73–79× fewer tokens</span>
+        <span class="chip">21 languages</span>
+        <span class="chip">100% local</span>
+      </div>
+    </div>
+    <div class="term">
+      <div class="bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span></div>
+      <div class="body">
+        <div><span class="p">$</span> <span class="c">nodesify-graphify query</span> <span class="a">"where does auth live?"</span></div>
+        <div><span class="n">NODE</span>&nbsp; authenticate_user()&nbsp; <span class="l">src/auth/auth.rs:45</span></div>
+        <div><span class="n">EDGE</span>&nbsp; middleware <span class="r">─CALLS→</span> authenticate&nbsp; <span class="r">0.97</span></div>
+        <div class="meta">~3,000 tokens per answer · measured, not claimed</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

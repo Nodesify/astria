@@ -1,0 +1,41 @@
+---
+sidebar_position: 5
+title: Semantic enrichment
+---
+
+# Semantic enrichment
+
+Two independent semantic layers, both optional. Without them, the graph is purely structural (AST-extracted) — still fully queryable.
+
+## Local embeddings (no API key)
+
+```bash
+nodesify-graphify run . --embed
+```
+
+Downloads a small local model once (~90 MB, then offline forever) and computes vector embeddings for every node. This adds:
+
+- `similar_to` edges (`INFERRED`, cosine-scored) linking semantically related symbols across files — they flow into clustering, surprising connections, and every export
+- embedding-backed query recall: `query` merges semantic candidates with token matching, so conceptual questions with zero string overlap still find their symbols
+
+Once embeddings exist, every `run`/`update` refreshes them incrementally (offline — the refresh never downloads), and `query` picks them up automatically.
+
+Override the model cache location with `GRAPHIFY_EMBED_CACHE_DIR`.
+
+## LLM enrichment
+
+Set any LLM backend and the pipeline enriches docs, papers, and images into concept nodes automatically.
+
+| Backend | Env vars | Vision |
+|---------|----------|--------|
+| Anthropic Claude (default) | `GRAPHIFY_LLM_API_KEY` | ✓ |
+| OpenAI-compatible (OpenAI, DeepSeek, Ollama, LM Studio, custom) | `GRAPHIFY_LLM_BASE_URL` + `GRAPHIFY_LLM_API_KEY`/`OPENAI_API_KEY` | ✓ |
+| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | ✓ |
+
+- `GRAPHIFY_LLM_BACKEND` selects the backend explicitly
+- `GRAPHIFY_LLM_MODEL` overrides the model
+- Per-run: `nodesify-graphify run . --backend openai --model gpt-4o-mini`
+- Images (png/jpg/webp/gif, ≤5 MB) go through each backend's vision API
+- `GRAPHIFY_LLM_CONCURRENCY` controls the parallel worker pool; long files are chunked and LLM output is validated
+
+Semantic enrichment is a pipeline stage — `enrich_with_semantics()` — that activates only when a backend is configured, so builds stay fully offline and deterministic without one.
