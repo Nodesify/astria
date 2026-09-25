@@ -69,4 +69,4 @@ Each pipeline stage is a pure function in its own crate. Keep extraction determi
 
 ## Release process (maintainers)
 
-Releases are tagged (`vX.Y.Z`) and published by the `Release` workflow via npm trusted publishing; platform binaries are built as `optionalDependencies`. The pre-publish checklist lives in `docs/release-checklist-1.0.0-astria.md`.
+Releases are tagged (`vX.Y.Z`) and published by the `Release` workflow via npm trusted publishing; platform binaries are built as `optionalDependencies`.

@@ -1,6 +1,7 @@
 /target
 **/*.rs.bk
 node_modules/
+packages/astria-cli/dist/
 *.node
 .claude/
 .codex/

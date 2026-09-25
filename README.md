@@ -119,8 +119,6 @@ Pipeline: `detect() → extract() → enrich_with_semantics() → build() → de
 
 Each stage is a pure function in its own crate; semantic enrichment is optional and activates when an LLM backend is configured. SQLite is the persistence layer (extraction cache, file manifest, graph storage, pipeline runs, query history). petgraph provides in-memory algorithms (BFS/DFS, label propagation, shortest path).
 
-Design docs: [design spec](docs/superpowers/specs/2026-04-30-astria-rewrite-design.md), [implementation plan](docs/superpowers/plans/2026-04-30-astria-implementation.md).
-
 ## Build from source
 
 ```bash
