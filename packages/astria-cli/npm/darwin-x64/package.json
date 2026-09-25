@@ -1,0 +1,34 @@
+{
+  "name": "@nodesify/astria-darwin-x64",
+  "version": "1.0.0",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "astria.darwin-x64.node",
+  "files": [
+    "astria.darwin-x64.node"
+  ],
+  "description": "Turn any folder into a queryable knowledge graph",
+  "keywords": [
+    "knowledge-graph",
+    "code-analysis",
+    "tree-sitter",
+    "ast",
+    "code-intelligence"
+  ],
+  "homepage": "https://github.com/Nodesify/astria#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nodesify/astria.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Nodesify/astria/issues"
+  }
+}

@@ -41,8 +41,8 @@ jobs:
           python-version: '3.12'
       # Deliberate: benchmarks the PUBLISHED CLI from npm, not repo HEAD, so
       # the snapshot reflects what users can actually install today.
-      - name: Install nodesify-graphify (published CLI)
-        run: npm install -g @nodesify/graphify
+      - name: Install astria (published CLI)
+        run: npm install -g @nodesify/astria
       - name: Run snapshot benchmark
         run: node scripts/bench/run-snapshot.mjs
       - name: Commit snapshot

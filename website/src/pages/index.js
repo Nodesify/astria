@@ -117,7 +117,7 @@ function HeroTerminal() {
         <span className={styles.terminalTitle}>agent — zsh</span>
       </div>
       <div className={styles.terminalBody}>
-        <div><span className={styles.tPrompt}>$</span> <span className={styles.tCmd}>nodesify-graphify query</span> <span className={styles.tArg}>"where does auth live?"</span></div>
+        <div><span className={styles.tPrompt}>$</span> <span className={styles.tCmd}>astria query</span> <span className={styles.tArg}>"where does auth live?"</span></div>
         <div className={styles.tOut}>
           <div><span className={styles.tNode}>NODE</span>&nbsp;&nbsp;authenticate_user()&nbsp;&nbsp;<span className={styles.tLoc}>src/auth/auth.rs:45</span></div>
           <div><span className={styles.tNode}>NODE</span>&nbsp;&nbsp;AuthMiddleware&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className={styles.tLoc}>src/auth/middleware.rs:12</span></div>
@@ -149,12 +149,12 @@ function Hero() {
             <Link className={clsx('button', 'button--lg', styles.primaryBtn)} to="/docs/getting-started">
               Get started
             </Link>
-            <Link className={clsx('button', 'button--lg', styles.ghostBtn)} href="https://github.com/Nodesify/nodesify-graphify">
+            <Link className={clsx('button', 'button--lg', styles.ghostBtn)} href="https://github.com/Nodesify/astria">
               GitHub ↗
             </Link>
           </div>
           <div className={styles.installRow}>
-            <code className={styles.installCmd}>npm install -g @nodesify/graphify</code>
+            <code className={styles.installCmd}>npm install -g @nodesify/astria</code>
           </div>
         </div>
         <div className={styles.heroVisual}>
@@ -178,7 +178,7 @@ function StatsBand() {
           ))}
         </div>
         <div className={styles.statsFoot}>
-          <Link to="/docs/benchmarks">
+          <Link to="/docs/explanation/benchmarks">
             The numbers, the methodology, and a head-to-head vs the original Graphify →
           </Link>
         </div>
@@ -238,7 +238,7 @@ function CtaBand() {
         <Heading as="h2" className={styles.ctaTitle}>Put your codebase on the graph</Heading>
         <p className={styles.ctaLead}>
           One command, one local directory, no cloud. See{' '}
-          <a href="https://github.com/Nodesify/nodesify-graphify/tree/main/worked" target="_blank" rel="noopener noreferrer">
+          <a href="https://github.com/Nodesify/astria/tree/main/worked" target="_blank" rel="noopener noreferrer">
             worked examples
           </a>{' '}
           — including what the graph got wrong.
@@ -247,7 +247,7 @@ function CtaBand() {
           <Link className={clsx('button', 'button--lg', styles.primaryBtn)} to="/docs/getting-started">
             Read the docs
           </Link>
-          <Link className={clsx('button button--lg', styles.ghostBtn)} to="/docs/cli">
+          <Link className={clsx('button button--lg', styles.ghostBtn)} to="/docs/reference/cli">
             CLI reference
           </Link>
         </div>

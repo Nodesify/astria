@@ -6,7 +6,7 @@ const darkCodeTheme = require('prism-react-renderer').themes.dracula;
 
 // The shipped product version (the npm package the docs describe), not the
 // website's own version. Used by the landing-page badge.
-const productVersion = require('../packages/graphify-cli/package.json').version;
+const productVersion = require('../packages/astria-cli/package.json').version;
 
 // Old (pre-reorganization) doc paths → their new folder. Wired as a
 // `createRedirects` callback so it works for the Next version now and keeps
@@ -32,13 +32,13 @@ function redirectsForMovedDocs(existingPath) {
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: 'nodesify-graphify',
+  title: 'astria',
   tagline: 'Understand a codebase before you touch it',
   favicon: 'img/favicon.svg',
   url: 'https://nodesify.github.io',
-  baseUrl: '/nodesify-graphify/',
+  baseUrl: '/astria/',
   organizationName: 'Nodesify',
-  projectName: 'nodesify-graphify',
+  projectName: 'astria',
   onBrokenLinks: 'throw',
   i18n: {
     defaultLocale: 'en',
@@ -51,12 +51,15 @@ const config = {
       ({
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
-          // 0.8.0 is the latest release; website/docs tracks the next one.
-          lastVersion: '0.8.0',
+          // 1.0.0 is the latest release; website/docs tracks the next one.
+          lastVersion: '1.0.0',
           versions: {
             current: {
               label: 'Next',
               banner: 'unreleased',
+            },
+            '1.0.0': {
+              banner: 'none',
             },
             '0.8.0': {
               banner: 'none',
@@ -65,7 +68,7 @@ const config = {
           // website/ currently lives on the develop branch; switch back to
           // main once it is merged there, or edit links will 404.
           editUrl: ({ versionDocsDirPath, docPath }) =>
-            `https://github.com/Nodesify/nodesify-graphify/edit/develop/website/${versionDocsDirPath}/${docPath}`,
+            `https://github.com/Nodesify/astria/edit/develop/website/${versionDocsDirPath}/${docPath}`,
         },
         blog: {
           showReadingTime: true,
@@ -120,7 +123,7 @@ const config = {
         },
         {
           property: 'og:image',
-          content: 'https://nodesify.github.io/nodesify-graphify/img/og-image.png',
+          content: 'https://nodesify.github.io/astria/img/og-image.png',
         },
         { property: 'og:image:width', content: '1200' },
         { property: 'og:image:height', content: '630' },
@@ -128,13 +131,13 @@ const config = {
         { name: 'twitter:card', content: 'summary_large_image' },
         {
           name: 'twitter:image',
-          content: 'https://nodesify.github.io/nodesify-graphify/img/og-image.png',
+          content: 'https://nodesify.github.io/astria/img/og-image.png',
         },
       ],
       navbar: {
-        title: 'nodesify-graphify',
+        title: 'astria',
         logo: {
-          alt: 'nodesify-graphify logo',
+          alt: 'astria logo',
           src: 'img/logo.svg',
         },
         items: [
@@ -154,7 +157,7 @@ const config = {
             position: 'left',
           },
           {
-            href: 'https://github.com/Nodesify/nodesify-graphify',
+            href: 'https://github.com/Nodesify/astria',
             label: 'GitHub',
             position: 'right',
           },
@@ -172,7 +175,7 @@ const config = {
               },
               {
                 label: 'CLI reference',
-                to: '/docs/cli',
+                to: '/docs/reference/cli',
               },
             ],
           },
@@ -181,11 +184,11 @@ const config = {
             items: [
               {
                 label: 'GitHub',
-                href: 'https://github.com/Nodesify/nodesify-graphify',
+                href: 'https://github.com/Nodesify/astria',
               },
               {
                 label: 'npm',
-                href: 'https://www.npmjs.com/package/@nodesify/graphify',
+                href: 'https://www.npmjs.com/package/@nodesify/astria',
               },
               {
                 label: 'Release notes',

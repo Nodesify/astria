@@ -1,6 +1,6 @@
 {
-  "name": "nodesify-graphify-docs",
-  "version": "0.8.0",
+  "name": "astria-docs",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",

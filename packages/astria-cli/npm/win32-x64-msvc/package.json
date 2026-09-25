@@ -1,0 +1,34 @@
+{
+  "name": "@nodesify/astria-win32-x64-msvc",
+  "version": "1.0.0",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "astria.win32-x64-msvc.node",
+  "files": [
+    "astria.win32-x64-msvc.node"
+  ],
+  "description": "Turn any folder into a queryable knowledge graph",
+  "keywords": [
+    "knowledge-graph",
+    "code-analysis",
+    "tree-sitter",
+    "ast",
+    "code-intelligence"
+  ],
+  "homepage": "https://github.com/Nodesify/astria#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nodesify/astria.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Nodesify/astria/issues"
+  }
+}

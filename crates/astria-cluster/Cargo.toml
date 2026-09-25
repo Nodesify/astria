@@ -1,0 +1,9 @@
+[package]
+name = "astria-cluster"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+astria-core = { workspace = true }
+rusqlite = { workspace = true }
+petgraph = { workspace = true }

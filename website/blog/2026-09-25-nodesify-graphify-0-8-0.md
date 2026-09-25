@@ -19,4 +19,4 @@ Highlights:
 - **Token benchmark** — every run prints a measured corpus-vs-query token comparison (110× on this repo), whether you like the number or not.
 - **Security** — esbuild advisory pinned out, Windows reserved-name guards in exports, learned-edge promotion hardened against stale node references.
 
-The unreleased `Next` docs version already covers what is landing after 0.8.0: the deterministic hypergraph, the cross-repo global graph, graph health diagnostics, and offline-first ingest (SCIP indexes, Postgres introspection, MCP configs). See the [docs](/docs/intro) — and [benchmarks](/docs/benchmarks) for how every number above is measured and reproduced.
+The unreleased `Next` docs version already covers what is landing after 0.8.0: the deterministic hypergraph, the cross-repo global graph, graph health diagnostics, and offline-first ingest (SCIP indexes, Postgres introspection, MCP configs). See the [docs](/docs/intro) — and [benchmarks](/docs/explanation/benchmarks) for how every number above is measured and reproduced.

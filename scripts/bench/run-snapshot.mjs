@@ -1,4 +1,4 @@
-// One-shot benchmark snapshot: original graphify vs nodesify-graphify on the
+// One-shot benchmark snapshot: original graphify vs astria on the
 // same corpus (safishamsi/graphify @91f4d12), same machine (the CI runner).
 // Writes website/src/data/benchmarks-snapshot.json; the workflow commits it.
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -54,7 +54,7 @@ for (const p of ['graphify-out', '.graphify_detect.json', '.graphify_ast.json', 
 }
 
 // 5. ours: structural run (no embed, no LLM) + stats
-const oursRun = timed('nodesify-graphify', ['run', '.'], { cwd: corpus });
+const oursRun = timed('astria', ['run', '.'], { cwd: corpus });
 if (oursRun.r.status !== 0) {
   console.error(oursRun.r.stdout, oursRun.r.stderr);
   process.exit(1);
@@ -64,9 +64,9 @@ const oursCorpusTokens = oursOut.match(/Corpus:\s+.*~([\d,]+) tokens/);
 const oursAvgQuery = oursOut.match(/Avg query cost:\s+~([\d,]+) tokens/);
 const oursReduction = oursOut.match(/Reduction:\s+([\d.]+)x/);
 const oursGraph = oursOut.match(/Graph:\s+([\d,]+) nodes, ([\d,]+) edges/);
-const statsOut = sh('nodesify-graphify', ['stats', '--graph', '.'], { cwd: corpus });
+const statsOut = sh('astria', ['stats', '--graph', '.'], { cwd: corpus });
 const stat = (re) => (statsOut.match(re) ?? [])[1];
-const oursVersion = sh('nodesify-graphify', ['--version']).trim();
+const oursVersion = sh('astria', ['--version']).trim();
 
 // 6. assemble snapshot
 const snapshot = {
@@ -78,7 +78,7 @@ const snapshot = {
     files_detected: origResults.files_detected,
   },
   versions: {
-    nodesify_graphify: oursVersion,
+    astria: oursVersion,
     original: `graphify @ ${ORIG_COMMIT}`,
     python: pythonVersion,
   },
@@ -93,7 +93,7 @@ const snapshot = {
       reduction: origReduction ? Number(origReduction[1]) : null,
     },
   },
-  nodesify_graphify_structural: {
+  astria_structural: {
     build_seconds: Number(oursRun.seconds.toFixed(2)),
     nodes: oursGraph ? num(oursGraph[1]) : (stat(/^Nodes: (\d+)/m) ? num(stat(/^Nodes: (\d+)/m)) : null),
     edges: oursGraph ? num(oursGraph[2]) : (stat(/^Edges: (\d+)/m) ? num(stat(/^Edges: (\d+)/m)) : null),

@@ -27,10 +27,10 @@ jobs:
         # Fail before the 5-leg build matrix spends 30+ minutes on a tag
         # that cannot publish (the v0.8.0 re-tag churn, #46).
         run: |
-          pkg_version=$(node -p "require('./packages/graphify-cli/package.json').version")
+          pkg_version=$(node -p "require('./packages/astria-cli/package.json').version")
           tag_version="${GITHUB_REF_NAME#v}"
           if [ "$pkg_version" != "$tag_version" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match packages/graphify-cli/package.json version ${pkg_version}"
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match packages/astria-cli/package.json version ${pkg_version}"
             exit 1
           fi
 
@@ -45,11 +45,11 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             platform: linux-x64-gnu
-            lib: libgraphify_napi.so
+            lib: libastria_napi.so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             platform: linux-arm64-gnu
-            lib: libgraphify_napi.so
+            lib: libastria_napi.so
             # g++-aarch64-linux-gnu: fastembed's C++ deps (tokenizers/onig)
             # link -lstdc++, which the plain C cross-compiler lacks
             setup: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
@@ -57,15 +57,15 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: win32-x64-msvc
-            lib: graphify_napi.dll
+            lib: astria_napi.dll
           - os: macos-latest
             target: aarch64-apple-darwin
             platform: darwin-arm64
-            lib: libgraphify_napi.dylib
+            lib: libastria_napi.dylib
           - os: macos-latest
             target: x86_64-apple-darwin
             platform: darwin-x64
-            lib: libgraphify_napi.dylib
+            lib: libastria_napi.dylib
             # ONNX Runtime ships no prebuilt binaries for Intel Mac — this
             # build drops the embed feature (clear runtime error on --embed)
             cargo-flags: --no-default-features
@@ -91,21 +91,21 @@ jobs:
         # npm install (not ci) is deliberate: --install-strategy=nested shapes
         # node_modules for the napi tooling; scripts/check-napi-version.mjs
         # guards the lockfile dependency this bypasses.
-        run: cd packages/graphify-cli && npm install --install-strategy=nested
+        run: cd packages/astria-cli && npm install --install-strategy=nested
       - name: Build native binary
         env:
           NAPI_RS_CLI_VERSION: '2.18.4'
-        run: cargo build --release --locked --target ${{ matrix.target }} -p graphify-napi ${{ matrix.cargo-flags }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p astria-napi ${{ matrix.cargo-flags }}
       - name: Copy artifact (Linux/macOS)
         if: runner.os != 'Windows'
-        run: cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/graphify-cli/dist/graphify.node
+        run: cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/astria-cli/dist/astria.node
       - name: Copy artifact (Windows)
         if: runner.os == 'Windows'
-        run: cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/graphify-cli/dist/graphify.node
+        run: cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/astria-cli/dist/astria.node
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: graphify-${{ matrix.platform }}
-          path: packages/graphify-cli/dist/graphify.node
+          name: astria-${{ matrix.platform }}
+          path: packages/astria-cli/dist/astria.node
 
   publish:
     runs-on: ubuntu-latest
@@ -122,19 +122,19 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
-          pattern: 'graphify-*'
+          pattern: 'astria-*'
       - name: Move artifacts
         run: |
-          mkdir -p packages/graphify-cli/npm
-          for dir in artifacts/graphify-*/; do
-            platform=$(basename "$dir" | sed 's/graphify-//')
-            mkdir -p "packages/graphify-cli/npm/$platform"
-            cp "$dir"*.node "packages/graphify-cli/npm/$platform/graphify.$platform.node"
+          mkdir -p packages/astria-cli/npm
+          for dir in artifacts/astria-*/; do
+            platform=$(basename "$dir" | sed 's/astria-//')
+            mkdir -p "packages/astria-cli/npm/$platform"
+            cp "$dir"*.node "packages/astria-cli/npm/$platform/astria.$platform.node"
           done
       - name: Install dependencies
-        run: cd packages/graphify-cli && npm install --install-strategy=nested
+        run: cd packages/astria-cli && npm install --install-strategy=nested
       - name: Build CLI
-        run: cd packages/graphify-cli && npm run build
+        run: cd packages/astria-cli && npm run build
       - name: Upgrade npm for OIDC
         run: |
           npm install -g npm@11
@@ -145,11 +145,11 @@ jobs:
           npm config delete //registry.npmjs.org/:_authToken
           unset NODE_AUTH_TOKEN
       - name: Create platform packages
-        run: cd packages/graphify-cli && npx napi create-npm-dir -t .
+        run: cd packages/astria-cli && npx napi create-npm-dir -t .
       - name: Publish platform packages
         run: |
           unset NODE_AUTH_TOKEN
-          for dir in packages/graphify-cli/npm/*/; do
+          for dir in packages/astria-cli/npm/*/; do
             echo "Publishing $(node -p "require('./$dir/package.json').name")..."
             pushd "$dir"
             npm publish --ignore-scripts --access public --provenance
@@ -163,7 +163,7 @@ jobs:
         # announcing an unpublished package.
         run: |
           unset NODE_AUTH_TOKEN
-          cd packages/graphify-cli && npm publish --ignore-scripts --access public --provenance
+          cd packages/astria-cli && npm publish --ignore-scripts --access public --provenance
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

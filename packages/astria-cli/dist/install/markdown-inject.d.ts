@@ -1,0 +1,7 @@
+export type SectionResult = 'added' | 'updated' | 'unchanged';
+export declare const SECTION_MARKER = "<!-- astria:managed -->";
+export declare function injectSection(filePath: string, content: string): SectionResult;
+export declare function removeSection(filePath: string): boolean;
+export declare const PROJECT_MD_SECTION = "## astria\n\nThis project has an astria knowledge graph at .astria/.\nAccess it through whichever path your agent has:\n- MCP (when an astria MCP server is connected): repo_map, query_graph, explain,\n  get_neighbors, shortest_path, affected.\n- CLI (works everywhere): astria map, query, explain, path, affected.\n\nAlways-on behaviors:\n1. Prefer the graph over repeated text searches for architecture questions, feature\n   location, cross-file logic flow, and change impact; orient with repo_map (or map,\n   or .astria/graph_report.md), and run affected <node> before changing a shared symbol.\n2. Before running grep/ripgrep to locate code, try astria query first --\n   it answers with file:line provenance in one call against the already-built graph.\n3. After modifying code, run astria update . (AST-only, no API cost) so the\n   graph stays fresh; queries then report accurate staleness metadata.";
+export declare const SKILL_REGISTRATION = "\n# astria\n- **astria** (`~/.claude/skills/astria/SKILL.md`) - any input to knowledge graph. Trigger: `/astria`\nWhen the user types `/astria`, invoke the Skill tool with `skill: \"astria\"` before doing anything else.\n";
+//# sourceMappingURL=markdown-inject.d.ts.map

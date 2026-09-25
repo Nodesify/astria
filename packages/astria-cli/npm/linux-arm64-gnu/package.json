@@ -1,0 +1,37 @@
+{
+  "name": "@nodesify/astria-linux-arm64-gnu",
+  "version": "1.0.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "astria.linux-arm64-gnu.node",
+  "files": [
+    "astria.linux-arm64-gnu.node"
+  ],
+  "description": "Turn any folder into a queryable knowledge graph",
+  "keywords": [
+    "knowledge-graph",
+    "code-analysis",
+    "tree-sitter",
+    "ast",
+    "code-intelligence"
+  ],
+  "homepage": "https://github.com/Nodesify/astria#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nodesify/astria.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Nodesify/astria/issues"
+  },
+  "libc": [
+    "glibc"
+  ]
+}

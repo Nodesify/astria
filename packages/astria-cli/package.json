@@ -1,0 +1,72 @@
+{
+  "name": "@nodesify/astria",
+  "version": "1.0.0",
+  "description": "Turn any folder into a queryable knowledge graph",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "astria": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "!dist/__tests__/**",
+    "skills/**/*",
+    "README.md",
+    "LICENSE",
+    "!dist/astria.node"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "napi:build": "napi build --platform --release dist",
+    "napi:dev": "napi build --platform dist",
+    "napi:artifacts": "napi artifacts",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "npx tsx src/__tests__/cli.test.ts && npx tsx src/__tests__/install.test.ts && npx tsx src/__tests__/hooks.test.ts && npx tsx src/__tests__/e2e.test.ts"
+  },
+  "keywords": [
+    "knowledge-graph",
+    "code-analysis",
+    "tree-sitter",
+    "ast",
+    "code-intelligence"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nodesify/astria.git"
+  },
+  "homepage": "https://github.com/Nodesify/astria#readme",
+  "bugs": {
+    "url": "https://github.com/Nodesify/astria/issues"
+  },
+  "dependencies": {
+    "commander": "^12"
+  },
+  "devDependencies": {
+    "tsx": "^4",
+    "typescript": "^5",
+    "@types/node": "^22",
+    "@napi-rs/cli": "^2.18.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "napi": {
+    "name": "astria",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
+      ]
+    }
+  },
+  "optionalDependencies": {
+    "@nodesify/astria-win32-x64-msvc": "1.0.0",
+    "@nodesify/astria-darwin-x64": "1.0.0",
+    "@nodesify/astria-linux-x64-gnu": "1.0.0",
+    "@nodesify/astria-darwin-arm64": "1.0.0",
+    "@nodesify/astria-linux-arm64-gnu": "1.0.0"
+  }
+}
