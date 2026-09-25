@@ -7,6 +7,7 @@ node_modules/
 .cursor/
 .gemini/
 .graphify/
+.astria/
 .fastembed_cache/
 
 # benchmark scratch workspace
