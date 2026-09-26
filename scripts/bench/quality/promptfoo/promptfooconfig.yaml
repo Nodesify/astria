@@ -16,9 +16,9 @@ description: 'Retrieval quality: astria vs original graphify, same corpus, blind
 prompts:
   - '{{question}}'
 providers:
-  - id: file://astria-provider.mjs
+  - id: file://astria-provider.js
     label: astria
-  - id: file://graphify-provider.mjs
+  - id: file://graphify-provider.js
     label: graphify (original)
 tests: tests.generated.yaml
 defaultTest:
@@ -27,9 +27,10 @@ defaultTest:
   # rubric and returns a verdict reliably (gpt-4o-mini class or above).
   # In CI the repo variable JUDGE_MODEL (Settings > Actions > Variables)
   # overrides this id via --grader; this default applies to local runs.
+  # Avoid ~-prefixed OpenRouter aliases: promptfoo's provider parser cannot
+  # load them — use pinned ids like openrouter:deepseek/deepseek-v4-flash.
   options:
-    provider:
-      id: openrouter:openai/gpt-4o-mini
+    provider: openrouter:openai/gpt-4o-mini
   assert:
     - type: llm-rubric
       value: '{{rubric}}'
