@@ -74,6 +74,10 @@ jobs:
         env:
           PROMPTFOO_JUDGE_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
+          # Judge model is set in repo Settings > Secrets and variables >
+          # Actions > Variables as JUDGE_MODEL (any OpenRouter model id);
+          # falls back to the default when unset.
+          JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'openrouter:openai/gpt-4o-mini' }}
           BENCH_CORPUS: ${{ github.workspace }}/bench-work/corpus
           ASTRIA_CMD: astria
           GRAPHIFY_CMD: ${{ github.workspace }}/bench-work/venv/bin/graphify
@@ -88,7 +92,7 @@ jobs:
           node scripts/bench/quality/promptfoo/gen-promptfoo-tests.mjs
           mkdir -p scripts/bench/quality/out
           cd scripts/bench/quality/promptfoo
-          npx --yes promptfoo@latest eval -c promptfooconfig.yaml --output ../../out/promptfoo-results.json
+          npx --yes promptfoo@latest eval -c promptfooconfig.yaml --grader "$JUDGE_MODEL" --output ../../out/promptfoo-results.json
 
       - name: Upload blind-judging results
         if: always()
