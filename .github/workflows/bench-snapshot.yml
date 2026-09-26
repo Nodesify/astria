@@ -70,7 +70,6 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -84,7 +83,9 @@ jobs:
       - name: Build the graph over this repo
         run: astria run .
       - name: Retrieval quality (recall@k / MRR)
-        run: node scripts/bench/quality/run-quality.mjs --out website/src/data/quality-snapshot.json
+        # Blocking with a floor, not a ceiling: recall@5 below 50% fails the
+        # run, so ranking regressions gate the snapshot.
+        run: node scripts/bench/quality/run-quality.mjs --out website/src/data/quality-snapshot.json --min-recall5 50
       - name: Commit quality snapshot
         run: |
           git config user.name "github-actions[bot]"
@@ -93,3 +94,29 @@ jobs:
           git diff --cached --quiet || git commit -m "chore(bench): update retrieval quality snapshot"
           git pull --rebase origin develop
           git push
+
+  # Blind LLM judging (promptfoo): gated on the judge-model key; skips with a
+  # notice until the secret is added. Finishing the original-tool side of the
+  # comparison is tracked in issue #80.
+  judge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: snapshot
+    continue-on-error: true
+    env:
+      PROMPTFOO_JUDGE_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+      - name: Install astria (published CLI)
+        run: npm install -g @nodesify/astria
+      - name: Blind judging (promptfoo)
+        run: |
+          if [ -z "$PROMPTFOO_JUDGE_KEY" ]; then
+            echo "PROMPTFOO_JUDGE_KEY is not set — skipping blind judging (see issue #80)."
+            exit 0
+          fi
+          cd scripts/bench/quality/promptfoo
+          npx --yes promptfoo@latest eval -c promptfooconfig.yaml

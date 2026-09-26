@@ -49,9 +49,12 @@ The miss mode was consistent and fixable:
 |---|---|---|---|
 | 42.9% | 65.7% | 85.7% | 0.537 |
 
-(35/35 answered, avg 0.19 s/query.) Remaining headroom: semantic recall via
-`--embed` for paraphrases with no lexical overlap, and per-answer
-doc-heading caps; measure before and after with this harness.
+(35/35 answered, avg 0.19 s/query.) Note the harness measures **hybrid**
+scoring once embeddings exist: `query` merges embedding-seed candidates
+automatically when the graph has vectors and the model is cached — there is
+no flag, and a pure-token comparison would need an opt-out. Remaining
+headroom, in order: a pure-token opt-out for cleaner attribution, doc-heading
+caps measured per-variant, and blind LLM judging of the answers.
 
 ## Blind judging (promptfoo)
 

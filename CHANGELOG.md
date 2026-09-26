@@ -4,6 +4,24 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+### Changed
+- **Doc-heading cap**: query answers render at most 6 document-type nodes —
+  doc headings keyword-match almost anything and could absorb the node
+  budget (the second ranked-fix from the golden-QA indictment).
+- **`--detail high` prefers file-level nodes** when rendering answers, on
+  equal relevance.
+- The quality job in the benchmark snapshot workflow is now **blocking**:
+  fails when golden-QA recall@5 falls below 50% (`--min-recall5`).
+- **Docs-vs-code drift guard** (`scripts/check-docs-sync.mjs`, CI job
+  `docs-sync`): asserts every workspace crate and every emitted relation is
+  documented in ARCHITECTURE.md, and that README/CONTRIBUTING version
+  claims match the workspace metadata. Caught 5 undocumented relations on
+  its first run.
+- Blind LLM judging (promptfoo) is wired as a workflow job, gated on the
+  `PROMPTFOO_JUDGE_KEY` secret.
+
 ## [1.0.4] — 2026-09-26
 
 ### Changed

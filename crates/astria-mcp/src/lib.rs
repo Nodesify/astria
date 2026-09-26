@@ -117,6 +117,7 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 directed,
                 min_strength_for(&detail),
                 cursor,
+                min_strength_for(&detail) >= 0.9,
             )
             .map(|(text, n, e, next)| {
                 let mut out = format!("{text}\n\n({n} nodes, {e} edges)");

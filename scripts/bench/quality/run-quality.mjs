@@ -32,6 +32,8 @@ function parseArgs(argv) {
     out: path.join(scriptDir, 'out', 'quality-results.json'),
     check: false,
     astria: process.env.ASTRIA_BIN || 'astria',
+    embed: false,
+    min_recall5: 0,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -42,6 +44,7 @@ function parseArgs(argv) {
     else if (a === '--depth') opts.depth = argv[++i];
     else if (a === '--k') opts.k = argv[++i].split(',').map(Number);
     else if (a === '--out') opts.out = path.resolve(argv[++i]);
+    else if (a === '--min-recall5') opts.min_recall5 = Number(argv[++i]);
     else if (a === '--check') opts.check = true;
     else { console.error(`unknown arg: ${a}`); process.exit(2); }
   }
@@ -195,6 +198,18 @@ async function main() {
   writeFileSync(opts.out, JSON.stringify(payload, null, 2) + '\n');
   console.log(`\nsummary: ${JSON.stringify(summary)}`);
   console.log(`results: ${opts.out}`);
+
+  // Blocking gate: a recall@5 floor lets CI fail on ranking regressions
+  // without hard-coding a ceiling on quality.
+  if (opts.min_recall5 > 0) {
+    const r5 = summary['recall@5'] ?? 0;
+    if (r5 < opts.min_recall5 / 100) {
+      console.error(`recall@5 ${r5} is below the required ${(opts.min_recall5 / 100).toFixed(2)}`);
+      process.exitCode = 1;
+    } else {
+      console.log(`recall@5 gate passed (${opts.min_recall5}%)`);
+    }
+  }
 }
 
 main().catch((e) => { console.error(e.message); process.exit(1); });
