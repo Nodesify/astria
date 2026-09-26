@@ -33,8 +33,9 @@ this file is the per-version summary.
   stored (regenerable via the documented reproduce commands) and the
   canonical quality results moved to `worked/astria/quality-results.json`;
   workspace crates are marked `publish = false` (distribution is npm-only);
-  the unused root `tests/fixtures/` samples are removed; a pull-request
-  template is added.
+  the root `tests/fixtures/` language samples moved into
+  `crates/astria-napi/tests/fixtures/` beside the integration tests that
+  use them; a pull-request template is added.
 
 ### Removed
 - The six pre-1.0 `@nodesify/graphify*` npm packages (the old CLI and its
