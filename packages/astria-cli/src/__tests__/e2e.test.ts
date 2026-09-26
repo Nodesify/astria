@@ -15,7 +15,7 @@ import { join, resolve } from 'path';
 
 const cliEntry = resolve(__dirname, '..', '..', 'dist', 'index.js');
 const nativeBin = resolve(__dirname, '..', '..', 'dist', 'astria.node');
-const fixtureDir = resolve(__dirname, '..', '..', '..', '..', 'tests', 'fixtures', 'python');
+const fixtureDir = resolve(__dirname, '..', '..', '..', '..', 'crates', 'astria-napi', 'tests', 'fixtures', 'python');
 
 let passed = 0;
 let failed = 0;

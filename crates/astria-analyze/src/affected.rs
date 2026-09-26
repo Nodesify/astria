@@ -50,7 +50,15 @@ struct NodeInfo {
 /// Resolve a user-supplied query to a node id.
 /// Order: exact id → exact label → bare name (label without `()`/leading `.`)
 /// → unique case-insensitive label → unique source-file suffix match.
+/// A stub never wins over a real definition sharing the name: stubs are
+/// speculative (unresolved edge targets, markdown identifiers), and one
+/// shadowing a code symbol makes `affected` report a false empty radius.
 fn resolve_seed(db: &Connection, query: &str) -> astria_core::Result<String> {
+    let bare = query
+        .trim_start_matches('.')
+        .trim_end_matches("()")
+        .to_lowercase();
+
     let exact: Option<String> = db
         .query_row(
             "SELECT id FROM nodes WHERE id = ?1",
@@ -59,6 +67,19 @@ fn resolve_seed(db: &Connection, query: &str) -> astria_core::Result<String> {
         )
         .ok();
     if let Some(id) = exact {
+        let is_stub: bool = db
+            .query_row(
+                "SELECT file_type = 'stub' FROM nodes WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if !is_stub {
+            return Ok(id);
+        }
+        if let Some(better) = prefer_non_stub(db, &bare) {
+            return Ok(better);
+        }
         return Ok(id);
     }
 
@@ -73,18 +94,10 @@ fn resolve_seed(db: &Connection, query: &str) -> astria_core::Result<String> {
         return Ok(id);
     }
 
-    // Method labels look like ".foo()" — accept the bare name too.
-    let bare = query
-        .trim_start_matches('.')
-        .trim_end_matches("()")
-        .to_lowercase();
-    let bare_hit: Option<String> = db
-        .query_row(
-            "SELECT id FROM nodes WHERE lower(replace(ltrim(label, '.'), '()', '')) = ?1 LIMIT 2",
-            rusqlite::params![bare],
-            |r| r.get(0),
-        )
-        .ok();
+    // Method labels look like ".foo()" — accept the bare name too. Prefer
+    // non-stub matches (ORDER BY puts stubs last); falls back to a stub when
+    // it is the only owner of the name.
+    let bare_hit: Option<String> = prefer_non_stub(db, &bare);
     if let Some(id) = bare_hit {
         return Ok(id);
     }
@@ -126,6 +139,11 @@ fn resolve_seed(db: &Connection, query: &str) -> astria_core::Result<String> {
         ))),
         _ => Err(AstriaError::Graph(format!("node not found: '{query}'"))),
     }
+}
+
+/// Among all nodes sharing a bare name, pick a real definition over a stub.
+fn prefer_non_stub(db: &Connection, bare: &str) -> Option<String> {
+    astria_core::db::prefer_non_stub_id(db, bare)
 }
 
 /// Render ambiguous matches as actionable `id (file)` options so an agent
@@ -305,6 +323,46 @@ mod tests {
         ",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn stub_does_not_shadow_code_symbol() {
+        // Reproduces the validate_url incident: a stub from an unrelated
+        // markdown file owns the bare name, and the code symbol's callers
+        // were invisible because the seed landed on the stub.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES
+              ('validate_url', 'validate_url', 'stub', 'worked/wiki.md'),
+              ('src_lib::validate_url', 'validate_url()', 'code', 'src/ingest.rs'),
+              ('src_lib::ingest_url', 'ingest_url()', 'code', 'src/ingest.rs');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+              ('src_lib::ingest_url', 'src_lib::validate_url', 'calls', 'EXTRACTED', 'src/ingest.rs');
+            ",
+        )
+        .unwrap();
+
+        let result = affected(&db, "validate_url", 2, None).unwrap();
+        assert_eq!(result.seed, "src_lib::validate_url");
+        assert!(result
+            .hits
+            .iter()
+            .any(|h| h.id == "src_lib::ingest_url" && h.relation == "calls"));
+    }
+
+    #[test]
+    fn stub_only_name_still_resolves() {
+        // When a stub is the only owner of a name, it must still seed —
+        // the preference must not turn real stubs into "not found".
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+             ('starts_with', 'starts_with', 'stub', 'src/a.rs');",
+        )
+        .unwrap();
+        let result = affected(&db, "starts_with", 1, None).unwrap();
+        assert_eq!(result.seed, "starts_with");
     }
 
     #[test]
