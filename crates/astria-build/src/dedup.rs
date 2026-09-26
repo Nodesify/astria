@@ -151,7 +151,10 @@ fn label_shape(label: &str) -> Shape {
     }
     if let Some(dot) = label.rfind('.') {
         let ext = &label[dot + 1..];
-        if dot > 0 && !ext.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        if dot > 0
+            && !ext.is_empty()
+            && ext.len() <= 5
+            && ext.chars().all(|c| c.is_ascii_alphanumeric())
         {
             return Shape::File;
         }
@@ -494,7 +497,14 @@ mod tests {
         // without the shape guard the `validate.rs` file node deleted the
         // `validate_url()` symbol and its callers pointed at the file.
         let db = open_db_in_memory().unwrap();
-        insert(&db, "src_validate", "validate.rs", "code", "validate.rs", Some(1));
+        insert(
+            &db,
+            "src_validate",
+            "validate.rs",
+            "code",
+            "validate.rs",
+            Some(1),
+        );
         insert(
             &db,
             "src_lib::validate_url",

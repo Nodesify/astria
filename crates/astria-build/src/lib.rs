@@ -348,7 +348,11 @@ mod tests {
         // own validate_url — its bare-target call edge must land on the
         // qualified definition, not on the foreign stub.
         let db = open_db_in_memory().unwrap();
-        let wiki = make_extraction_at("worked/wiki_index.md", vec![("validate_url", "validate_url")], vec![]);
+        let wiki = make_extraction_at(
+            "worked/wiki_index.md",
+            vec![("validate_url", "validate_url")],
+            vec![],
+        );
         build(&[wiki], &db).unwrap();
 
         let ingest = make_extraction_at(
