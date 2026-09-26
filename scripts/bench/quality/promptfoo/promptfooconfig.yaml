@@ -22,6 +22,12 @@ providers:
     label: graphify (original)
 tests: tests.generated.yaml
 defaultTest:
+  # The blind judge runs through OpenRouter (OPENROUTER_API_KEY): one key,
+  # any model — switch by editing this id. Needs a model that follows the
+  # rubric and returns a verdict reliably (gpt-4o-mini class or above).
+  options:
+    provider:
+      id: openrouter:openai/gpt-4o-mini
   assert:
     - type: llm-rubric
       value: '{{rubric}}'
