@@ -68,14 +68,13 @@ jobs:
         continue-on-error: true
         env:
           PROMPTFOO_JUDGE_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
-          OPENAI_API_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
           BENCH_CORPUS: ${{ github.workspace }}/bench-work/corpus
           ASTRIA_CMD: astria
           GRAPHIFY_CMD: ${{ github.workspace }}/bench-work/venv/bin/graphify
         run: |
           if [ -z "$PROMPTFOO_JUDGE_KEY" ]; then
-            echo "PROMPTFOO_JUDGE_KEY is not set - skipping blind judging (issue #80)."
+            echo "PROMPTFOO_JUDGE_KEY (OpenRouter key) is not set - skipping blind judging (issue #80)."
             exit 0
           fi
           # The snapshot cleans the original's artifacts before astria runs;
