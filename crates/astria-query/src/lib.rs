@@ -353,12 +353,8 @@ fn stem(token: &str) -> &str {
     }
 }
 
-/// Hybrid seed scoring, layered from cheap/exact to expensive/fuzzy so a
-/// paraphrased or slightly-misspelled question still finds its entry nodes:
-/// 1. label/path substring, exact & prefix token match (deterministic, free)
-/// 2. docstring token matches (where prose descriptions of symbols live)
-/// Common English question/filler words: matching them is noise, not
-/// retrieval signal.
+/// Common filler and question words, filtered before scoring: they carry no
+/// retrieval signal and let prose-heavy nodes win on stopwords alone.
 const STOPWORDS: &[&str] = &[
     "a", "an", "the", "and", "or", "but", "if", "then", "than", "that", "this", "these", "those",
     "there", "here", "of", "in", "on", "at", "by", "for", "with", "from", "into", "about", "as",
@@ -370,6 +366,10 @@ const STOPWORDS: &[&str] = &[
     "each", "other", "more", "most",
 ];
 
+/// Hybrid seed scoring, layered from cheap/exact to expensive/fuzzy so a
+/// paraphrased or slightly-misspelled question still finds its entry nodes:
+/// 1. label/path substring, exact & prefix token match (deterministic, free)
+/// 2. docstring token matches (where prose descriptions of symbols live)
 /// 3. fuzzy token match (Jaro-Winkler) for typos and word variants
 fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> {
     let mut scored: Vec<(f64, NodeIndex)> = Vec::new();
@@ -490,17 +490,20 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
     scored
 }
 
+/// `(visited nodes, observed edges, hop distance from the seeds)`.
+type TraversalResult = (
+    HashSet<NodeIndex>,
+    Vec<(NodeIndex, NodeIndex)>,
+    HashMap<NodeIndex, u32>,
+);
+
 fn bfs_subgraph(
     loaded: &LoadedGraph,
     start_nodes: &[NodeIndex],
     max_depth: usize,
     directed: bool,
     min_strength: f64,
-) -> (
-    HashSet<NodeIndex>,
-    Vec<(NodeIndex, NodeIndex)>,
-    HashMap<NodeIndex, u32>,
-) {
+) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = start_nodes.iter().copied().collect();
     let mut frontier: Vec<NodeIndex> = start_nodes.to_vec();
     let mut edges_seen: Vec<(NodeIndex, NodeIndex)> = Vec::new();
@@ -532,11 +535,7 @@ fn dfs_subgraph(
     max_depth: usize,
     directed: bool,
     min_strength: f64,
-) -> (
-    HashSet<NodeIndex>,
-    Vec<(NodeIndex, NodeIndex)>,
-    HashMap<NodeIndex, u32>,
-) {
+) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = HashSet::new();
     let mut edges_seen: Vec<(NodeIndex, NodeIndex)> = Vec::new();
     let mut stack: Vec<(NodeIndex, usize)> = start_nodes.iter().rev().map(|&n| (n, 0)).collect();
