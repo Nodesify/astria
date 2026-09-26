@@ -25,6 +25,8 @@ defaultTest:
   # The blind judge runs through OpenRouter (OPENROUTER_API_KEY): one key,
   # any model — switch by editing this id. Needs a model that follows the
   # rubric and returns a verdict reliably (gpt-4o-mini class or above).
+  # In CI the repo variable JUDGE_MODEL (Settings > Actions > Variables)
+  # overrides this id via --grader; this default applies to local runs.
   options:
     provider:
       id: openrouter:openai/gpt-4o-mini
