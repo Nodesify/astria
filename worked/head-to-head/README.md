@@ -1,10 +1,10 @@
-# Head-to-head: nodesify-graphify vs the original Python graphify
+# Head-to-head: astria vs the original Python graphify
 
 **Date:** 2026-09-25 · **Machine:** Windows 11 x64, both tools on the same machine.
 
 ## What was compared
 
-| | original graphify | nodesify-graphify |
+| | original graphify | astria |
 |---|---|---|
 | Version | commit `91f4d12` (pyproject v0.1.14) | 0.8.0 (prebuilt native binary) |
 | Runtime | Python 3.12.12 + networkx/graspologic | Rust core + Node CLI (napi-rs) |
@@ -14,7 +14,7 @@ Both tools ran the **structural pipeline only** (detect → AST extract → buil
 
 ## Results (same corpus, structural-only)
 
-| Metric | original graphify | nodesify-graphify |
+| Metric | original graphify | astria |
 |---|---|---|
 | Build time (wall) | **21.92 s** (of which build+cluster+analyze: 20.30 s) | **4.68 s** |
 | Nodes | 719 | 1,479 |
@@ -49,11 +49,11 @@ git clone https://github.com/safishamsi/graphify corpus && cd corpus && git chec
 #   then:   graphify benchmark graphify-out/graph.json
 
 # ours
-nodesify-graphify run .            # structural
-nodesify-graphify run . --embed    # with local embeddings
+astria run .            # structural
+astria run . --embed    # with local embeddings
 ```
 
-Full machine-readable numbers: [`results.json`](./results.json). Historical (older-version) worked examples: [`../graphify-python/review.md`](../graphify-python/review.md), [`../nodesify-graphify/review.md`](../nodesify-graphify/review.md).
+Full machine-readable numbers: [`results.json`](./results.json). Historical (older-version) worked examples: [`../graphify-python/review.md`](../graphify-python/review.md), [`../astria/review.md`](../astria/review.md).
 
 The same comparison is automated: `.github/workflows/bench-snapshot.yml`
 (manual dispatch) runs both tools on a fresh GitHub runner via

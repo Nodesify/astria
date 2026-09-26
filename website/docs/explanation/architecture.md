@@ -98,5 +98,3 @@ Ingest also contributes relation families when the relevant inputs exist: `crate
 - **SQLite** — chosen for its zero-config nature and robust ACID properties, making it perfect for local analysis.
 - **Incremental rebuilds** — the system only re-extracts files that have changed, drastically reducing analysis time for large projects.
 - **napi-rs** — provides near-native performance for the CLI while maintaining the ease of use of an npm package.
-
-Design docs: [design spec](https://github.com/Nodesify/astria/blob/main/docs/superpowers/specs/2026-04-30-astria-rewrite-design.md) and [implementation plan](https://github.com/Nodesify/astria/blob/main/docs/superpowers/plans/2026-04-30-astria-implementation.md).

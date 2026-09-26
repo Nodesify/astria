@@ -1,0 +1,60 @@
+name: Bug report
+description: Something in astria doesn't work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. **Before submitting:** check that the graph is fresh (`astria status`, `astria diagnose`) — most "wrong answers" are stale graphs.
+        ⚠️ Please redact any sensitive paths or values from pasted output (file names from private repos, env values, API keys).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        The exact command(s) and the relevant output, e.g.
+        `astria run . && astria query "..." --detail high`
+        If the problem needs a private repo to reproduce, describe the smallest synthetic structure that shows it.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: astria version
+      description: Output of `astria --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux (x64)
+        - Linux (arm64)
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - npm install -g @nodesify/astria
+        - built from source
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Language(s) in the analyzed repo, `--embed`/LLM backends in use, `diagnose --json` output, etc.

@@ -24,6 +24,7 @@ Activates the `enrich_with_semantics()` pipeline stage (docs, papers, images →
 | `ASTRIA_LLM_CONCURRENCY` | Size of the parallel LLM worker pool |
 | `ASTRIA_LLM_PROVIDER` | Legacy alias: if set together with `ASTRIA_LLM_BASE_URL`, forces the OpenAI-compatible backend |
 | `OPENAI_API_KEY` | Fallback key for the OpenAI-compatible backend |
+| `OPENAI_BASE_URL` | Fallback base URL for the OpenAI-compatible backend when `ASTRIA_LLM_BASE_URL` is unset |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Key for the Gemini backend |
 
 Without a backend configured, builds stay fully offline and deterministic. Per-run overrides without env vars: `astria run . --backend openai --model gpt-4o-mini`.
