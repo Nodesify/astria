@@ -98,10 +98,12 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }} -p astria-napi ${{ matrix.cargo-flags }}
       - name: Copy artifact (Linux/macOS)
         if: runner.os != 'Windows'
-        run: cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/astria-cli/dist/astria.node
+        # dist/ is untracked (build output) — create it before the copy
+        run: mkdir -p packages/astria-cli/dist && cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/astria-cli/dist/astria.node
       - name: Copy artifact (Windows)
         if: runner.os == 'Windows'
-        run: cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/astria-cli/dist/astria.node
+        shell: bash
+        run: mkdir -p packages/astria-cli/dist && cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/astria-cli/dist/astria.node
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: astria-${{ matrix.platform }}
