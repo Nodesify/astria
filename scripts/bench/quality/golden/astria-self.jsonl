@@ -1,0 +1,35 @@
+{"id": "q01", "question": "how does the token reduction benchmark work", "expected_files": ["crates/astria-napi/src/benchmark.rs"], "expected_symbols": ["run_benchmark"]}
+{"id": "q02", "question": "how does community detection work", "expected_files": ["crates/astria-cluster/src/lib.rs"]}
+{"id": "q03", "question": "what does god node analysis rank", "expected_files": ["crates/astria-analyze/src/lib.rs"], "expected_symbols": ["compute_god_nodes"]}
+{"id": "q04", "question": "how are duplicate entities merged", "expected_files": ["crates/astria-build/src/dedup.rs", "crates/astria-build/src/minhash.rs"]}
+{"id": "q05", "question": "how does incremental change detection work", "expected_files": ["crates/astria-detect/src/lib.rs"]}
+{"id": "q06", "question": "which languages does tree-sitter extraction support", "expected_files": ["crates/astria-extract/src/langs/mod.rs", "crates/astria-extract/src/engine.rs"]}
+{"id": "q07", "question": "how does the MCP server expose tools to agents", "expected_files": ["crates/astria-mcp/src/lib.rs"]}
+{"id": "q08", "question": "how does graph traversal work bfs or dfs", "expected_files": ["crates/astria-query/src/lib.rs"], "expected_symbols": ["query_graph"]}
+{"id": "q09", "question": "what breaks if I change a function blast radius", "expected_files": ["crates/astria-analyze/src/affected.rs"]}
+{"id": "q10", "question": "how do local embeddings work", "expected_files": ["crates/astria-embed/src/lib.rs"]}
+{"id": "q11", "question": "how does LLM semantic enrichment work", "expected_files": ["crates/astria-semantic/src/lib.rs"]}
+{"id": "q12", "question": "how does URL ingestion protect against SSRF", "expected_files": ["crates/astria-ingest/src/lib.rs", "crates/astria-core/src/security.rs"]}
+{"id": "q13", "question": "how are PDFs processed", "expected_files": ["crates/astria-pdf/src/lib.rs"]}
+{"id": "q14", "question": "how is the markdown wiki generated", "expected_files": ["crates/astria-napi/src/export_wiki.rs"]}
+{"id": "q15", "question": "what does path validation do", "expected_files": ["crates/astria-core/src/security.rs", "crates/astria-paths/src/lib.rs"]}
+{"id": "q16", "question": "where is the sqlite schema and migrations", "expected_files": ["crates/astria-core/src/db.rs"]}
+{"id": "q17", "question": "what is the CLI entry point", "expected_files": ["packages/astria-cli/src/index.ts"]}
+{"id": "q18", "question": "how does the neo4j cypher export work", "expected_files": ["crates/astria-napi/src/export_cypher.rs"]}
+{"id": "q19", "question": "how does shortest path query work", "expected_files": ["crates/astria-query/src/lib.rs"], "expected_symbols": ["shortest_path"]}
+{"id": "q20", "question": "how does the cross-repo global graph merge work", "expected_files": ["crates/astria-napi/src/global.rs", "packages/astria-cli/src/commands/global.ts"]}
+{"id": "q21", "question": "how does save-result and reflect memory work", "expected_files": ["crates/astria-napi/src/feedback.rs", "packages/astria-cli/src/commands/feedback.ts"]}
+{"id": "q22", "question": "what does the diagnose health report show", "expected_files": ["crates/astria-napi/src/diagnose.rs", "packages/astria-cli/src/commands/diagnose.ts"]}
+{"id": "q23", "question": "how are hyperedges built", "expected_files": ["crates/astria-build/src/hyperedges.rs"]}
+{"id": "q24", "question": "what are surprising connections", "expected_files": ["crates/astria-analyze/src/lib.rs"]}
+{"id": "q25", "question": "how does the repo map rank files", "expected_files": ["crates/astria-query/src/lib.rs"], "expected_symbols": ["repo_map"]}
+{"id": "q26", "question": "how does SCIP index ingestion work", "expected_files": ["crates/astria-ingest/src/scip.rs"]}
+{"id": "q27", "question": "how does postgres introspection work", "expected_files": ["crates/astria-ingest/src/postgres.rs"]}
+{"id": "q28", "question": "how is the report generated", "expected_files": ["crates/astria-report/src/lib.rs"]}
+{"id": "q29", "question": "how does the html viewer export work", "expected_files": ["crates/astria-napi/src/export_html.rs"]}
+{"id": "q30", "question": "what tree walkers resolve references", "expected_files": ["crates/astria-extract/src/refs.rs", "crates/astria-extract/src/walkers.rs"]}
+{"id": "q31", "question": "how does the extraction cache work", "expected_files": ["crates/astria-extract/src/cache.rs"]}
+{"id": "q32", "question": "how is build-time graph validation done", "expected_files": ["crates/astria-build/src/validate.rs"]}
+{"id": "q33", "question": "how does obsidian vault export work", "expected_files": ["crates/astria-napi/src/export_obsidian.rs"]}
+{"id": "q34", "question": "how does the graph merge diff work", "expected_files": ["crates/astria-napi/src/merge.rs"]}
+{"id": "q35", "question": "how are file types detected and classified", "expected_files": ["crates/astria-detect/src/lib.rs", "crates/astria-extract/src/manifest.rs"]}

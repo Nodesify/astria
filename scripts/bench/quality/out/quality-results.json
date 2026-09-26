@@ -1,0 +1,300 @@
+{
+  "generated_at": "2026-09-26T09:42:33.754Z",
+  "corpus_root": "c:/nodesify/nodesify-graphify",
+  "golden_set": "astria-self.jsonl",
+  "cli": "astria",
+  "query_budget": 4000,
+  "query_depth": 3,
+  "summary": {
+    "questions": 35,
+    "answered": 35,
+    "mrr": 0.0936,
+    "recall@1": 0.0571,
+    "recall@3": 0.0857,
+    "recall@5": 0.0857,
+    "recall@10": 0.1714,
+    "avg_query_seconds": 0.14
+  },
+  "items": [
+    {
+      "id": "q01",
+      "question": "how does the token reduction benchmark work",
+      "seconds": 0.17,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q02",
+      "question": "how does community detection work",
+      "seconds": 0.15,
+      "hit_rank": 3,
+      "matched_file": "crates/astria-cluster/src/lib.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q03",
+      "question": "what does god node analysis rank",
+      "seconds": 0.14,
+      "hit_rank": 1,
+      "matched_file": "crates/astria-analyze/src/lib.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q04",
+      "question": "how are duplicate entities merged",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q05",
+      "question": "how does incremental change detection work",
+      "seconds": 0.15,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q06",
+      "question": "which languages does tree-sitter extraction support",
+      "seconds": 0.15,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q07",
+      "question": "how does the MCP server expose tools to agents",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q08",
+      "question": "how does graph traversal work bfs or dfs",
+      "seconds": 0.15,
+      "hit_rank": 23,
+      "matched_file": "crates/astria-query/src/lib.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q09",
+      "question": "what breaks if I change a function blast radius",
+      "seconds": 0.15,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q10",
+      "question": "how do local embeddings work",
+      "seconds": 0.13,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q11",
+      "question": "how does LLM semantic enrichment work",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q12",
+      "question": "how does URL ingestion protect against SSRF",
+      "seconds": 0.14,
+      "hit_rank": 29,
+      "matched_file": "crates/astria-ingest/src/lib.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q13",
+      "question": "how are PDFs processed",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q14",
+      "question": "how is the markdown wiki generated",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q15",
+      "question": "what does path validation do",
+      "seconds": 0.13,
+      "hit_rank": 31,
+      "matched_file": "crates/astria-paths/src/lib.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q16",
+      "question": "where is the sqlite schema and migrations",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q17",
+      "question": "what is the CLI entry point",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q18",
+      "question": "how does the neo4j cypher export work",
+      "seconds": 0.16,
+      "hit_rank": 31,
+      "matched_file": "crates/astria-napi/src/export_cypher.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q19",
+      "question": "how does shortest path query work",
+      "seconds": 0.13,
+      "hit_rank": 22,
+      "matched_file": "crates/astria-query/src/lib.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q20",
+      "question": "how does the cross-repo global graph merge work",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q21",
+      "question": "how does save-result and reflect memory work",
+      "seconds": 0.14,
+      "hit_rank": 10,
+      "matched_file": "crates/astria-napi/src/feedback.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q22",
+      "question": "what does the diagnose health report show",
+      "seconds": 0.16,
+      "hit_rank": 25,
+      "matched_file": "crates/astria-napi/src/diagnose.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q23",
+      "question": "how are hyperedges built",
+      "seconds": 0.14,
+      "hit_rank": 27,
+      "matched_file": "crates/astria-build/src/hyperedges.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q24",
+      "question": "what are surprising connections",
+      "seconds": 0.15,
+      "hit_rank": 1,
+      "matched_file": "crates/astria-analyze/src/lib.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q25",
+      "question": "how does the repo map rank files",
+      "seconds": 0.14,
+      "hit_rank": 18,
+      "matched_file": "crates/astria-query/src/lib.rs",
+      "matched_symbol": "repo_map"
+    },
+    {
+      "id": "q26",
+      "question": "how does SCIP index ingestion work",
+      "seconds": 0.15,
+      "hit_rank": 20,
+      "matched_file": "crates/astria-ingest/src/scip.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q27",
+      "question": "how does postgres introspection work",
+      "seconds": 0.13,
+      "hit_rank": 25,
+      "matched_file": "crates/astria-ingest/src/postgres.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q28",
+      "question": "how is the report generated",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q29",
+      "question": "how does the html viewer export work",
+      "seconds": 0.14,
+      "hit_rank": 7,
+      "matched_file": "crates/astria-napi/src/export_html.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q30",
+      "question": "what tree walkers resolve references",
+      "seconds": 0.15,
+      "hit_rank": 9,
+      "matched_file": "crates/astria-extract/src/walkers.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q31",
+      "question": "how does the extraction cache work",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q32",
+      "question": "how is build-time graph validation done",
+      "seconds": 0.14,
+      "hit_rank": null,
+      "matched_file": null,
+      "matched_symbol": null
+    },
+    {
+      "id": "q33",
+      "question": "how does obsidian vault export work",
+      "seconds": 0.14,
+      "hit_rank": 19,
+      "matched_file": "crates/astria-napi/src/export_obsidian.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q34",
+      "question": "how does the graph merge diff work",
+      "seconds": 0.15,
+      "hit_rank": 23,
+      "matched_file": "crates/astria-napi/src/merge.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q35",
+      "question": "how are file types detected and classified",
+      "seconds": 0.14,
+      "hit_rank": 12,
+      "matched_file": "crates/astria-extract/src/manifest.rs",
+      "matched_symbol": null
+    }
+  ]
+}
