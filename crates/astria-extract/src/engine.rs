@@ -425,8 +425,8 @@ mod tests {
             .unwrap();
             (dir, root, py)
         };
-        let (dir_a, root_a, py_a) = mk("proj_one");
-        let (dir_b, root_b, py_b) = mk("proj_two");
+        let (_dir_a, root_a, py_a) = mk("proj_one");
+        let (_dir_b, root_b, py_b) = mk("proj_two");
         let db = open_db_in_memory().unwrap();
         let ra = extract(&[py_a], &root_a, &db).unwrap();
         let rb = extract(&[py_b], &root_b, &db).unwrap();
