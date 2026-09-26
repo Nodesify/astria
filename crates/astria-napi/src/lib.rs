@@ -220,6 +220,7 @@ pub mod pipeline;
 pub mod query;
 
 use napi_derive::napi;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 // ---- napi-exposed types ----
@@ -238,6 +239,7 @@ pub struct GraphStatsJs {
     pub edge_count: i64,
     pub community_count: i64,
     pub file_count: i64,
+    pub type_counts: HashMap<String, i64>,
 }
 
 #[napi(object)]
@@ -403,11 +405,20 @@ pub fn graph_stats(root: String) -> napi::Result<GraphStatsJs> {
     let file_count: i64 = db
         .query_row("SELECT COUNT(*) FROM file_manifest", [], |r| r.get(0))
         .unwrap_or(0);
+    let mut stmt = db
+        .prepare("SELECT file_type, COUNT(*) FROM nodes GROUP BY file_type ORDER BY COUNT(*) DESC")
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let type_counts: HashMap<String, i64> = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
     Ok(GraphStatsJs {
         node_count,
         edge_count,
         community_count,
         file_count,
+        type_counts,
     })
 }
 

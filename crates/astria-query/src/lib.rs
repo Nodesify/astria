@@ -41,6 +41,7 @@ fn log_query(db: &Connection, question: &str, answer: &str) {
 struct NodeData {
     id: String,
     label: String,
+    file_type: String,
     source_file: String,
     source_line: Option<i64>,
     community: Option<i64>,
@@ -110,10 +111,11 @@ fn load_graph(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph
     let mut nodes = Vec::new();
     {
         let mut stmt = db.prepare(
-            "SELECT id, label, source_file, source_line, community, docstring, signature FROM nodes",
+            "SELECT id, label, file_type, source_file, source_line, community, docstring, signature FROM nodes",
         )?;
         #[allow(clippy::type_complexity)]
         let rows: Vec<(
+            String,
             String,
             String,
             String,
@@ -131,21 +133,23 @@ fn load_graph(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph
                     row.get(4)?,
                     row.get(5)?,
                     row.get(6)?,
+                    row.get(7)?,
                 ))
             })?
             .filter_map(|r| r.ok())
             .collect();
-        for (id, label, sf, line, comm, doc, sig) in rows {
-            nodes.push((id, label, sf, line, comm, doc, sig));
+        for (id, label, ft, sf, line, comm, doc, sig) in rows {
+            nodes.push((id, label, ft, sf, line, comm, doc, sig));
         }
     }
 
     let mut graph = DiGraph::new();
     let mut id_to_idx = HashMap::new();
-    for (id, label, sf, line, comm, doc, sig) in &nodes {
+    for (id, label, ft, sf, line, comm, doc, sig) in &nodes {
         let idx = graph.add_node(NodeData {
             id: id.clone(),
             label: label.clone(),
+            file_type: ft.clone(),
             source_file: sf.clone(),
             source_line: *line,
             community: *comm,
@@ -353,11 +357,32 @@ fn stem(token: &str) -> &str {
 /// paraphrased or slightly-misspelled question still finds its entry nodes:
 /// 1. label/path substring, exact & prefix token match (deterministic, free)
 /// 2. docstring token matches (where prose descriptions of symbols live)
+/// Common English question/filler words: matching them is noise, not
+/// retrieval signal.
+const STOPWORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "if", "then", "than", "that", "this", "these", "those",
+    "there", "here", "of", "in", "on", "at", "by", "for", "with", "from", "into", "about", "as",
+    "is", "are", "was", "were", "be", "been", "being", "am", "do", "does", "did", "doing", "have",
+    "has", "had", "having", "will", "would", "shall", "should", "can", "could", "may", "might",
+    "must", "to", "too", "it", "its", "itself", "they", "them", "their", "we", "us", "our", "you",
+    "your", "i", "me", "my", "he", "she", "his", "her", "him", "what", "which", "who", "whom",
+    "whose", "when", "where", "why", "how", "not", "no", "also", "just", "very", "some", "any",
+    "each", "other", "more", "most",
+];
+
 /// 3. fuzzy token match (Jaro-Winkler) for typos and word variants
 fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> {
     let mut scored: Vec<(f64, NodeIndex)> = Vec::new();
     for idx in loaded.graph.node_indices() {
         let node = &loaded.graph[idx];
+        // Code answers rank above documentation and speculative stubs on
+        // equal term evidence: without the prior, prose-heavy doc nodes and
+        // std-call stubs crowd code symbols out of the seed set.
+        let prior = match node.file_type.as_str() {
+            "code" | "rationale" | "package" => 1.0,
+            "stub" | "document" | "reference" | "paper" | "image" | "video" => 0.85,
+            _ => 1.0,
+        };
         let label_tokens = tokenize(&node.label);
         let file_tokens = tokenize(&node.source_file);
         let doc_tokens: Vec<String> = node
@@ -372,6 +397,13 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
                 continue;
             }
             let term_lower = term.to_lowercase();
+            // Question words carry no retrieval signal: "where is the SSRF
+            // validation and what does it check" must score on ssrf/url/
+            // validation/check, not on "where"/"does" matching every doc
+            // heading that contains them.
+            if STOPWORDS.contains(&term_lower.as_str()) {
+                continue;
+            }
             let term_tokens = tokenize(term);
             let label_lower = node.label.to_lowercase();
             let sf_lower = node.source_file.to_lowercase();
@@ -445,7 +477,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             score += label_score.max(doc_score) + path_score + fuzzy_score;
         }
         if score > 0.0 {
-            scored.push((score, idx));
+            scored.push((score * prior, idx));
         }
     }
     // Deterministic order: score desc, then label, then id.
@@ -464,17 +496,23 @@ fn bfs_subgraph(
     max_depth: usize,
     directed: bool,
     min_strength: f64,
-) -> (HashSet<NodeIndex>, Vec<(NodeIndex, NodeIndex)>) {
+) -> (
+    HashSet<NodeIndex>,
+    Vec<(NodeIndex, NodeIndex)>,
+    HashMap<NodeIndex, u32>,
+) {
     let mut visited: HashSet<NodeIndex> = start_nodes.iter().copied().collect();
     let mut frontier: Vec<NodeIndex> = start_nodes.to_vec();
     let mut edges_seen: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+    let mut distance: HashMap<NodeIndex, u32> = start_nodes.iter().map(|&n| (n, 0)).collect();
 
-    for _ in 0..max_depth {
+    for depth in 0..max_depth {
         let mut next_frontier = Vec::new();
         for &node in &frontier {
             for neighbor in iter_neighbors_filtered(&loaded.graph, node, directed, min_strength) {
                 if !visited.contains(&neighbor) {
                     visited.insert(neighbor);
+                    distance.insert(neighbor, depth as u32 + 1);
                     next_frontier.push(neighbor);
                     edges_seen.push((node, neighbor));
                 }
@@ -485,7 +523,7 @@ fn bfs_subgraph(
         }
         frontier = next_frontier;
     }
-    (visited, edges_seen)
+    (visited, edges_seen, distance)
 }
 
 fn dfs_subgraph(
@@ -494,7 +532,11 @@ fn dfs_subgraph(
     max_depth: usize,
     directed: bool,
     min_strength: f64,
-) -> (HashSet<NodeIndex>, Vec<(NodeIndex, NodeIndex)>) {
+) -> (
+    HashSet<NodeIndex>,
+    Vec<(NodeIndex, NodeIndex)>,
+    HashMap<NodeIndex, u32>,
+) {
     let mut visited: HashSet<NodeIndex> = HashSet::new();
     let mut edges_seen: Vec<(NodeIndex, NodeIndex)> = Vec::new();
     let mut stack: Vec<(NodeIndex, usize)> = start_nodes.iter().rev().map(|&n| (n, 0)).collect();
@@ -511,13 +553,15 @@ fn dfs_subgraph(
             }
         }
     }
-    (visited, edges_seen)
+    (visited, edges_seen, HashMap::new())
 }
 
 fn subgraph_to_text(
     loaded: &LoadedGraph,
     visited: &HashSet<NodeIndex>,
     edges_seen: &[(NodeIndex, NodeIndex)],
+    relevance: &HashMap<NodeIndex, f64>,
+    distance: &HashMap<NodeIndex, u32>,
     token_budget: i64,
     mut skip_nodes: usize,
 ) -> (String, Option<usize>) {
@@ -527,8 +571,35 @@ fn subgraph_to_text(
     let node_budget = (char_budget as f64 * NODE_BUDGET_SHARE) as usize;
     let mut out = String::new();
 
+    // Relevance-ranked, not hub-ranked: question-matched seeds surface
+    // first, then nodes by traversal distance to those seeds, and only
+    // then by degree. Pure degree ordering buried the files the question
+    // was actually about beneath graph-wide hubs.
     let mut node_list: Vec<NodeIndex> = visited.iter().copied().collect();
-    node_list.sort_by_key(|&idx| std::cmp::Reverse(loaded.graph.neighbors(idx).count()));
+    node_list.sort_by(|&a, &b| {
+        let na = &loaded.graph[a];
+        let nb = &loaded.graph[b];
+        let sa = relevance.get(&a).copied().unwrap_or(0.0);
+        let sb = relevance.get(&b).copied().unwrap_or(0.0);
+        sb.partial_cmp(&sa)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                distance
+                    .get(&a)
+                    .copied()
+                    .unwrap_or(u32::MAX)
+                    .cmp(&distance.get(&b).copied().unwrap_or(u32::MAX))
+            })
+            .then_with(|| {
+                loaded
+                    .graph
+                    .neighbors(b)
+                    .count()
+                    .cmp(&loaded.graph.neighbors(a).count())
+            })
+            .then_with(|| na.label.cmp(&nb.label))
+            .then_with(|| na.id.cmp(&nb.id))
+    });
     if skip_nodes >= node_list.len() {
         skip_nodes = 0; // stale/overshot cursor: restart from the top
     }
@@ -767,7 +838,7 @@ pub fn query_graph_with_semantic(
     }
 
     let seed_nodes: Vec<NodeIndex> = scored.iter().take(5).map(|(_, idx)| *idx).collect();
-    let (visited, edges_seen) = if mode == "dfs" {
+    let (visited, edges_seen, distance) = if mode == "dfs" {
         dfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength)
     } else {
         bfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength)
@@ -786,7 +857,16 @@ pub fn query_graph_with_semantic(
         seed_labels,
         visited.len()
     );
-    let (body, next_cursor) = subgraph_to_text(&loaded, &visited, &edges_seen, budget, cursor);
+    let relevance: HashMap<NodeIndex, f64> = scored.iter().map(|(s, i)| (*i, *s)).collect();
+    let (body, next_cursor) = subgraph_to_text(
+        &loaded,
+        &visited,
+        &edges_seen,
+        &relevance,
+        &distance,
+        budget,
+        cursor,
+    );
     let mut result_text = header + &body;
     if let Some(next) = next_cursor {
         result_text.push_str(&format!(
@@ -1279,6 +1359,33 @@ mod tests {
     use astria_core::db::open_db_in_memory;
 
     #[test]
+    fn stopwords_neutralized_and_code_ranks_over_document() {
+        // "where does validation happen": question words must score nothing,
+        // and on equal term evidence ("validation") the code symbol outranks
+        // a prose document node.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('doc', 'validation notes', 'document', 'docs/notes.md'),
+                ('sym', 'validation()', 'code', 'src/ingest.rs');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('sym', 'doc', 'references', 'EXTRACTED', 'src/ingest.rs');",
+        )
+        .unwrap();
+
+        let loaded = load_graph_cached(&db, "scorer-prior-test").unwrap();
+        let scored = score_nodes(&loaded, &["validation".to_string()]);
+        assert!(scored.len() >= 2);
+        // equal term evidence (both labels contain "validation") — the code
+        // symbol must outrank the prose node
+        assert_eq!(loaded.graph[scored[0].1].file_type, "code");
+
+        // question words alone match nothing
+        let empty = score_nodes(&loaded, &["where".to_string(), "does".to_string()]);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
     fn semantic_seeds_match_without_string_overlap() {
         // "auth flow" shares no tokens with "SessionMiddleware" — token
         // scoring finds nothing; a semantic candidate must seed the traversal.
@@ -1520,10 +1627,10 @@ mod tests {
         // 'd' as seed and confirm directed traversal does NOT walk
         // imports backwards to 'c'.
         let d = g.id_to_idx["d"];
-        let (visited_fwd, _) = bfs_subgraph(&g, &[d], 2, true, 0.0);
+        let (visited_fwd, _, _) = bfs_subgraph(&g, &[d], 2, true, 0.0);
         assert!(!visited_fwd.contains(&g.id_to_idx["c"]));
 
-        let (visited_und, _) = bfs_subgraph(&g, &[d], 2, false, 0.0);
+        let (visited_und, _, _) = bfs_subgraph(&g, &[d], 2, false, 0.0);
         assert!(visited_und.contains(&g.id_to_idx["c"]));
 
         let _ = a;
