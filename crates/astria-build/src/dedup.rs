@@ -230,8 +230,7 @@ pub fn dedup_nodes(db: &Connection) -> Result<usize> {
             // fuzzy-dedup candidate - and a file node must never merge away,
             // because transitive union chains can defeat pair-level guards
             // (index.ts ~ index.tsx ~ install/index.ts erases an entry file).
-            if r.file_type == "stub" || r.label.is_empty() || label_shape(&r.label) == Shape::File
-            {
+            if r.file_type == "stub" || r.label.is_empty() || label_shape(&r.label) == Shape::File {
                 continue;
             }
             r.norm = normalize_label(&r.label);

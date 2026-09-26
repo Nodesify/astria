@@ -191,6 +191,28 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    if version < 9 {
+        // v9: LLM community enrichment + per-run LLM accounting.
+        // communities.summary carries the one-line thematic description,
+        // label_source says who named it ('hub' fallback vs 'llm'), and
+        // member_hash caches the membership so labels are only recomputed
+        // when the community actually changes. pipeline_runs gains the
+        // measured token spend of the semantic passes.
+        conn.execute_batch("ALTER TABLE communities ADD COLUMN summary TEXT;")?;
+        conn.execute_batch(
+            "ALTER TABLE communities ADD COLUMN label_source TEXT NOT NULL DEFAULT 'hub';",
+        )?;
+        conn.execute_batch("ALTER TABLE communities ADD COLUMN member_hash TEXT;")?;
+        conn.execute_batch(
+            "ALTER TABLE pipeline_runs ADD COLUMN llm_input_tokens INTEGER;
+             ALTER TABLE pipeline_runs ADD COLUMN llm_output_tokens INTEGER;
+             ALTER TABLE pipeline_runs ADD COLUMN llm_api_calls INTEGER;",
+        )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '9')",
+            [],
+        )?;
+    }
 
     Ok(())
 }
@@ -304,7 +326,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "8");
+        assert_eq!(version, "9");
         conn.execute(
             "INSERT INTO nodes (id, label, file_type, source_file, signature) VALUES ('a', 'A', 'code', 'f.rs', 'fn a()')",
             [],
