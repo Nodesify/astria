@@ -1,6 +1,6 @@
 {
   "name": "@nodesify/astria",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Turn any folder into a queryable knowledge graph",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -63,10 +63,10 @@
     }
   },
   "optionalDependencies": {
-    "@nodesify/astria-win32-x64-msvc": "1.0.1",
-    "@nodesify/astria-darwin-x64": "1.0.1",
-    "@nodesify/astria-linux-x64-gnu": "1.0.1",
-    "@nodesify/astria-darwin-arm64": "1.0.1",
-    "@nodesify/astria-linux-arm64-gnu": "1.0.1"
+    "@nodesify/astria-win32-x64-msvc": "1.0.2",
+    "@nodesify/astria-darwin-x64": "1.0.2",
+    "@nodesify/astria-linux-x64-gnu": "1.0.2",
+    "@nodesify/astria-darwin-arm64": "1.0.2",
+    "@nodesify/astria-linux-arm64-gnu": "1.0.2"
   }
 }

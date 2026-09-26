@@ -4,7 +4,7 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## [Unreleased]
+## [1.0.2] — 2026-09-26
 
 ### Added
 - Benchmark quality stack under `scripts/bench/`: a shared o200k_base
@@ -45,6 +45,10 @@ this file is the per-version summary.
   pointer; the migration path is `npm i -g @nodesify/astria`, then
   `astria migrate` and `astria install` (also in the README, the CLI
   README, and the 1.0 blog post).
+
+## [1.0.1]
+- Release-infrastructure fixes only (prod-environment publishing, idempotent
+  publish reruns, full npm debug log on failure); no product changes.
 
 ## [1.0.0] — the astria rebrand
 
@@ -105,6 +109,8 @@ installed skill files. `astria migrate` moves pre-1.0 layouts.
 
 See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
+[1.0.2]: https://github.com/Nodesify/astria/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/Nodesify/astria/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Nodesify/astria/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/Nodesify/astria/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Nodesify/astria/compare/v0.7.0...v0.8.0
