@@ -72,8 +72,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && github.actor == 'erictong0602'
         continue-on-error: true
         env:
-          PROMPTFOO_JUDGE_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # Judge model is set in repo Settings > Secrets and variables >
           # Actions > Variables as JUDGE_MODEL (any OpenRouter model id);
           # falls back to the default when unset.
@@ -82,8 +81,8 @@ jobs:
           ASTRIA_CMD: astria
           GRAPHIFY_CMD: ${{ github.workspace }}/bench-work/venv/bin/graphify
         run: |
-          if [ -z "$PROMPTFOO_JUDGE_KEY" ]; then
-            echo "PROMPTFOO_JUDGE_KEY (OpenRouter key) is not set - skipping blind judging (issue #80)."
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "OPENROUTER_API_KEY is not set - skipping blind judging (issue #80)."
             exit 0
           fi
           # The snapshot cleans the original's artifacts before astria runs;
