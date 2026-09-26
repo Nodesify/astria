@@ -3,6 +3,8 @@ name = "astria-mcp"
 version = "1.0.0"
 edition = "2021"
 license = "MIT"
+# MSRV floor comes from the dependency tree (ort/napi-sys/time require 1.88)
+rust-version.workspace = true
 # workspace-internal: distributed via npm (@nodesify/astria), not crates.io
 publish = false
 

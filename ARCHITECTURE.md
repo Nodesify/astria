@@ -13,7 +13,7 @@ The project is structured as a Rust workspace with 14 domain-specific crates and
 ## Pipeline
 
 ```
-detect() → extract() → enrich_with_semantics() → build() → dedup_nodes() → cluster() → analyze() → report()
+detect() → extract() → enrich_with_semantics() → build() → dedup_nodes() → embed() (optional --embed) → cluster() → analyze() → report()
 ```
 
 The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
@@ -22,9 +22,10 @@ The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 2.  **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Supports 21 languages with per-language configurations in `src/langs/`.
 3.  **enrich_with_semantics()** (`astria-semantic`, optional): When an LLM backend is configured, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results.
 4.  **build()** (`astria-build`): Merges extracted nodes and edges into the SQLite graph database, handles deduplication and cross-file reference resolution.
-5.  **cluster()** (`astria-cluster`): Performs community detection using the deterministic label propagation algorithm (via `petgraph`) and updates the `community` attribute on nodes.
-6.  **analyze()** (`astria-analyze`): Analyzes the graph to find "god nodes" (call stubs excluded), surprising cross-community connections, blast radius, and generates suggested questions.
-7.  **report()** (`astria-report`): Generates a plain-language `graph_report.md` summarizing the graph's structure and insights.
+5.  **embed()** (`astria-embed`, optional `--embed`): Computes local node embeddings (fastembed/ONNX, no API key), adds `similar_to` edges, and triggers a community refresh so semantic similarity consolidates clusters.
+6.  **cluster()** (`astria-cluster`): Performs community detection using the deterministic label propagation algorithm (via `petgraph`) and updates the `community` attribute on nodes.
+7.  **analyze()** (`astria-analyze`): Analyzes the graph to find "god nodes" (call stubs excluded), surprising cross-community connections, blast radius, and generates suggested questions.
+8.  **report()** (`astria-report`): Generates a plain-language `graph_report.md` summarizing the graph's structure and insights.
 
 ## Crate Responsibilities
 
@@ -34,6 +35,7 @@ The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 | `astria-paths` | Path normalization and `.astria` directory management. |
 | `astria-detect` | File system scanning, `.astriaignore` support, and incremental change detection via SHA-256 hashes. |
 | `astria-extract` | Tree-sitter AST traversal logic. Each language defines its own extraction rules (nodes, edges, docstrings). |
+| `astria-embed` | Local semantic embeddings (fastembed/ONNX, no API key): `similar_to` edges and embedding-backed query recall. Optional (`--embed`). |
 | `astria-build` | Persistent graph assembly; entity dedup (MinHash/LSH blocking + Jaro-Winkler verify) in `dedup.rs`. |
 | `astria-cluster` | Deterministic community detection (stable labels, cohesion, modularity) using `petgraph`. |
 | `astria-analyze` | God nodes, ranked surprising cross-community connections, blast radius (`affected.rs`, reverse reachability). |
@@ -63,11 +65,27 @@ The graph is stored in `.astria/db.sqlite` with the following tables:
 
 ### Relationship Types
 
-*   `Calls`: Function or method invocation.
-*   `Imports`: Module or file level dependency.
-*   `Uses`: Variable or type usage.
-*   `Defines`: Containment (e.g., class defines a method).
-*   `Inherits`: Class inheritance or interface implementation.
+Relations are stored lowercase — filter `--relation` with exactly these spellings.
+
+Structural (AST extraction):
+
+*   `calls`: Function or method invocation. Resolved targets are `EXTRACTED`; unresolved name-level targets `INFERRED`.
+*   `contains`: File/class/symbol containment (there is no `Defines` relation).
+*   `imports`: Module or file level dependency.
+*   `uses`: Variable or type usage.
+*   `method`: Ruby method and singleton-method invocations.
+*   `inherits`, `implements`: OO inheritance/implementation where the language or semantic layer exposes them.
+
+Semantic & learned (opt-in):
+
+*   `similar_to`: Local embedding similarity (`--embed`); powers semantic query recall.
+*   `implements`, `depends_on`, `relates_to`, `uses`: LLM semantic extraction (validated against an allowlist).
+*   `learned`: Promoted from recurring query pairs (the memory feedback loop).
+
+Hyperedges (n-ary, stored in the `hyperedges` table):
+
+*   `participate_in`: Links a community's top-degree nodes to the community group.
+*   `shares_reference`: Groups identifier-shaped string literals shared across files.
 
 ## Persistence & Performance
 
