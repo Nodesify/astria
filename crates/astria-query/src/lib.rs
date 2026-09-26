@@ -570,6 +570,7 @@ fn label_is_file(label: &str) -> bool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn subgraph_to_text(
     loaded: &LoadedGraph,
     visited: &HashSet<NodeIndex>,
@@ -1414,7 +1415,7 @@ mod tests {
                 ", ('d{i}', 'validation notes {i}', 'document', 'docs/n{i}.md')"
             ));
         }
-        inserts.push_str(";");
+        inserts.push(';');
         inserts.push_str(
             "INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
                 ('sym', 'd0', 'references', 'EXTRACTED', 'src/v.rs');",
