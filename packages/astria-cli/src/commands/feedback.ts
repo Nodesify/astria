@@ -37,7 +37,7 @@ export async function saveResultCommand(
     console.log(`Graph node: ${saved.nodeId}`);
     if (!opts.outcome) {
       console.log(
-        'note: no outcome recorded — pass --outcome helpful (or unhelpful); entries without an outcome are skipped by reflect'
+        'note: no outcome recorded — pass --outcome useful, dead_end, or corrected; entries without an outcome are skipped by reflect'
       );
     }
     console.log('Run `astria update .` to re-embed and re-cluster.');
