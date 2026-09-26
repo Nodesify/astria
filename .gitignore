@@ -19,5 +19,4 @@ bench-work/
 .mimosa/
 .playwright-mcp/
 .zcode/
-.mcp.json
 docs/motion-docs.db

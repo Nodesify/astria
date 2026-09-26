@@ -38,6 +38,8 @@ npm install -g @nodesify/astria
 
 Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 
+Just want the agent skill, no CLI? `npx skills add Nodesify/astria` installs the graph-first skill from [skills.sh](https://skills.sh) - it answers from an existing `.astria/` graph as plain files and, when graph commands are needed, offers the install above (never without asking).
+
 ```bash
 astria run .                                  # build the graph (creates .astria/)
 astria query "how does authentication work"   # ask the graph a question
@@ -77,6 +79,8 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 - **Interactive HTML viewer + Neo4j export** — physics-free large-graph mode beyond the 5,000-node safety cap, idempotent Cypher script ([wiki and exports](https://nodesify.github.io/astria/docs/guides/wiki-and-exports))
 - **Honest token math** — every run prints measured corpus-vs-query tokens: 110× on this repo ([benchmarks](https://nodesify.github.io/astria/docs/explanation/benchmarks))
 - **9 MCP tools** — query_graph, repo_map, explain, get_neighbors, shortest_path, affected, god_nodes, list_communities, graph_stats ([MCP tools reference](https://nodesify.github.io/astria/docs/reference/mcp-tools))
+
+- **Agent skill on skills.sh** - `npx skills add Nodesify/astria` installs the graph-first skill on its own; it detects the CLI and guides install on first use ([skill file](https://github.com/Nodesify/astria/blob/main/skills/astria/SKILL.md))
 
 ## What's new in 1.0.0
 

@@ -40,6 +40,14 @@ Platforms with a project-scoped MCP config also get the astria server registered
 
 Existing installs upgrade in place: `install` recognizes its own previously generated instruction blocks and refreshes them to the current wording; hand-customized pre-1.0 `## graphify` sections are detected and left untouched.
 
+## Install just the skill (skills.sh)
+
+```bash
+npx skills add Nodesify/astria
+```
+
+The repo's canonical skill - [`skills/astria/SKILL.md`](https://github.com/Nodesify/astria/blob/main/skills/astria/SKILL.md) - is indexed on [skills.sh](https://skills.sh), so any coding agent can pick it up without astria being installed. The skill is self-contained: on first use it checks for the CLI (`astria --version`); if it is missing but `.astria/` exists, it answers from the exported report and wiki as plain files; if there is no graph either, it offers the `npm install -g @nodesify/astria` install before doing any graph work - it never installs unprompted. `astria install` (below) remains the richer path for CLI users since it also wires MCP configs, hooks, and `AGENTS.md` blocks per platform.
+
 ## Git hooks
 
 ```bash

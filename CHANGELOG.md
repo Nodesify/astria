@@ -4,6 +4,16 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+### Added
+- Canonical agent skill at `skills/astria/SKILL.md`, indexed on skills.sh
+  (`npx skills add Nodesify/astria`) - usable without the CLI installed: it
+  reads an existing `.astria/` graph as plain files and guides a one-command
+  CLI install (with user consent) when graph commands are needed
+- Project-scoped `.mcp.json` is now committed so fresh clones register the
+  astria MCP server without running `astria install`
+
 ## [1.0.0] — the astria rebrand
 
 Everything is now astria: the binary, the npm package (`@nodesify/astria`),
