@@ -4,15 +4,51 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## [Unreleased]
+## [1.0.2] — 2026-09-26
 
 ### Added
+- Benchmark quality stack under `scripts/bench/`: a shared o200k_base
+  tokenizer for the snapshot (`token_parity` block — absolute corpus/query
+  tokens now directly comparable across both tools), a golden-QA
+  retrieval-quality harness (recall@k / MRR over 35 grounded questions,
+  run in CI as a non-blocking job), a blind promptfoo judging config
+  (astria vs the original on the same corpus, LLM rubric), and a LoCoMo
+  memory-benchmark adapter (transcript sidecars, 1,977 evidence-backed
+  QA pairs) for apples-to-apples recall measurement
+- The printed token benchmark now names its estimator (4 chars/token
+  heuristic) and points at the snapshot's exact shared-tokenizer counts
 - Canonical agent skill at `skills/astria/SKILL.md`, indexed on skills.sh
   (`npx skills add Nodesify/astria`) - usable without the CLI installed: it
   reads an existing `.astria/` graph as plain files and guides a one-command
   CLI install (with user consent) when graph commands are needed
 - Project-scoped `.mcp.json` is now committed so fresh clones register the
   astria MCP server without running `astria install`
+
+### Changed
+- Repo hygiene: the canonical agent skill now lives only at
+  `skills/astria/SKILL.md` — the per-tool artifacts `astria install`
+  generates (`CLAUDE.md`, `GEMINI.md`, `.agents/`, `.opencode/`) are no
+  longer committed (installed copies had already drifted from the canonical
+  skill); the multi-MB `graph.json` worked-example graphs are no longer
+  stored (regenerable via the documented reproduce commands) and the
+  canonical quality results moved to `worked/astria/quality-results.json`;
+  workspace crates are marked `publish = false` (distribution is npm-only);
+  the root `tests/fixtures/` language samples moved into
+  `crates/astria-napi/tests/fixtures/` beside the integration tests that
+  use them; a pull-request template is added.
+
+### Removed
+- The six pre-1.0 `@nodesify/graphify*` npm packages (the old CLI and its
+  five platform binaries) are fully unpublished — the names are gone from
+  the registry, verified 404 on 2026-09-26. Installs pinned to the old
+  names now fail with a hard 404 rather than showing a deprecation
+  pointer; the migration path is `npm i -g @nodesify/astria`, then
+  `astria migrate` and `astria install` (also in the README, the CLI
+  README, and the 1.0 blog post).
+
+## [1.0.1]
+- Release-infrastructure fixes only (prod-environment publishing, idempotent
+  publish reruns, full npm debug log on failure); no product changes.
 
 ## [1.0.0] — the astria rebrand
 
@@ -73,6 +109,8 @@ installed skill files. `astria migrate` moves pre-1.0 layouts.
 
 See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
+[1.0.2]: https://github.com/Nodesify/astria/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/Nodesify/astria/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Nodesify/astria/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/Nodesify/astria/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Nodesify/astria/compare/v0.7.0...v0.8.0

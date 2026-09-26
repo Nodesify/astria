@@ -1,0 +1,210 @@
+- vars:
+    question: "how does the token reduction benchmark work"
+    rubric: "Ground truth: this is implemented in crates/astria-napi/src/benchmark.rs (run_benchmark). Question asked: \"how does the token reduction benchmark work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does community detection work"
+    rubric: "Ground truth: this is implemented in crates/astria-cluster/src/lib.rs. Question asked: \"how does community detection work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "what does god node analysis rank"
+    rubric: "Ground truth: this is implemented in crates/astria-analyze/src/lib.rs (compute_god_nodes). Question asked: \"what does god node analysis rank\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how are duplicate entities merged"
+    rubric: "Ground truth: this is implemented in crates/astria-build/src/dedup.rs, crates/astria-build/src/minhash.rs. Question asked: \"how are duplicate entities merged\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does incremental change detection work"
+    rubric: "Ground truth: this is implemented in crates/astria-detect/src/lib.rs. Question asked: \"how does incremental change detection work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "which languages does tree-sitter extraction support"
+    rubric: "Ground truth: this is implemented in crates/astria-extract/src/langs/mod.rs, crates/astria-extract/src/engine.rs. Question asked: \"which languages does tree-sitter extraction support\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does the MCP server expose tools to agents"
+    rubric: "Ground truth: this is implemented in crates/astria-mcp/src/lib.rs. Question asked: \"how does the MCP server expose tools to agents\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does graph traversal work bfs or dfs"
+    rubric: "Ground truth: this is implemented in crates/astria-query/src/lib.rs (query_graph). Question asked: \"how does graph traversal work bfs or dfs\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "what breaks if I change a function blast radius"
+    rubric: "Ground truth: this is implemented in crates/astria-analyze/src/affected.rs. Question asked: \"what breaks if I change a function blast radius\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how do local embeddings work"
+    rubric: "Ground truth: this is implemented in crates/astria-embed/src/lib.rs. Question asked: \"how do local embeddings work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does LLM semantic enrichment work"
+    rubric: "Ground truth: this is implemented in crates/astria-semantic/src/lib.rs. Question asked: \"how does LLM semantic enrichment work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does URL ingestion protect against SSRF"
+    rubric: "Ground truth: this is implemented in crates/astria-ingest/src/lib.rs, crates/astria-core/src/security.rs. Question asked: \"how does URL ingestion protect against SSRF\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how are PDFs processed"
+    rubric: "Ground truth: this is implemented in crates/astria-pdf/src/lib.rs. Question asked: \"how are PDFs processed\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how is the markdown wiki generated"
+    rubric: "Ground truth: this is implemented in crates/astria-napi/src/export_wiki.rs. Question asked: \"how is the markdown wiki generated\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "what does path validation do"
+    rubric: "Ground truth: this is implemented in crates/astria-core/src/security.rs, crates/astria-paths/src/lib.rs. Question asked: \"what does path validation do\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "where is the sqlite schema and migrations"
+    rubric: "Ground truth: this is implemented in crates/astria-core/src/db.rs. Question asked: \"where is the sqlite schema and migrations\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "what is the CLI entry point"
+    rubric: "Ground truth: this is implemented in packages/astria-cli/src/index.ts. Question asked: \"what is the CLI entry point\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does the neo4j cypher export work"
+    rubric: "Ground truth: this is implemented in crates/astria-napi/src/export_cypher.rs. Question asked: \"how does the neo4j cypher export work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does shortest path query work"
+    rubric: "Ground truth: this is implemented in crates/astria-query/src/lib.rs (shortest_path). Question asked: \"how does shortest path query work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does the cross-repo global graph merge work"
+    rubric: "Ground truth: this is implemented in crates/astria-napi/src/global.rs, packages/astria-cli/src/commands/global.ts. Question asked: \"how does the cross-repo global graph merge work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does save-result and reflect memory work"
+    rubric: "Ground truth: this is implemented in crates/astria-napi/src/feedback.rs, packages/astria-cli/src/commands/feedback.ts. Question asked: \"how does save-result and reflect memory work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "what does the diagnose health report show"
+    rubric: "Ground truth: this is implemented in crates/astria-napi/src/diagnose.rs, packages/astria-cli/src/commands/diagnose.ts. Question asked: \"what does the diagnose health report show\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how are hyperedges built"
+    rubric: "Ground truth: this is implemented in crates/astria-build/src/hyperedges.rs. Question asked: \"how are hyperedges built\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "what are surprising connections"
+    rubric: "Ground truth: this is implemented in crates/astria-analyze/src/lib.rs. Question asked: \"what are surprising connections\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does the repo map rank files"
+    rubric: "Ground truth: this is implemented in crates/astria-query/src/lib.rs (repo_map). Question asked: \"how does the repo map rank files\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does SCIP index ingestion work"
+    rubric: "Ground truth: this is implemented in crates/astria-ingest/src/scip.rs. Question asked: \"how does SCIP index ingestion work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does postgres introspection work"
+    rubric: "Ground truth: this is implemented in crates/astria-ingest/src/postgres.rs. Question asked: \"how does postgres introspection work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how is the report generated"
+    rubric: "Ground truth: this is implemented in crates/astria-report/src/lib.rs. Question asked: \"how is the report generated\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does the html viewer export work"
+    rubric: "Ground truth: this is implemented in crates/astria-napi/src/export_html.rs. Question asked: \"how does the html viewer export work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "what tree walkers resolve references"
+    rubric: "Ground truth: this is implemented in crates/astria-extract/src/refs.rs, crates/astria-extract/src/walkers.rs. Question asked: \"what tree walkers resolve references\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does the extraction cache work"
+    rubric: "Ground truth: this is implemented in crates/astria-extract/src/cache.rs. Question asked: \"how does the extraction cache work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how is build-time graph validation done"
+    rubric: "Ground truth: this is implemented in crates/astria-build/src/validate.rs. Question asked: \"how is build-time graph validation done\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does obsidian vault export work"
+    rubric: "Ground truth: this is implemented in crates/astria-napi/src/export_obsidian.rs. Question asked: \"how does obsidian vault export work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how does the graph merge diff work"
+    rubric: "Ground truth: this is implemented in crates/astria-napi/src/merge.rs. Question asked: \"how does the graph merge diff work\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
+- vars:
+    question: "how are file types detected and classified"
+    rubric: "Ground truth: this is implemented in crates/astria-detect/src/lib.rs, crates/astria-extract/src/manifest.rs. Question asked: \"how are file types detected and classified\". Judge whether the response identifies that implementation — naming the file/symbol, or describing exactly what it does such that a developer could navigate there. A response that is merely topically related, or points at documentation rather than the implementing code, is a FAIL."
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'
