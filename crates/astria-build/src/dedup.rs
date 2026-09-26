@@ -139,6 +139,7 @@ fn cross_file_noncode_blocked(a: &NodeRow, b: &NodeRow) -> bool {
 /// What kind of entity the raw label names. Symbols end with "()"
 /// ("validate_url()"), files carry an extension ("validate.rs", "sample.go");
 /// everything else (prose headings, concept names) is free-form.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Shape {
     Symbol,
     File,
@@ -171,6 +172,15 @@ fn shape_mismatch_blocked(a: &NodeRow, b: &NodeRow) -> bool {
         (label_shape(&a.label), label_shape(&b.label)),
         (Shape::Symbol, Shape::Symbol) | (Shape::File, Shape::File) | (Shape::Free, Shape::Free)
     )
+}
+
+/// Two files that share a name are still two files: `install/index.ts` and
+/// `src/index.ts` are different entities, and merging them erases one
+/// file's identity (its id comes to point at the other path). File-shaped
+/// nodes therefore only merge when they come from the same source file.
+fn same_file_guard(a: &NodeRow, b: &NodeRow) -> bool {
+    let is_file = |l: &str| label_shape(l) == Shape::File;
+    is_file(&a.label) && is_file(&b.label) && a.source_file != b.source_file
 }
 
 struct UnionFind {
@@ -216,7 +226,12 @@ pub fn dedup_nodes(db: &Connection) -> Result<usize> {
             })
         })?;
         for mut r in loaded.flatten() {
-            if r.file_type == "stub" || r.label.is_empty() {
+            // Stubs are speculative; files are identities. Neither is a
+            // fuzzy-dedup candidate - and a file node must never merge away,
+            // because transitive union chains can defeat pair-level guards
+            // (index.ts ~ index.tsx ~ install/index.ts erases an entry file).
+            if r.file_type == "stub" || r.label.is_empty() || label_shape(&r.label) == Shape::File
+            {
                 continue;
             }
             r.norm = normalize_label(&r.label);
@@ -290,6 +305,9 @@ pub fn dedup_nodes(db: &Connection) -> Result<usize> {
             continue;
         }
         if shape_mismatch_blocked(a, b) {
+            continue;
+        }
+        if same_file_guard(a, b) {
             continue;
         }
         if uf.find(i) != uf.find(j) {
@@ -489,6 +507,40 @@ mod tests {
             None,
         );
         assert_eq!(dedup_nodes(&db).unwrap(), 0);
+    }
+
+    #[test]
+    fn same_name_files_in_different_dirs_stay_separate() {
+        // Reproduces the q17 incident: `src/index.ts` (the CLI entry) and
+        // `install/index.ts` shared the label "index.ts", and the merge
+        // erased the entry file's node. Same-named files in different
+        // directories are different files.
+        let db = open_db_in_memory().unwrap();
+        insert(
+            &db,
+            "install_index",
+            "index.ts",
+            "code",
+            "packages/astria-cli/src/install/index.ts",
+            Some(1),
+        );
+        insert(
+            &db,
+            "src_index",
+            "index.ts",
+            "code",
+            "packages/astria-cli/src/index.ts",
+            Some(1),
+        );
+        assert_eq!(dedup_nodes(&db).unwrap(), 0);
+        let both: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM nodes WHERE id IN ('install_index','src_index')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(both, 2);
     }
 
     #[test]

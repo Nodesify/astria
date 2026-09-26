@@ -383,6 +383,22 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             "stub" | "document" | "reference" | "paper" | "image" | "video" => 0.85,
             _ => 1.0,
         };
+        // Consecutive question tokens that appear verbatim in a node's label
+        // or docstring ("blast radius") mark the node as the concept's home;
+        // token-level scoring alone treats the words as unrelated and loses
+        // to weaker-but-lexically-luckier matches.
+        let doc_lower = node.docstring.as_deref().map(|d| d.to_lowercase());
+        let label_lower_full = node.label.to_lowercase();
+        let mut phrase_bonus = 0.0f64;
+        for w in terms.windows(2) {
+            let phrase = format!("{} {}", w[0].to_lowercase(), w[1].to_lowercase());
+            let hit = label_lower_full.contains(&phrase)
+                || doc_lower.as_deref().is_some_and(|d| d.contains(&phrase));
+            if hit {
+                phrase_bonus += 0.5;
+            }
+        }
+        let phrase_bonus = phrase_bonus.min(1.0);
         let label_tokens = tokenize(&node.label);
         let file_tokens = tokenize(&node.source_file);
         let doc_tokens: Vec<String> = node
@@ -486,7 +502,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             score += label_score.max(doc_score) + path_score + fuzzy_score;
         }
         if score > 0.0 {
-            scored.push((score * prior, idx));
+            scored.push(((score + phrase_bonus) * prior, idx));
         }
     }
     // Deterministic order: score desc, then label, then id.

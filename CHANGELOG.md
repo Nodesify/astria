@@ -27,6 +27,18 @@ this file is the per-version summary.
   MRR 0.537 -> 0.576, recall@5 62.9% -> 71.4%, recall@10 85.7% -> 88.6%.
   The three former full misses (tree-sitter language support, MCP tool
   exposure, LLM semantic enrichment) now surface their implementing files.
+- **Phrase bonus in seed scoring**: consecutive question tokens appearing
+  verbatim in a label or docstring ("blast radius") lift the node —
+  token-level scoring treated the words as unrelated and lost to weaker
+  lexical-luck matches (fixes the q09 blast-radius regression).
+- **Same-named files in different directories are separate entities**:
+  dedup no longer merges file-shaped nodes at all (transitive union chains
+  had merged `src/index.ts` into `install/index.ts`, erasing the CLI entry
+  file — fixes the q17 CLI-entry-point miss).
+- **Benchmark re-pinned to upstream graphify v0.9.69** (first release with
+  a query-capable CLI): the blind answer-quality comparison now compares
+  against answers instead of errors. The speed/density corpus changes
+  accordingly; historical numbers remain labeled at their original pins.
 
 ## [1.0.4] — 2026-09-26
 
