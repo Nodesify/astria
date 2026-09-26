@@ -514,6 +514,8 @@ pub fn query_graph(
     #[cfg(not(feature = "embed"))]
     let semantic: Vec<(String, f64)> = Vec::new();
 
+    // `--detail high` also prefers file-level nodes when rendering answers.
+    let prefer_files = min_strength_for(&detail) >= 0.9;
     let (text, node_count, edge_count, next_cursor) = query::query_graph_with_semantic(
         &db,
         &db_path_str,
@@ -525,6 +527,7 @@ pub fn query_graph(
         min_strength_for(&detail),
         cursor.unwrap_or(0).max(0) as usize,
         &semantic,
+        prefer_files,
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let graph_built_at = db

@@ -73,8 +73,13 @@ Structural (AST extraction):
 *   `contains`: File/class/symbol containment (there is no `Defines` relation).
 *   `imports`: Module or file level dependency.
 *   `uses`: Variable or type usage.
+*   `references`: Document/markdown links and identifier mentions.
 *   `method`: Ruby method and singleton-method invocations.
 *   `inherits`, `implements`: OO inheritance/implementation where the language or semantic layer exposes them.
+*   `rationale_for`: A comment rationale linked to the code it explains.
+*   `crate_depends_on`: Cargo workspace/path-dependency topology (from `Cargo.toml` ingestion).
+*   `requires_env`: An MCP server config and the environment-variable names it declares (names only, never values).
+*   `forks`: Symbol fork recorded from a SCIP index (`add --scip`).
 
 Semantic & learned (opt-in):
 

@@ -555,12 +555,28 @@ fn dfs_subgraph(
     (visited, edges_seen, HashMap::new())
 }
 
+/// At most this many document-type nodes render per answer page: doc
+/// headings keyword-match almost any question and can absorb the budget.
+const MAX_DOC_NODES_PER_ANSWER: usize = 6;
+
+/// A label that names a file ("lib.rs", "benchmark.md") rather than a symbol.
+fn label_is_file(label: &str) -> bool {
+    match label.rfind('.') {
+        Some(dot) if dot > 0 => {
+            let ext = &label[dot + 1..];
+            !ext.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        }
+        _ => false,
+    }
+}
+
 fn subgraph_to_text(
     loaded: &LoadedGraph,
     visited: &HashSet<NodeIndex>,
     edges_seen: &[(NodeIndex, NodeIndex)],
     relevance: &HashMap<NodeIndex, f64>,
     distance: &HashMap<NodeIndex, u32>,
+    prefer_files: bool,
     token_budget: i64,
     mut skip_nodes: usize,
 ) -> (String, Option<usize>) {
@@ -596,9 +612,32 @@ fn subgraph_to_text(
                     .count()
                     .cmp(&loaded.graph.neighbors(a).count())
             })
+            .then_with(|| {
+                if prefer_files {
+                    let fa = label_is_file(&na.label);
+                    let fb = label_is_file(&nb.label);
+                    fb.cmp(&fa) // file nodes before symbols at equal relevance
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
             .then_with(|| na.label.cmp(&nb.label))
             .then_with(|| na.id.cmp(&nb.id))
     });
+
+    // Doc-heading cap: documentation nodes keyword-match almost anything and
+    // can absorb the whole node budget; per answer only the strongest few
+    // survive. Dropped from the list so continuation cursors stay consistent.
+    let mut doc_seen = 0usize;
+    node_list.retain(|&idx| {
+        if loaded.graph[idx].file_type == "document" {
+            doc_seen += 1;
+            doc_seen <= MAX_DOC_NODES_PER_ANSWER
+        } else {
+            true
+        }
+    });
+
     if skip_nodes >= node_list.len() {
         skip_nodes = 0; // stale/overshot cursor: restart from the top
     }
@@ -756,6 +795,7 @@ pub fn query_graph(
     directed: bool,
     min_strength: f64,
     cursor: usize,
+    prefer_files: bool,
 ) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
     query_graph_with_semantic(
         db,
@@ -768,6 +808,7 @@ pub fn query_graph(
         min_strength,
         cursor,
         &[],
+        prefer_files,
     )
 }
 
@@ -795,6 +836,7 @@ pub fn query_graph_with_semantic(
     min_strength: f64,
     cursor: usize,
     semantic: &[(String, f64)],
+    prefer_files: bool,
 ) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
     let loaded = load_graph_cached(db, db_path)?;
     if loaded.graph.node_count() == 0 {
@@ -863,6 +905,7 @@ pub fn query_graph_with_semantic(
         &edges_seen,
         &relevance,
         &distance,
+        prefer_files,
         budget,
         cursor,
     );
@@ -1358,6 +1401,118 @@ mod tests {
     use astria_core::db::open_db_in_memory;
 
     #[test]
+    fn doc_heading_nodes_are_capped_per_answer() {
+        // Eight document nodes keyword-match the question; only the cap
+        // (6) may render, and the code symbol must still be present.
+        let db = open_db_in_memory().unwrap();
+        let mut inserts = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('sym', 'validation()', 'code', 'src/v.rs')",
+        );
+        for i in 0..8 {
+            inserts.push_str(&format!(
+                ", ('d{i}', 'validation notes {i}', 'document', 'docs/n{i}.md')"
+            ));
+        }
+        inserts.push_str(";");
+        inserts.push_str(
+            "INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('sym', 'd0', 'references', 'EXTRACTED', 'src/v.rs');",
+        );
+        db.execute_batch(&inserts).unwrap();
+
+        let (text, _, _, _) = query_graph(
+            &db,
+            "cap-test",
+            "validation",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        let doc_lines = text
+            .lines()
+            .filter(|l| l.starts_with("NODE ") && l.contains("docs/"))
+            .count();
+        assert!(
+            doc_lines <= 6,
+            "doc cap exceeded: {doc_lines} doc nodes shown"
+        );
+        assert!(
+            text.contains("validation()"),
+            "code symbol must survive the cap"
+        );
+    }
+
+    #[test]
+    fn prefer_files_ranks_file_node_over_equal_symbol() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('anchor', 'unrelated()', 'code', 'src/anchor.rs'),
+                ('fnode', 'ingest.rs', 'code', 'src/ingest.rs'),
+                ('sym', 'helper()', 'code', 'src/other.rs');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('anchor', 'fnode', 'imports', 'EXTRACTED', 'src/anchor.rs'),
+                ('anchor', 'sym', 'imports', 'EXTRACTED', 'src/anchor.rs');",
+        )
+        .unwrap();
+
+        // the anchor node matches the question; both discovered nodes tie at
+        // zero relevance, so the file preference decides which surfaces first
+        let (text_files, _, _, _) = query_graph(
+            &db,
+            "pf-files",
+            "unrelated query words",
+            "bfs",
+            1,
+            4000,
+            false,
+            0.0,
+            0,
+            true,
+        )
+        .unwrap();
+        let first_files = text_files
+            .lines()
+            .filter_map(|l| l.strip_prefix("NODE "))
+            .find(|l| l.contains("ingest.rs") || l.contains("helper()"))
+            .unwrap();
+        assert!(
+            first_files.contains("ingest.rs"),
+            "file node must rank first with prefer_files: {first_files}"
+        );
+
+        // without the preference the symbol wins the deterministic tiebreak
+        let (plain, _, _, _) = query_graph(
+            &db,
+            "pf-plain",
+            "unrelated query words",
+            "bfs",
+            1,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        let first_plain = plain
+            .lines()
+            .filter_map(|l| l.strip_prefix("NODE "))
+            .find(|l| l.contains("ingest.rs") || l.contains("helper()"))
+            .unwrap();
+        assert!(
+            first_plain.contains("helper()"),
+            "plain ordering changed: {first_plain}"
+        );
+    }
+
+    #[test]
     fn stopwords_neutralized_and_code_ranks_over_document() {
         // "where does validation happen": question words must score nothing,
         // and on equal term evidence ("validation") the code symbol outranks
@@ -1410,6 +1565,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         assert!(
@@ -1431,6 +1587,7 @@ mod tests {
             0.0,
             0,
             &semantic,
+            false,
         )
         .unwrap();
         assert!(
@@ -1477,6 +1634,7 @@ mod tests {
                 false,
                 0.0,
                 0,
+                false,
             )
             .unwrap();
         }
@@ -1501,6 +1659,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         let promoted = promote_learned_edges(&db, 2, 3).unwrap();
@@ -1699,15 +1858,26 @@ mod tests {
         // Hybrid retrieval: a typo'd term ("Alpga") is rescued by the fuzzy
         // layer and matches Alpha directly.
         let (text, nodes, _, _) =
-            query_graph(&db, &key, "Alpga", "bfs", 2, 2000, false, 0.0, 0).unwrap();
+            query_graph(&db, &key, "Alpga", "bfs", 2, 2000, false, 0.0, 0, false).unwrap();
         assert!(
             nodes > 0 && text.contains("Alpha"),
             "typo should still match, got: {text}"
         );
 
         // Gibberish with no near match: clean no-match, no suggestions.
-        let (text2, nodes2, _, _) =
-            query_graph(&db, &key, "zzzqqq xxxvvv", "bfs", 2, 2000, false, 0.0, 0).unwrap();
+        let (text2, nodes2, _, _) = query_graph(
+            &db,
+            &key,
+            "zzzqqq xxxvvv",
+            "bfs",
+            2,
+            2000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
         assert_eq!(nodes2, 0);
         assert!(text2.starts_with("No matching nodes found."));
 
@@ -1743,6 +1913,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         assert!(
@@ -1777,6 +1948,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         assert!(next.is_none() || next.is_some(), "cursor shape check");
@@ -1806,6 +1978,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         assert!(
@@ -1834,6 +2007,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         assert!(nodes > 0, "docstring content should seed the node");
@@ -1854,12 +2028,23 @@ mod tests {
         let key = ":memory:cursor";
 
         let (text1, _, _, next1) =
-            query_graph(&db, key, "Node", "bfs", 1, 30, false, 0.0, 0).unwrap();
+            query_graph(&db, key, "Node", "bfs", 1, 30, false, 0.0, 0, false).unwrap();
         assert!(next1.is_some(), "30 nodes cannot fit in 30 tokens: {text1}");
         assert!(text1.contains("cursor"));
 
-        let (text2, _, _, _) =
-            query_graph(&db, key, "Node", "bfs", 1, 30, false, 0.0, next1.unwrap()).unwrap();
+        let (text2, _, _, _) = query_graph(
+            &db,
+            key,
+            "Node",
+            "bfs",
+            1,
+            30,
+            false,
+            0.0,
+            next1.unwrap(),
+            false,
+        )
+        .unwrap();
         // The second page must start past the first page's nodes.
         assert_ne!(
             text1.lines().nth(2),
@@ -1882,10 +2067,12 @@ mod tests {
         )
         .unwrap();
         let key = ":memory:detail";
-        let (all, _, _, _) = query_graph(&db, key, "Beta", "bfs", 1, 4000, false, 0.0, 0).unwrap();
+        let (all, _, _, _) =
+            query_graph(&db, key, "Beta", "bfs", 1, 4000, false, 0.0, 0, false).unwrap();
         assert!(all.contains("Gamma"), "default tier keeps inferred edges");
 
-        let (high, _, _, _) = query_graph(&db, key, "Beta", "bfs", 1, 4000, false, 0.9, 0).unwrap();
+        let (high, _, _, _) =
+            query_graph(&db, key, "Beta", "bfs", 1, 4000, false, 0.9, 0, false).unwrap();
         assert!(
             !high.contains("NODE Gamma"),
             "high tier must not traverse inferred edges, got: {high}"
