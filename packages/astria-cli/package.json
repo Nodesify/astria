@@ -13,7 +13,7 @@
     "skills/**/*",
     "README.md",
     "LICENSE",
-    "!dist/astria.node"
+    "!dist/*.node"
   ],
   "scripts": {
     "build": "tsc",
