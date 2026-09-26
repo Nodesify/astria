@@ -5,6 +5,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { corpusTokensExact, countTokens, loadTokenizer } from './tokenize.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const work = path.join(repoRoot, 'bench-work');
@@ -15,6 +16,17 @@ const venvPython = isWin ? path.join(venv, 'Scripts', 'python.exe') : path.join(
 const venvGraphify = isWin ? path.join(venv, 'Scripts', 'graphify.exe') : path.join(venv, 'bin', 'graphify');
 const ORIG_REPO = 'https://github.com/safishamsi/graphify';
 const ORIG_COMMIT = '91f4d12';
+
+// The five questions BOTH tools answer for the parity block — same questions,
+// same budget, answers counted with the SAME tokenizer.
+const PARITY_QUESTIONS = [
+  'how does authentication work',
+  'what is the main entry point',
+  'how are errors handled',
+  'data layer api',
+  'core abstractions',
+];
+const PARITY_BUDGET = '4000';
 
 const sh = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', ...opts });
@@ -48,6 +60,18 @@ const origCorpusTokens = origBenchOut.match(/Corpus:\s+[\d,]+ words → ~([\d,]+
 const origAvgQuery = origBenchOut.match(/Avg query cost:\s+~([\d,]+) tokens/);
 const origReduction = origBenchOut.match(/Reduction:\s+([\d.]+)x/);
 
+// 3b. original: answer the shared parity questions so both sides can be
+// counted with the SAME tokenizer. Best effort — `query` may not exist at
+// the pinned commit; a null lands in the parity block with a note.
+const origParityAnswers = [];
+for (const q of PARITY_QUESTIONS) {
+  const r = run(venvGraphify, ['query', q], { cwd: corpus });
+  if (r.status === 0 && r.stdout) origParityAnswers.push(r.stdout);
+}
+const origParityAvg = origParityAnswers.length
+  ? Math.round(origParityAnswers.reduce((s, t) => s + countTokens(t, tok), 0) / origParityAnswers.length)
+  : null;
+
 // 4. clean the original's artifacts so ours sees the same pristine corpus
 for (const p of ['graphify-out', '.graphify_detect.json', '.graphify_ast.json', '.graphify_extract.json']) {
   rmSync(path.join(corpus, p), { recursive: true, force: true });
@@ -67,6 +91,20 @@ const oursGraph = oursOut.match(/Graph:\s+([\d,]+) nodes, ([\d,]+) edges/);
 const statsOut = sh('astria', ['stats', '--graph', '.'], { cwd: corpus });
 const stat = (re) => (statsOut.match(re) ?? [])[1];
 const oursVersion = sh('astria', ['--version']).trim();
+
+// 5b. ours: the same parity questions through the same query engine.
+const oursParityAnswers = [];
+for (const q of PARITY_QUESTIONS) {
+  const r = run('astria', ['query', q, '--budget', PARITY_BUDGET], { cwd: corpus });
+  if (r.status === 0 && r.stdout) oursParityAnswers.push(r.stdout);
+}
+const oursParityAvg = oursParityAnswers.length
+  ? Math.round(oursParityAnswers.reduce((s, t) => s + countTokens(t, tok), 0) / oursParityAnswers.length)
+  : null;
+
+// Exact corpus tokens with ONE tokenizer — the number both parity
+// reductions divide. Skips build artifacts via tokenize.mjs's skip list.
+const parityCorpus = await corpusTokensExact(corpus, tok);
 
 // 6. assemble snapshot
 const snapshot = {

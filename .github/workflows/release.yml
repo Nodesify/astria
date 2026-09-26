@@ -213,8 +213,10 @@ jobs:
           [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && echo "OIDC endpoint: present" || echo "OIDC endpoint: MISSING"
           [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ] && echo "OIDC request token: present" || echo "OIDC request token: MISSING"
           echo "--- npm version:"; npm --version
-          echo "--- npm debug log tail:"
-          tail -60 /home/runner/.npm/_logs/*-debug-0.log 2>/dev/null || echo "no debug log found"
+          echo "--- npm logs dir:"
+          ls -t /home/runner/.npm/_logs/ 2>/dev/null | head -3
+          L=$(ls -t /home/runner/.npm/_logs/* 2>/dev/null | head -1)
+          [ -n "$L" ] && { echo "--- latest npm debug log ($L):"; cat "$L"; } || echo "none"
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
