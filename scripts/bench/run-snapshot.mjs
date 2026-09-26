@@ -28,6 +28,10 @@ const PARITY_QUESTIONS = [
 ];
 const PARITY_BUDGET = '4000';
 
+// One tokenizer for both sides — o200k_base. Null when js-tiktoken is not
+// installed; parity counts then degrade to null and the note says so.
+const tok = await loadTokenizer();
+
 const sh = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', ...opts });
 const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', ...opts });
@@ -142,10 +146,27 @@ const snapshot = {
       reduction: oursReduction ? Number(oursReduction[1]) : null,
     },
   },
+  token_parity: {
+    tokenizer: tok
+      ? { name: tok.name, implementation: tok.implementation }
+      : { name: 'unavailable', note: 'js-tiktoken not installed; parity block degraded' },
+    corpus_tokens: parityCorpus.tokens,
+    corpus_bytes: parityCorpus.bytes,
+    astria: {
+      avg_query_tokens: oursParityAvg,
+      reduction: oursParityAvg ? Number((parityCorpus.tokens / oursParityAvg).toFixed(1)) : null,
+    },
+    original: {
+      avg_query_tokens: origParityAvg,
+      reduction: origParityAvg ? Number((parityCorpus.tokens / origParityAvg).toFixed(1)) : null,
+    },
+    questions: PARITY_QUESTIONS.length,
+    note: 'Both sides counted with the SAME tokenizer on the same corpus — the absolute numbers here are directly comparable (the ~87k vs ~158k divergence in the self-estimated blocks below is estimator, not bytes).',
+  },
   methodology_notes: [
     'Structural pipeline only on both sides (no LLM enrichment): detect -> AST extract -> build -> cluster -> analyze -> report.',
     'The original is driven by scripts/bench/orig_run.py, replicating its own skill.md stage-for-stage.',
-    'Each token benchmark is its own implementation; the ratio, not absolute tokens, is the comparable metric.',
+    'The token_parity block re-counts both sides with one shared tokenizer (o200k_base via js-tiktoken), so its absolute numbers are directly comparable. The per-tool benchmark blocks below keep each tool\'s own estimator (historical, ratio-only).',
     'Single cold run per tool on shared hardware - treat as trend data, not a microbenchmark.',
   ],
 };

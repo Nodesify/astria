@@ -43,6 +43,10 @@ jobs:
       # the snapshot reflects what users can actually install today.
       - name: Install astria (published CLI)
         run: npm install -g @nodesify/astria
+      # Exact shared-tokenizer counts for the token_parity block (graceful
+      # fallback to the heuristic if this step is removed).
+      - name: Install shared tokenizer
+        run: npm install --no-save js-tiktoken
       - name: Run snapshot benchmark
         run: node scripts/bench/run-snapshot.mjs
       - name: Commit snapshot
@@ -59,3 +63,33 @@ jobs:
         run: gh workflow run "Deploy docs site" --ref develop
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # Retrieval-quality benchmark: the published CLI answering the golden QA
+  # set over this repo's own graph. Non-blocking while the golden set and
+  # the query ranking mature; numbers land on the docs site via the commit.
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: develop
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: Install astria (published CLI)
+        run: npm install -g @nodesify/astria
+      - name: Build the graph over this repo
+        run: astria run .
+      - name: Retrieval quality (recall@k / MRR)
+        run: node scripts/bench/quality/run-quality.mjs --out website/src/data/quality-snapshot.json
+      - name: Commit quality snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add website/src/data/quality-snapshot.json
+          git diff --cached --quiet || git commit -m "chore(bench): update retrieval quality snapshot"
+          git pull --rebase origin develop
+          git push

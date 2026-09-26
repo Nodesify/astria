@@ -69,6 +69,17 @@ or `detail: "high"` on any MCP traversal tool.
 
 That is the benchmark being honest, not broken. On tiny corpora, reading the files directly is cheaper than a graph query — there the graph's value is structure (blast radius, communities, paths), not compression. The output says so; see [Benchmarks and evidence](../explanation/benchmarks).
 
+## The retrieval-quality numbers look low
+
+They are measured, not estimated: the harness in `scripts/bench/quality/`
+asks grounded questions through the real engine and scores whether the
+expected file or symbol appears in the answer. Low recall@k usually means
+the answer is *topically* right but surfaces hub nodes and doc headings
+before the implementing code — a ranking problem, not an extraction one.
+Re-run with `--embed` (semantic seeds change the candidate set), and prefer
+`--detail high` to see declared facts only. The harness README documents
+the miss mode and the ranking fixes in flight.
+
 ## Learned edges are connecting things I didn't declare
 
 Learned edges are `INFERRED` by design — they record which node pairs your own queries keep connecting. They flow into clustering and exports, but any high-fidelity traversal filters them out. If they mislead, prefer `--detail high` for that session; they are always re-derivable from query history.

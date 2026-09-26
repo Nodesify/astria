@@ -2,7 +2,11 @@
   "name": "astria",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "workspaces": [
     "packages/*"
-  ]
+  ],
+  "devDependencies": {
+    "js-tiktoken": "^1.0.21"
+  }
 }
