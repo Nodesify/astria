@@ -6,8 +6,8 @@ Thanks for helping improve astria! This document covers setup, testing, and the 
 
 Prerequisites:
 
-- **Rust** 2021 edition (1.56+) — `rustup` recommended
-- **Node.js** 20+ (22 recommended) and npm
+- **Rust** 1.88+ (enforced via `rust-version` in the workspace) — `rustup` recommended
+- **Node.js** 22+ (matches the badge, engines floor, and CI matrix) and npm
 
 ```bash
 git clone https://github.com/Nodesify/astria.git

@@ -71,3 +71,6 @@ unicode-normalization = "0.1"
 toml = "0.8"
 strsim = "0.11"
 base64 = "0.22"
+
+[workspace.package]
+rust-version = "1.88"

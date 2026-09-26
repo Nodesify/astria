@@ -134,7 +134,7 @@ cargo build --release
 cd packages/astria-cli && npm run build
 ```
 
-Requires Rust 2021 edition (Rust 1.56+) and Node.js >= 20.
+Requires Rust 1.88+ (declared as `rust-version` in the workspace) and Node.js >= 22.
 
 ## Test
 
