@@ -6,6 +6,20 @@ this file is the per-version summary.
 
 ## [Unreleased]
 
+### Changed
+- **Query answers are relevance-ranked, not hub-ranked.** Answer nodes
+  order by question-match score first, then traversal distance to the
+  matching seeds, then degree — pure degree ordering buried the files a
+  question was about beneath graph-wide hubs. Question words ("where",
+  "does", "what"…) are filtered as stopwords before scoring, and code
+  symbols outrank prose/stub nodes on equal term evidence. Measured with
+  the golden-QA harness on this repo: MRR 0.058 → 0.533, recall@5
+  2.9% → 65.7%, recall@10 11.4% → 80%.
+- `stats` now prints a node-type breakdown (code/stub/document/…), keeping
+  `status` focused on graph health and staleness.
+- `save-result` without `--outcome` prints how to record one — reflect
+  skips outcome-less entries.
+
 ### Fixed
 - `path` fed exact qualified ids to fuzzy scoring, so endpoints silently
   resolved to unrelated nodes ("src_lib::fetch_bytes" top-ranked an
