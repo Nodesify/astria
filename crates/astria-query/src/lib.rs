@@ -1144,8 +1144,10 @@ pub fn explain_with_neighbors(
     let idx = match loaded.id_to_idx.get(resolved_id.as_str()) {
         Some(&idx) => idx,
         None => {
-            let terms: Vec<String> =
-                resolved_id.split_whitespace().map(|s| s.to_string()).collect();
+            let terms: Vec<String> = resolved_id
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
             let scored = score_nodes(&loaded, &terms);
             match scored.first() {
                 Some((_, idx)) => *idx,
