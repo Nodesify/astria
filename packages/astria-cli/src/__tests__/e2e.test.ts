@@ -89,6 +89,17 @@ if (!existsSync(cliEntry) || !existsSync(nativeBin)) {
   assert(cypher.includes('MERGE (a)-[r:'), 'cypher export should MERGE relationships');
   assert(/Reduction:\s+[0-9.]+x/.test(run.stdout), 'run should print the token reduction benchmark');
 
+  // 6c. an unknown format is rejected, not silently exported as JSON
+  // (obsidian is a wiki format, a plausible typo for `wiki --format obsidian`)
+  const badPath = join(tmp, 'should-not-exist.json');
+  const badFormat = runCli(['export', '--graph', '.', '--format', 'obsidian', '--out', badPath], project);
+  assert(badFormat.status !== 0, 'export with unknown format should exit non-zero');
+  assert(/json, html, graphml, cypher/.test(String(badFormat.stderr)),
+    'unknown-format error should list the valid formats');
+  assert(String(badFormat.stderr).includes('wiki --format obsidian'),
+    'obsidian export should point at `wiki --format obsidian`');
+  assert(!existsSync(badPath), 'rejected export must not write an output file');
+
   // 6b. wiki writes an agent-crawlable markdown wiki with a valid index
   const wiki = runCli(['wiki', '--graph', '.'], project);
   assert(wiki.status === 0, `wiki should exit 0, got ${wiki.status}: ${String(wiki.stderr).slice(0, 200)}`);
