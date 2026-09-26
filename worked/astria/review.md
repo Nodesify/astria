@@ -39,6 +39,9 @@ this same graph — full results in
 [`quality-results.json`](./quality-results.json) beside this file (0.8.0-era
 engine; the docs site's benchmark page tracks the current snapshot):
 recall@5 **8.6%**, recall@10 **17.1%**, MRR **0.094**.
+*(After the ranking fixes that this review's miss mode pointed at —
+relevance-ranked answers, stopword filtering, code-over-prose prior — the
+same set measures recall@5 **65.7%**, recall@10 **85.7%**, MRR **0.537**.)*
 
 The miss mode is the same story this review tells qualitatively, now with
 numbers: answers are ordered by hub degree rather than question relevance,
