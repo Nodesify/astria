@@ -136,6 +136,40 @@ fn cross_file_noncode_blocked(a: &NodeRow, b: &NodeRow) -> bool {
     noncode(&a.file_type) && noncode(&b.file_type) && a.source_file != b.source_file
 }
 
+/// What kind of entity the raw label names. Symbols end with "()"
+/// ("validate_url()"), files carry an extension ("validate.rs", "sample.go");
+/// everything else (prose headings, concept names) is free-form.
+enum Shape {
+    Symbol,
+    File,
+    Free,
+}
+
+fn label_shape(label: &str) -> Shape {
+    if label.ends_with("()") {
+        return Shape::Symbol;
+    }
+    if let Some(dot) = label.rfind('.') {
+        let ext = &label[dot + 1..];
+        if dot > 0 && !ext.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        {
+            return Shape::File;
+        }
+    }
+    Shape::Free
+}
+
+/// A symbol, a file, and a free-form concept are different kinds of entity
+/// even when their names look alike: JW("validate url", "validate rs") ≈ 94.9
+/// would otherwise merge `validate_url()` into the `validate.rs` file node,
+/// deleting the symbol and rewiring its callers to the file.
+fn shape_mismatch_blocked(a: &NodeRow, b: &NodeRow) -> bool {
+    !matches!(
+        (label_shape(&a.label), label_shape(&b.label)),
+        (Shape::Symbol, Shape::Symbol) | (Shape::File, Shape::File) | (Shape::Free, Shape::Free)
+    )
+}
+
 struct UnionFind {
     parent: Vec<usize>,
 }
@@ -250,6 +284,9 @@ pub fn dedup_nodes(db: &Connection) -> Result<usize> {
             continue;
         }
         if cross_file_noncode_blocked(a, b) {
+            continue;
+        }
+        if shape_mismatch_blocked(a, b) {
             continue;
         }
         if uf.find(i) != uf.find(j) {
@@ -449,6 +486,32 @@ mod tests {
             None,
         );
         assert_eq!(dedup_nodes(&db).unwrap(), 0);
+    }
+
+    #[test]
+    fn file_nodes_do_not_absorb_symbols() {
+        // JW("validate url", "validate rs") ≈ 94.9 clears the 92 threshold —
+        // without the shape guard the `validate.rs` file node deleted the
+        // `validate_url()` symbol and its callers pointed at the file.
+        let db = open_db_in_memory().unwrap();
+        insert(&db, "src_validate", "validate.rs", "code", "validate.rs", Some(1));
+        insert(
+            &db,
+            "src_lib::validate_url",
+            "validate_url()",
+            "code",
+            "ingest/lib.rs",
+            Some(1),
+        );
+        assert_eq!(dedup_nodes(&db).unwrap(), 0);
+        let kept: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM nodes WHERE id = 'src_lib::validate_url'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 1);
     }
 
     #[test]
