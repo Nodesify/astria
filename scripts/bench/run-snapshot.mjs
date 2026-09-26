@@ -15,7 +15,7 @@ const isWin = process.platform === 'win32';
 const venvPython = isWin ? path.join(venv, 'Scripts', 'python.exe') : path.join(venv, 'bin', 'python');
 const venvGraphify = isWin ? path.join(venv, 'Scripts', 'graphify.exe') : path.join(venv, 'bin', 'graphify');
 const ORIG_REPO = 'https://github.com/safishamsi/graphify';
-const ORIG_COMMIT = '91f4d12';
+const ORIG_COMMIT = '4139885a1212956cf69a76946fbde0d181ab85e9'; // graphify v0.9.69 — first line with a query-capable CLI for blind judging
 
 // The five questions BOTH tools answer for the parity block — same questions,
 // same budget, answers counted with the SAME tokenizer.
