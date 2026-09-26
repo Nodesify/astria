@@ -1,11 +1,15 @@
-# Worked example: nodesify-graphify on the original Python graphify
+# Worked example: astria on the original Python graphify
 
-**Corpus:** the upstream Python project this tool rewrites — 20 Python modules, tests, skill files, docs (see `CORPUS.md` for the exact commit and how to fetch it; not vendored, by policy).
+> **Historical note.** Run with the pre-1.0 tool (then named
+> `nodesify-graphify`, graph in `.graphify/`, ignore file `.graphifyignore`).
+> The current binary is `astria` and the ignore file is `.astriaignore`.
+
+**Corpus:** the Python project that inspired this tool, analyzed on its own codebase — 20 Python modules, tests, skill files, docs (see `CORPUS.md` for the exact commit and how to fetch it; not vendored, by policy).
 **1,083 nodes / 6,823 edges / 84 communities**, modularity 0.509. Built with `run --embed --wiki`; benchmark: **40.2x** fewer tokens per query vs reading the corpus.
 
-**Files:** `graph_report.md` (as generated), `graph.json`, `wiki_index.md` (wiki entry point).
+**Files:** `graph_report.md` (as generated), `wiki_index.md` (wiki entry point). The full `graph.json` (2.4 MB) is no longer stored in the repo — regenerate it with the command under **Reproduce**.
 
-**Reproduce:** fetch the corpus per `CORPUS.md`, then `nodesify-graphify run . --embed --wiki`.
+**Reproduce:** fetch the corpus per `CORPUS.md`, then `astria run . --embed --wiki` (as run pre-1.0: `nodesify-graphify run . --embed --wiki`).
 
 ## What the graph got right
 

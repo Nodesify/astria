@@ -2,6 +2,9 @@
 name = "astria-napi"
 version = "1.0.0"
 edition = "2021"
+license = "MIT"
+# workspace-internal: distributed via npm (@nodesify/astria), not crates.io
+publish = false
 
 [lib]
 crate-type = ["cdylib", "lib"]
