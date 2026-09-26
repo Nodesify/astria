@@ -111,6 +111,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: build
+    # Must match the Environment field of the npm Trusted Publisher bindings
+    # (all six @nodesify packages bind this repo + release.yml + env `prod`).
+    # npm rejects OIDC publishes whose token carries a different/absent
+    # environment claim.
+    environment: prod
     permissions:
       id-token: write
       contents: write
