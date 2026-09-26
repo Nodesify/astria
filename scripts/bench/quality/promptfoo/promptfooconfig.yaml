@@ -1,0 +1,27 @@
+# Blind retrieval-quality judging: both tools answer the same golden
+# questions on the same corpus; an LLM rubric grades each answer WITHOUT
+# knowing which tool produced it.
+#
+# Run (repo root):
+#   node scripts/bench/quality/promptfoo/gen-promptfoo-tests.mjs   # once per golden change
+#   npx promptfoo@latest eval -c scripts/bench/quality/promptfoo/promptfooconfig.yaml \
+#       --output scripts/bench/quality/out/promptfoo-results.json
+#
+# Needs:
+#   - a built graph at BENCH_CORPUS (default cwd) + astria CLI (ASTRIA_CMD)
+#   - for the second provider: original graphify CLI (GRAPHIFY_CMD) on the
+#     same corpus — delete that provider entry to judge astria alone
+#   - a judge key visible to promptfoo: ANTHROPIC_API_KEY or OPENAI_API_KEY
+description: 'Retrieval quality: astria vs original graphify, same corpus, blind judge'
+prompts:
+  - '{{question}}'
+providers:
+  - id: file://astria-provider.mjs
+    label: astria
+  - id: file://graphify-provider.mjs
+    label: graphify (original)
+tests: tests.generated.yaml
+defaultTest:
+  assert:
+    - type: llm-rubric
+      value: '{{rubric}}'

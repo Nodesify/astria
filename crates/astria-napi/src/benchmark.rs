@@ -115,6 +115,9 @@ pub fn render_report(result: &BenchmarkResult) -> String {
         result.avg_query_tokens,
         result.reduction_ratio,
     );
+    out.push_str(
+        "  Estimator:      4 chars/token heuristic — the published snapshot also\n  reports exact o200k_base counts for both tools (token_parity block)\n",
+    );
     if result.reduction_ratio < 1.5 {
         out.push_str(
             "  (small corpus — the graph's value here is structure, not compression;\n   reduction grows with corpus size)\n",

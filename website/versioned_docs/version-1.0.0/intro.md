@@ -9,7 +9,7 @@ keywords: [knowledge graph, codebase, ast, tree-sitter, rust, agents, mcp]
 
 **astria** turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
 
-astria is inspired by the Python [Graphify](https://github.com/safishamsi/graphify) project's core idea — turn a corpus into a queryable knowledge graph — but it is an independent, from-scratch implementation: a deterministic, offline-first Rust/tree-sitter pipeline, not a fork or a port.
+astria is inspired by the Python [Graphify](https://github.com/safishamsi/graphify) project's core idea — turn a corpus into a queryable knowledge graph — but it is an independent, from-scratch implementation: a deterministic, offline-first Rust/tree-sitter pipeline, not a fork or a port. astria is not affiliated with, sponsored by, or endorsed by the Graphify project or Graphify Labs.
 
 You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run; varies by corpus — see [Benchmarks and evidence](./explanation/benchmarks)).
 

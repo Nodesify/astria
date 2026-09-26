@@ -9,7 +9,7 @@ import BenchmarkSnapshot from '@site/src/components/BenchmarkSnapshot';
 
 # Benchmarks and evidence
 
-Every claim on this site is measured, printed after every run, and reproducible with the commands below. This page collects the canonical numbers (v0.8.0), the methodology behind them, and a head-to-head against the original Python Graphify this tool rewrites.
+Every claim on this site is measured, printed after every run, and reproducible with the commands below. This page collects the canonical numbers (v0.8.0), the methodology behind them, and a head-to-head against the Python Graphify project that inspired it.
 
 ## How the token benchmark works
 
@@ -19,6 +19,8 @@ Every `run` and `update` prints a measured comparison:
 - **Query side** — five fixed questions are run through the actual query engine and the answer text is counted. No sampling, no hand-picked best case.
 
 The ratio is printed even when it is unflattering: on tiny corpora the benchmark honestly reports &lt;1× and says so — there the graph's value is structure, not compression.
+
+The printed estimate uses a 4-chars-per-token heuristic. The [live snapshot](#live-benchmark-snapshot) additionally reports a `token_parity` block: both tools' corpus and query tokens re-counted with **one shared tokenizer** (o200k_base via js-tiktoken), so the snapshot's absolute numbers are directly comparable — the divergence between the two tools' own corpus estimates (~87k vs ~158k on the same files) is estimator, not bytes.
 
 ## Canonical numbers (v0.8.0)
 
@@ -33,7 +35,7 @@ Numbers vary per run and per corpus (file mix, repo size, and how chatty query a
 
 ## Head-to-head vs the original Python Graphify
 
-The [original Graphify](https://github.com/safishamsi/graphify) (MIT) is the Python project this tool rewrites. Both tools were run **on the same corpus** — the original's own repository at commit `91f4d12` — with the structural pipeline only (no LLM enrichment on either side), each driven the way its own documentation drives it.
+The [original Graphify](https://github.com/safishamsi/graphify) (© Graphify Labs, dual-licensed Apache-2.0/MIT) is the Python project that inspired astria — an independent implementation, not affiliated with or endorsed by Graphify Labs. Both tools were run **on the same corpus** — the original's own repository at commit `91f4d12` — with the structural pipeline only (no LLM enrichment on either side), each driven the way its own documentation drives it.
 
 | Metric | original Graphify (`91f4d12`) | astria 0.8.0 |
 |---|---|---|
@@ -47,7 +49,7 @@ Honest reading:
 
 - **Speed**: ~4.7× faster end-to-end. The original spends most of its time in Python/networkx build and clustering; ours is a native Rust core with SQLite persistence.
 - **Graph density**: ours extracts ~2× the nodes and ~4.8× the edges — `Imports`/`Uses`/`Defines` edges in addition to calls, plus file-aggregate nodes. That yields finer communities (161 vs 45); the original's Leiden clustering merges more aggressively. Denser is not automatically better — it is a different granularity trade-off.
-- **Token reduction**: effectively identical (50.1× vs 51.6×). Each tool measured with its own benchmark implementation (ours was ported from theirs); the absolute corpus-token estimates differ (~87k vs ~158k) because the estimators differ, so the ratio — not the absolute tokens — is the comparable metric.
+- **Token reduction**: effectively identical (50.1× vs 51.6×). Each tool measured with its own benchmark implementation (ours follows the same methodology); the absolute corpus-token estimates differ (~87k vs ~158k) because the estimators differ, so the ratio — not the absolute tokens — is the comparable metric.
 
 ## Live benchmark snapshot
 
@@ -68,6 +70,16 @@ CI runners are shared hardware, so treat snapshot numbers as trend data; the man
 
 Findings: `similar_to` edges consolidate communities by **44–53%** on both corpora, and the token ratio is unchanged (~109× / ~51.5×) — embeddings buy semantic recall and cleaner communities, not smaller output.
 
+## Retrieval quality — not just compression
+
+Cost says the graph is cheap; retrieval quality says whether it answers *well*. Three measurements live under `scripts/bench/`:
+
+**Golden-QA recall** (`scripts/bench/quality/`) — 35 questions about this repository with ground-truth files, run through the real query engine and scored by the rank of the first expected file or symbol in the answer (recall@k, MRR). Expectations are validated against the tree (`--check`), so the set cannot silently rot. First structural (no-embeddings) measurement: recall@5 **8.6%**, recall@10 **17.1%**, MRR **0.094** — deliberately unflattering and useful: the miss mode is hub-ranked output and doc-dominated seeds, documented with the engine fixes it points at in the harness README. CI runs it on every snapshot dispatch (non-blocking while the golden set matures) and commits `website/src/data/quality-snapshot.json`.
+
+**Blind LLM judging** (`scripts/bench/quality/promptfoo/`) — astria and the original Graphify answer the same golden questions; an LLM rubric grades each answer without knowing which tool produced it. Run locally with a judge key; wired into CI once the golden set stabilizes.
+
+**Memory retrieval — LoCoMo** (`scripts/bench/memory/`) — the evidence-referenced protocol the original publishes (snap-research LoCoMo, ACL 2024): ~2,000 QA pairs over 10 long conversations, ingested as `.astria/transcripts/` sidecars. `prepare-locomo.mjs` fetches and converts (1,977 pairs with resolvable evidence); `run-locomo.mjs` builds the graph and scores evidence-file recall@k / MRR, optionally with LLM-judged answer correctness. Dataset is CC BY-NC 4.0 — research use.
+
 ## Worked examples, including what went wrong
 
 Two full runs with generated reports, graphs, and honest reviews of failure modes (unhelpful community labels, fixture noise, stub-noise connections):
@@ -86,7 +98,7 @@ git clone https://github.com/Nodesify/astria && cd astria
 astria run .            # prints the benchmark at the end
 astria run . --embed    # embedding experiment
 
-# original-vs-rewrite corpus
+# Graphify's repository — the head-to-head corpus
 git clone https://github.com/safishamsi/graphify corpus && cd corpus && git checkout 91f4d12
 astria run .            # ours
 # the original is driven per its skill.md: detect -> extract -> build -> cluster -> analyze -> report

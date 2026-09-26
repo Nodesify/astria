@@ -7,7 +7,7 @@ import BenchmarkSnapshot from '@site/src/components/BenchmarkSnapshot';
 
 # Benchmarks and evidence
 
-Every claim on this site is measured, printed after every run, and reproducible with the commands below. This page collects the canonical numbers (v0.8.0), the methodology behind them, and a head-to-head against the original Python Graphify this tool rewrites.
+Every claim on this site is measured, printed after every run, and reproducible with the commands below. This page collects the canonical numbers (v0.8.0), the methodology behind them, and a head-to-head against the Python Graphify project that inspired it.
 
 ## How the token benchmark works
 
@@ -31,7 +31,7 @@ Numbers vary per run and per corpus (file mix, repo size, and how chatty query a
 
 ## Head-to-head vs the original Python Graphify
 
-The [original Graphify](https://github.com/safishamsi/graphify) (MIT) is the Python project this tool rewrites. Both tools were run **on the same corpus** — the original's own repository at commit `91f4d12` — with the structural pipeline only (no LLM enrichment on either side), each driven the way its own documentation drives it.
+The [original Graphify](https://github.com/safishamsi/graphify) (© Graphify Labs, dual-licensed Apache-2.0/MIT) is the Python project that inspired astria — an independent implementation, not affiliated with or endorsed by Graphify Labs. Both tools were run **on the same corpus** — the original's own repository at commit `91f4d12` — with the structural pipeline only (no LLM enrichment on either side), each driven the way its own documentation drives it.
 
 | Metric | original Graphify (`91f4d12`) | nodesify-graphify 0.8.0 |
 |---|---|---|
@@ -45,7 +45,7 @@ Honest reading:
 
 - **Speed**: ~4.7× faster end-to-end. The original spends most of its time in Python/networkx build and clustering; ours is a native Rust core with SQLite persistence.
 - **Graph density**: ours extracts ~2× the nodes and ~4.8× the edges — `Imports`/`Uses`/`Defines` edges in addition to calls, plus file-aggregate nodes. That yields finer communities (161 vs 45); the original's Leiden clustering merges more aggressively. Denser is not automatically better — it is a different granularity trade-off.
-- **Token reduction**: effectively identical (50.1× vs 51.6×). Each tool measured with its own benchmark implementation (ours was ported from theirs); the absolute corpus-token estimates differ (~87k vs ~158k) because the estimators differ, so the ratio — not the absolute tokens — is the comparable metric.
+- **Token reduction**: effectively identical (50.1× vs 51.6×). Each tool measured with its own benchmark implementation (ours follows the same methodology); the absolute corpus-token estimates differ (~87k vs ~158k) because the estimators differ, so the ratio — not the absolute tokens — is the comparable metric.
 
 ## Live benchmark snapshot
 
@@ -84,7 +84,7 @@ git clone https://github.com/Nodesify/nodesify-graphify && cd nodesify-graphify
 nodesify-graphify run .            # prints the benchmark at the end
 nodesify-graphify run . --embed    # embedding experiment
 
-# original-vs-rewrite corpus
+# Graphify's repository — the head-to-head corpus
 git clone https://github.com/safishamsi/graphify corpus && cd corpus && git checkout 91f4d12
 nodesify-graphify run .            # ours
 # the original is driven per its skill.md: detect -> extract -> build -> cluster -> analyze -> report
