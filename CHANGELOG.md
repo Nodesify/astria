@@ -4,6 +4,19 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+### Fixed
+- `path` fed exact qualified ids to fuzzy scoring, so endpoints silently
+  resolved to unrelated nodes ("src_lib::fetch_bytes" top-ranked an
+  "as_bytes" node). Exact ids now win over scoring, with the same
+  stub-does-not-shadow rule as affected/explain; scoring stays as the
+  fallback for natural-language endpoints.
+- Node-id prefixes were derived from the CWD-joined path, so identical
+  content at different roots (relocated checkouts, clones) churned every
+  id and `diff`/`merge` mismatched whole graphs. Prefixes now come from
+  the path relative to the scanned root.
+
 ## [1.0.3] — 2026-09-26
 
 ### Fixed

@@ -32,3 +32,6 @@ scripts/bench/quality/out/
 # worked-example full graphs (multi-MB, regenerable via the reproduce commands)
 worked/astria/graph.json
 worked/graphify-python/graph.json
+
+# fetched URL documents (astria add <url>)
+raw/

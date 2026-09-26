@@ -41,7 +41,7 @@ mod tests {
         let php = dir.path().join("routes.php");
         fs::write(&php, source).unwrap();
         let db = open_db_in_memory().unwrap();
-        let mut results = extract(&[php], &db).unwrap();
+        let mut results = extract(&[php], dir.path(), &db).unwrap();
         // Keep the tempdir alive for the returned Extraction's paths.
         std::mem::forget(dir);
         assert_eq!(results.len(), 1);

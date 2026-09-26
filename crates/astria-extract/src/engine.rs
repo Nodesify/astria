@@ -9,7 +9,7 @@
 // - `docs`     — markdown / plain-text / RST extraction
 // - `refs`     — cross-file call/import target resolution
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
@@ -21,11 +21,21 @@ use crate::schema::Extraction;
 use crate::walkers::extract_single;
 use astria_core::AstriaError;
 
-pub fn extract(files: &[PathBuf], db: &Connection) -> Result<Vec<Extraction>, AstriaError> {
+pub fn extract(
+    files: &[PathBuf],
+    root: &Path,
+    db: &Connection,
+) -> Result<Vec<Extraction>, AstriaError> {
     let mut results = Vec::new();
 
     for file_path in files {
         let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // Node-id prefixes must come from the path relative to the scanned
+        // root, never from the caller's CWD-joined path: identical content
+        // at different roots (relocated checkouts, clones) must produce
+        // identical ids or merge/diff mismatch every node.
+        let naming = file_path.strip_prefix(root).unwrap_or(file_path);
 
         let hash = file_hash(file_path)?;
 
@@ -47,7 +57,7 @@ pub fn extract(files: &[PathBuf], db: &Connection) -> Result<Vec<Extraction>, As
                 results.push(cached);
                 continue;
             }
-            let extraction = extract_markdown(file_path)?;
+            let extraction = extract_markdown(file_path, naming)?;
             save_cache(db, file_path, &hash, &extraction);
             results.push(extraction);
             continue;
@@ -61,7 +71,8 @@ pub fn extract(files: &[PathBuf], db: &Connection) -> Result<Vec<Extraction>, As
             }
             match astria_pdf::extract_to_markdown(file_path) {
                 Ok(md_text) if !md_text.trim().is_empty() => {
-                    let extraction = extract_markdown_from_string(file_path, "pdf", &md_text);
+                    let extraction =
+                        extract_markdown_from_string(file_path, "pdf", &md_text, naming);
                     save_cache(db, file_path, &hash, &extraction);
                     results.push(extraction);
                 }
@@ -76,7 +87,7 @@ pub fn extract(files: &[PathBuf], db: &Connection) -> Result<Vec<Extraction>, As
                 results.push(cached);
                 continue;
             }
-            if let Ok(extraction) = extract_text_file(file_path, "text") {
+            if let Ok(extraction) = extract_text_file(file_path, "text", naming) {
                 save_cache(db, file_path, &hash, &extraction);
                 results.push(extraction);
             }
@@ -89,7 +100,7 @@ pub fn extract(files: &[PathBuf], db: &Connection) -> Result<Vec<Extraction>, As
                 results.push(cached);
                 continue;
             }
-            if let Ok(extraction) = extract_rst(file_path) {
+            if let Ok(extraction) = extract_rst(file_path, naming) {
                 save_cache(db, file_path, &hash, &extraction);
                 results.push(extraction);
             }
@@ -108,7 +119,7 @@ pub fn extract(files: &[PathBuf], db: &Connection) -> Result<Vec<Extraction>, As
         }
 
         // Extract
-        let extraction = extract_single(file_path, cfg)?;
+        let extraction = extract_single(file_path, cfg, naming)?;
 
         // Save to cache
         save_cache(db, file_path, &hash, &extraction);
@@ -139,7 +150,7 @@ mod tests {
         )
         .unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[py], &db).unwrap();
+        let results = extract(&[py], dir.path(), &db).unwrap();
         assert_eq!(results.len(), 1);
         let ext = &results[0];
         assert_eq!(ext.language, "Python");
@@ -171,7 +182,7 @@ mod tests {
         let py = dir.path().join("My-Module.PY");
         fs::write(&py, "class Greeter:\n    def greet(self):\n        pass\n").unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[py], &db).unwrap();
+        let results = extract(&[py], dir.path(), &db).unwrap();
         let ids: Vec<&String> = results[0].nodes.iter().map(|n| &n.id).collect();
         assert!(
             ids.iter().any(|id| id.ends_with("::greeter")),
@@ -197,7 +208,7 @@ mod tests {
         )
         .unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[rs], &db).unwrap();
+        let results = extract(&[rs], dir.path(), &db).unwrap();
         let ext = &results[0];
         assert_eq!(ext.language, "Rust");
         assert!(
@@ -220,7 +231,7 @@ mod tests {
         )
         .unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[js], &db).unwrap();
+        let results = extract(&[js], dir.path(), &db).unwrap();
         let ext = &results[0];
         assert_eq!(ext.language, "JavaScript");
         assert!(ext.nodes.iter().any(|n| n.label == "App"));
@@ -239,7 +250,7 @@ mod tests {
         )
         .unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[rs], &db).unwrap();
+        let results = extract(&[rs], dir.path(), &db).unwrap();
         let ext = &results[0];
         let ids: Vec<&str> = ext.nodes.iter().map(|n| n.id.as_str()).collect();
         let from_env: Vec<&&str> = ids.iter().filter(|id| id.ends_with("::from_env")).collect();
@@ -276,7 +287,7 @@ mod tests {
         )
         .unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[rs], &db).unwrap();
+        let results = extract(&[rs], dir.path(), &db).unwrap();
         let ext = &results[0];
         let count = ext
             .nodes
@@ -292,7 +303,7 @@ mod tests {
         let md = dir.path().join("spec.md");
         fs::write(&md, "# Spec\n\n## Changes\n\none\n\n## Changes\n\ntwo\n").unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[md], &db).unwrap();
+        let results = extract(&[md], dir.path(), &db).unwrap();
         let ext = &results[0];
         let section_ids: Vec<&str> = ext
             .nodes
@@ -323,7 +334,7 @@ mod tests {
         )
         .unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[py], &db).unwrap();
+        let results = extract(&[py], dir.path(), &db).unwrap();
         let ext = &results[0];
 
         // Env-var style, snake_case keys, and slash/kebab chains are indexed.
@@ -372,7 +383,7 @@ mod tests {
         )
         .unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[def, caller], &db).unwrap();
+        let results = extract(&[def, caller], dir.path(), &db).unwrap();
         let all_edges: Vec<&ExtractedEdge> = results.iter().flat_map(|r| r.edges.iter()).collect();
         assert!(
             all_edges
@@ -389,9 +400,43 @@ mod tests {
         let py = dir.path().join("main.py");
         fs::write(&py, "def hello(): pass\n").unwrap();
         let db = open_db_in_memory().unwrap();
-        let r1 = extract(std::slice::from_ref(&py), &db).unwrap();
-        let r2 = extract(&[py], &db).unwrap();
+        let r1 = extract(std::slice::from_ref(&py), dir.path(), &db).unwrap();
+        let r2 = extract(&[py], dir.path(), &db).unwrap();
         assert_eq!(r1[0].nodes.len(), r2[0].nodes.len());
+    }
+
+    #[test]
+    fn ids_stable_across_relocated_roots() {
+        // The id prefix must come from the root-relative path, not the
+        // CWD-joined one: identical content under differently-named roots
+        // must produce identical node ids or merge/diff mismatch everything.
+        let mk = |name: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            // The scanned root is the differently-named project dir itself,
+            // as when `astria run <root>` points at a relocated checkout.
+            let root = dir.path().join(name);
+            std::fs::create_dir_all(&root).unwrap();
+            let py = root.join("sample.py");
+            std::fs::write(
+                &py,
+                "def hello(): pass
+",
+            )
+            .unwrap();
+            (dir, root, py)
+        };
+        let (dir_a, root_a, py_a) = mk("proj_one");
+        let (dir_b, root_b, py_b) = mk("proj_two");
+        let db = open_db_in_memory().unwrap();
+        let ra = extract(&[py_a], &root_a, &db).unwrap();
+        let rb = extract(&[py_b], &root_b, &db).unwrap();
+        let ids_a: Vec<&str> = ra[0].nodes.iter().map(|n| n.id.as_str()).collect();
+        let ids_b: Vec<&str> = rb[0].nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids_a, ids_b, "ids churned across relocated roots");
+        assert!(
+            !ids_a.iter().any(|i| i.contains("proj_one")),
+            "root name leaked into ids"
+        );
     }
 
     #[test]
@@ -403,7 +448,7 @@ mod tests {
             "# Getting Started\n\nIntro text.\n\n## Installation\n\nSee [setup guide](setup.md) for details.\n\n### Step 1\n\nDo the thing.\n\n## Usage\n\nHow to use it.\n",
         ).unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[md], &db).unwrap();
+        let results = extract(&[md], dir.path(), &db).unwrap();
         let ext = &results[0];
         assert_eq!(ext.language, "markdown");
 
@@ -458,7 +503,7 @@ mod tests {
             "\ndef process(data):\n    # WHY: We need to normalize because upstream sends raw bytes\n    result = normalize(data)\n    # HACK: Temporary workaround for API bug\n    return result\n\nclass Handler:\n    # NOTE: This is not thread-safe\n    def handle(self):\n        pass\n",
         ).unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[py], &db).unwrap();
+        let results = extract(&[py], dir.path(), &db).unwrap();
         let ext = &results[0];
 
         let rationale_nodes: Vec<_> = ext
@@ -512,7 +557,7 @@ class Greeter:
         )
         .unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = extract(&[py], &db).unwrap();
+        let results = extract(&[py], dir.path(), &db).unwrap();
         let greet = results[0]
             .nodes
             .iter()

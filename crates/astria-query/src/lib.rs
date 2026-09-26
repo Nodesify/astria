@@ -931,38 +931,75 @@ pub fn find_shortest_path(
         return Ok((false, 0, "No nodes in graph.".to_string()));
     }
 
-    let src_terms: Vec<String> = source_query
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
-    let tgt_terms: Vec<String> = target_query
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
-
-    let src_scored = score_nodes(&loaded, &src_terms);
-    let tgt_scored = score_nodes(&loaded, &tgt_terms);
-
-    let src_idx = match src_scored.first() {
-        Some((_, idx)) => *idx,
-        None => {
-            let mut msg = format!("No matching node for '{}'.", source_query);
-            let suggestions = nearest_labels(&loaded, source_query, SUGGESTION_COUNT);
-            if !suggestions.is_empty() {
-                msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
+    // Exact ids win over fuzzy scoring, and a stub never shadows a
+    // same-named definition (same rule as affected/explain seeds). Scoring
+    // stays as the fallback for natural-language endpoints.
+    let resolve_endpoint = |query: &str| -> Option<NodeIndex> {
+        if let Some(&idx) = loaded.id_to_idx.get(query) {
+            let is_stub: bool = db
+                .query_row(
+                    "SELECT file_type = 'stub' FROM nodes WHERE id = ?1",
+                    rusqlite::params![query],
+                    |r| r.get(0),
+                )
+                .unwrap_or(false);
+            if !is_stub {
+                return Some(idx);
             }
-            return Ok((false, 0, msg));
+            let bare = query
+                .trim_start_matches('.')
+                .trim_end_matches("()")
+                .to_lowercase();
+            if let Some(id) = astria_core::db::prefer_non_stub_id(db, &bare) {
+                if let Some(&better) = loaded.id_to_idx.get(id.as_str()) {
+                    return Some(better);
+                }
+            }
+            return Some(idx);
+        }
+        None
+    };
+
+    let src_idx = match resolve_endpoint(source_query) {
+        Some(idx) => idx,
+        None => {
+            let src_terms: Vec<String> = source_query
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
+            let src_scored = score_nodes(&loaded, &src_terms);
+            match src_scored.first() {
+                Some((_, idx)) => *idx,
+                None => {
+                    let mut msg = format!("No matching node for '{}'.", source_query);
+                    let suggestions = nearest_labels(&loaded, source_query, SUGGESTION_COUNT);
+                    if !suggestions.is_empty() {
+                        msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
+                    }
+                    return Ok((false, 0, msg));
+                }
+            }
         }
     };
-    let tgt_idx = match tgt_scored.first() {
-        Some((_, idx)) => *idx,
+    let tgt_idx = match resolve_endpoint(target_query) {
+        Some(idx) => idx,
         None => {
-            let mut msg = format!("No matching node for '{}'.", target_query);
-            let suggestions = nearest_labels(&loaded, target_query, SUGGESTION_COUNT);
-            if !suggestions.is_empty() {
-                msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
+            let tgt_terms: Vec<String> = target_query
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
+            let tgt_scored = score_nodes(&loaded, &tgt_terms);
+            match tgt_scored.first() {
+                Some((_, idx)) => *idx,
+                None => {
+                    let mut msg = format!("No matching node for '{}'.", target_query);
+                    let suggestions = nearest_labels(&loaded, target_query, SUGGESTION_COUNT);
+                    if !suggestions.is_empty() {
+                        msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
+                    }
+                    return Ok((false, 0, msg));
+                }
             }
-            return Ok((false, 0, msg));
         }
     };
 
