@@ -54,10 +54,19 @@ Each pipeline stage is a pure function in its own crate. Keep extraction determi
 - **Security:** never shell out with string interpolation, never read or store secret *values* (env var *names* are fine), validate URLs against the SSRF rules in `crates/astria-ingest`, and render exported labels as text. See [SECURITY.md](SECURITY.md) for the threat model.
 - **Docs:** user-facing changes update `website/docs/`; the README links out to the docs rather than duplicating them.
 
+## Licensing and the CLA
+
+astria is MIT-licensed. To keep the project free to maintain, relicense, or
+extend its own code later without tracking down every past contributor,
+contributions are accepted under the [Contributor License Agreement](CLA.md) —
+a lightweight agreement where you keep full ownership and the project gets the
+standard license to use your work. **Submitting a pull request constitutes
+your agreement to it.** No signature form is required.
+
 ## Submitting changes
 
 1. Fork / branch from `develop`.
-2. Make the change with tests and docs.
+2. Make the change with tests and docs (accepted under the [CLA](CLA.md) by opening the PR).
 3. `cargo test` and `cd packages/astria-cli && npm test` must pass.
 4. `cd website && npm run build` must pass if you touched the docs.
 5. Open a PR describing *what* and *why*; link any related issues.

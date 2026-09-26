@@ -18,7 +18,7 @@
 
 Understand a codebase before you touch it. `astria` turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
 
-astria is inspired by the Python [Graphify](https://github.com/safishamsi/graphify) project's core idea — turn a corpus into a queryable knowledge graph — but it is an independent, from-scratch implementation: a deterministic, offline-first Rust/tree-sitter pipeline, not a fork or a port.
+astria is inspired by the Python [Graphify](https://github.com/safishamsi/graphify) project's core idea — turn a corpus into a queryable knowledge graph — but it is an independent, from-scratch implementation: a deterministic, offline-first Rust/tree-sitter pipeline, not a fork or a port. astria is not affiliated with, sponsored by, or endorsed by the Graphify project or Graphify Labs.
 
 You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run, computed from real file sizes vs actual query output — [methodology and head-to-head](https://nodesify.github.io/astria/docs/explanation/benchmarks)).
 
@@ -28,7 +28,7 @@ Three things a folder full of files can't give you:
 2. **An honest audit trail** — every edge is labeled EXTRACTED / INFERRED / AMBIGUOUS with a numeric confidence score. You always know what was found in the source versus deduced, and `--detail high` filters to only declared facts ([graph model](https://nodesify.github.io/astria/docs/reference/graph-model)).
 3. **Answers for agents and humans** — query it from the CLI, from any AI agent via MCP, or just read the exported markdown wiki with plain file links.
 
-[Worked examples with honest reviews](worked/) — the tool run on itself, including what the graph got *wrong* — plus a [head-to-head benchmark](worked/head-to-head/) against the Python Graphify project that inspired it, run on the same corpus.
+[Worked examples with honest reviews](worked/) — the tool run on itself, including what the graph got *wrong* — plus a [head-to-head benchmark](worked/head-to-head/) against the Python Graphify project that inspired it, run on the same corpus. The full measurement stack — shared-tokenizer token parity, a golden-QA retrieval-quality harness (recall@k / MRR), blind LLM judging, and a LoCoMo memory adapter — lives in [`scripts/bench/`](scripts/bench/).
 
 ## Quick start
 
@@ -77,7 +77,8 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 - **Cross-repo global graph** — merge many repos into one queryable store at `~/.astria/global.db` ([global graph guide](https://nodesify.github.io/astria/docs/guides/global-graph))
 - **The graph compounds with use** — repeated queries become `learned` edges; curated Q/A memory via `save-result`/`reflect` ([memory and learning](https://nodesify.github.io/astria/docs/guides/memory-and-learning))
 - **Interactive HTML viewer + Neo4j export** — physics-free large-graph mode beyond the 5,000-node safety cap, idempotent Cypher script ([wiki and exports](https://nodesify.github.io/astria/docs/guides/wiki-and-exports))
-- **Honest token math** — every run prints measured corpus-vs-query tokens: 110× on this repo ([benchmarks](https://nodesify.github.io/astria/docs/explanation/benchmarks))
+- **Honest token math** — every run prints measured corpus-vs-query tokens: 110× on this repo. The printed estimate names its heuristic; the published snapshot also counts both tools with one shared tokenizer so absolute numbers are directly comparable ([benchmarks](https://nodesify.github.io/astria/docs/explanation/benchmarks))
+- **Measured quality, not just cost** — a golden-QA harness scores recall@k / MRR of real query answers, a blind LLM judge grades astria against the original on the same corpus, and a LoCoMo adapter runs the memory-retrieval protocol the original publishes ([benchmarks](https://nodesify.github.io/astria/docs/explanation/benchmarks), [harness](scripts/bench/))
 - **9 MCP tools** — query_graph, repo_map, explain, get_neighbors, shortest_path, affected, god_nodes, list_communities, graph_stats ([MCP tools reference](https://nodesify.github.io/astria/docs/reference/mcp-tools))
 
 - **Agent skill on skills.sh** - `npx skills add Nodesify/astria` installs the graph-first skill on its own; it detects the CLI and guides install on first use ([skill file](https://github.com/Nodesify/astria/blob/main/skills/astria/SKILL.md))
@@ -152,4 +153,6 @@ Each language has its own config module in `crates/astria-extract/src/langs/`. A
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+Contributions are welcome and accepted under the [Contributor License Agreement](CLA.md) — see [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
