@@ -223,6 +223,21 @@ pub fn open_db_in_memory() -> Result<Connection> {
     Ok(conn)
 }
 
+/// Among all nodes sharing a bare name (label without `()`/leading `.`),
+/// pick a real definition over a speculative stub. Stubs come from
+/// unresolved edge targets and markdown identifiers; when one shadows a
+/// code symbol, `affected`/`explain` resolve to a node with no edges and
+/// report a false empty blast radius.
+pub fn prefer_non_stub_id(conn: &Connection, bare: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT id FROM nodes WHERE lower(replace(ltrim(label, '.'), '()', '')) = ?1
+         ORDER BY file_type = 'stub', id LIMIT 1",
+        rusqlite::params![bare],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

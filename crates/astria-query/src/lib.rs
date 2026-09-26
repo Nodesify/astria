@@ -1119,10 +1119,35 @@ pub fn explain_with_neighbors(
 ) -> astria_core::Result<Option<ExplainResult>> {
     let loaded = load_graph_cached(db, db_path)?;
 
-    let idx = match loaded.id_to_idx.get(node_id) {
+    // A stub must not shadow a same-named real definition: explaining by a
+    // bare name would otherwise land on a speculative node (no edges, no
+    // provenance) instead of the symbol.
+    let resolved_id = {
+        let bare = node_id
+            .trim_start_matches('.')
+            .trim_end_matches("()")
+            .to_lowercase();
+        let exact_is_stub: bool = db
+            .query_row(
+                "SELECT file_type = 'stub' FROM nodes WHERE id = ?1",
+                rusqlite::params![node_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if exact_is_stub {
+            astria_core::db::prefer_non_stub_id(db, &bare).unwrap_or_else(|| node_id.to_string())
+        } else {
+            node_id.to_string()
+        }
+    };
+
+    let idx = match loaded.id_to_idx.get(resolved_id.as_str()) {
         Some(&idx) => idx,
         None => {
-            let terms: Vec<String> = node_id.split_whitespace().map(|s| s.to_string()).collect();
+            let terms: Vec<String> = resolved_id
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
             let scored = score_nodes(&loaded, &terms);
             match scored.first() {
                 Some((_, idx)) => *idx,

@@ -5,6 +5,8 @@ pub mod hyperedges;
 pub mod minhash;
 pub mod validate;
 
+use std::collections::HashMap;
+
 use astria_core::Result;
 use astria_extract::Extraction;
 use astria_paths::normalize;
@@ -108,7 +110,24 @@ pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult>
             nodes_added += 1;
         }
 
+        // INFERRED call edges carry unresolved bare-name targets
+        // ("validate_url"). If an unrelated file owns a stub with that bare
+        // id, the edge silently attaches there and the real symbol loses its
+        // callers. When this extraction defines the symbol, prefer its
+        // qualified id. Sources are always this file's own symbols, so only
+        // targets need resolving.
+        let mut local_defs: HashMap<&str, &str> = HashMap::new();
+        for node in &extraction.nodes {
+            if let Some(bare) = node.label.strip_suffix("()") {
+                local_defs.entry(bare).or_insert(node.id.as_str());
+            }
+        }
+
         for edge in &extraction.edges {
+            let target: &str = match local_defs.get(edge.target.as_str()) {
+                Some(qualified) if !edge.target.contains("::") => qualified,
+                _ => edge.target.as_str(),
+            };
             // Ensure source node exists (stub if missing)
             ensure_node_exists(
                 &tx,
@@ -117,18 +136,13 @@ pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult>
                 &normalize(&edge.source_file),
             )?;
             // Ensure target node exists (stub if missing)
-            ensure_node_exists(
-                &tx,
-                &edge.target,
-                &edge.target,
-                &normalize(&edge.source_file),
-            )?;
+            ensure_node_exists(&tx, target, target, &normalize(&edge.source_file))?;
 
             tx.execute(
                 "INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file, source_line) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
                     edge.source,
-                    edge.target,
+                    target,
                     edge.relation,
                     edge.confidence,
                     edge.confidence_score,
@@ -325,6 +339,63 @@ mod tests {
         let result2 = build(&[ext2], &db).unwrap();
         assert_eq!(result2.nodes_added, 0);
         assert_eq!(result2.duplicates_merged, 1);
+    }
+
+    #[test]
+    fn unresolved_call_targets_resolve_to_same_file_symbol() {
+        // A stub named validate_url already exists from an unrelated file
+        // (here: a markdown identifier). The ingest extraction defines its
+        // own validate_url — its bare-target call edge must land on the
+        // qualified definition, not on the foreign stub.
+        let db = open_db_in_memory().unwrap();
+        let wiki = make_extraction_at(
+            "worked/wiki_index.md",
+            vec![("validate_url", "validate_url")],
+            vec![],
+        );
+        build(&[wiki], &db).unwrap();
+
+        let ingest = make_extraction_at(
+            "ingest/lib.rs",
+            vec![
+                ("src_lib::ingest_url", "ingest_url()"),
+                ("src_lib::validate_url", "validate_url()"),
+            ],
+            vec![("src_lib::ingest_url", "validate_url", "calls")],
+        );
+        build(&[ingest], &db).unwrap();
+
+        let (target, target_type): (String, String) = db
+            .query_row(
+                "SELECT e.target, n.file_type FROM edges e JOIN nodes n ON n.id = e.target
+                 WHERE e.source = 'src_lib::ingest_url' AND e.relation = 'calls'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(target, "src_lib::validate_url");
+        assert_eq!(target_type, "code");
+    }
+
+    #[test]
+    fn namespaced_targets_stay_put() {
+        // std/external targets are already namespaced and must not be
+        // rewritten even when a same-named symbol exists locally.
+        let db = open_db_in_memory().unwrap();
+        let ext = make_extraction_at(
+            "lib.rs",
+            vec![("src_lib::validate_url", "validate_url()")],
+            vec![("src_lib::validate_url", "std::fs::write", "calls")],
+        );
+        build(&[ext], &db).unwrap();
+        let target: String = db
+            .query_row(
+                "SELECT target FROM edges WHERE source = 'src_lib::validate_url'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(target, "std::fs::write");
     }
 
     #[test]

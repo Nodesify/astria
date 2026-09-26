@@ -4,6 +4,20 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.0.3] — 2026-09-26
+
+### Fixed
+- `affected`/`explain` resolved same-named code symbols to unrelated
+  nodes. Three defects compounded: entity dedup merged `validate_url()`
+  into the `validate.rs` file node (Jaro-Winkler on normalized labels is
+  shape-blind), INFERRED call edges carried bare-name targets that
+  collided with stubs from unrelated files, and seed resolution returned
+  stubs before real definitions. Dedup now refuses cross-shape merges
+  (symbol / file / free-form), the build resolves bare call targets to
+  same-file definitions, and seed lookup prefers definitions over stubs.
+  On this repo the `validate_url` blast radius went from 1 wrong node to
+  7 (real callers plus the redirect path).
+
 ## [1.0.2] — 2026-09-26
 
 ### Added
@@ -109,6 +123,7 @@ installed skill files. `astria migrate` moves pre-1.0 layouts.
 
 See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
+[1.0.3]: https://github.com/Nodesify/astria/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Nodesify/astria/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Nodesify/astria/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Nodesify/astria/compare/v0.9.0...v1.0.0
