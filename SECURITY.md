@@ -23,7 +23,7 @@ We aim to acknowledge reports within **72 hours** and will work with you on a co
 What astria is designed to withstand (and what we most want tested):
 
 - **Untrusted repositories** — sensitive-path denylisting (`.env`, keys, credentials), minified/vendored asset skipping, no shell-string execution, literal-allowlist native module loading, install-path containment.
-- **Hostile URLs** (`astria add <url>`) — `http`/`https` only; every redirect hop re-validated; DNS-resolved hosts checked against loopback/private/CGNAT/link-local ranges (IPv4 + IPv6, including mapped forms); download size and timeout caps; slugified filenames so a URL segment cannot write outside `.astria/raw/`.
+- **Hostile URLs** (`astria add <url>`) — `http`/`https` only; every redirect hop re-validated; DNS-resolved hosts checked against loopback/private/CGNAT/link-local ranges (IPv4 + IPv6, including mapped forms); download size and timeout caps; slugified filenames so a URL segment cannot write outside `raw/`.
 - **Untrusted content in exports** — node/community labels are rendered strictly as text in every HTML export; no HTML interpolation.
 - **Secret hygiene** — MCP config ingestion records env var **names**, never values; LLM API keys are sent in request headers (never in URLs); a plain-`http` non-local LLM base URL with a key configured prints a warning.
 

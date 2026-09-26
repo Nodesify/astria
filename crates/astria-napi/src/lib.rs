@@ -1043,6 +1043,44 @@ mod tests {
     }
 
     #[test]
+    fn find_shortest_path_exact_id_wins_over_fuzzy() {
+        // Reproduces the path defect: exact qualified ids were fed to fuzzy
+        // scoring, so "fetch_bytes" top-ranked an unrelated "as_bytes" node
+        // and the returned path connected the wrong endpoints entirely.
+        let db = open_db_in_memory().unwrap();
+        seed_graph(
+            &db,
+            &[
+                ("src_lib::ingest_url", "ingest_url()", "ing.rs", None),
+                ("src_lib::fetch_bytes", "fetch_bytes()", "ing.rs", None),
+                ("decoy_as_bytes", "as_bytes", "cli.ts", None),
+            ],
+            &[("src_lib::ingest_url", "src_lib::fetch_bytes", "calls")],
+        );
+        let key = format!(":memory:path_exact_{}", std::process::id());
+        let (found, hops, text) = query::find_shortest_path(
+            &db,
+            &key,
+            "src_lib::ingest_url",
+            "src_lib::fetch_bytes",
+            false,
+            0.0,
+        )
+        .unwrap();
+        assert!(found);
+        assert_eq!(hops, 1);
+        assert!(
+            text.contains("ingest_url"),
+            "source endpoint missing: {text}"
+        );
+        assert!(
+            text.contains("fetch_bytes"),
+            "target endpoint missing: {text}"
+        );
+        assert!(!text.contains("as_bytes"), "decoy leaked into path: {text}");
+    }
+
+    #[test]
     fn find_shortest_path_no_path() {
         let db = open_db_in_memory().unwrap();
         seed_graph(

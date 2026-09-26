@@ -444,7 +444,7 @@ fn run_pipeline_inner(
         });
     }
 
-    let mut extractions = astria_extract::extract(&files_to_process, db)?;
+    let mut extractions = astria_extract::extract(&files_to_process, root, db)?;
     let (semantic_enriched, semantic_failed) =
         enrich_with_semantics(&files_to_process, &mut extractions, db);
     let build_result = astria_build::build(&extractions, db)?;

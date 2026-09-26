@@ -921,7 +921,11 @@ fn find_rationale_tag(line: &str, comment_prefix: &str) -> Option<&'static str> 
 // Single-file extraction
 // ---------------------------------------------------------------------------
 
-pub(crate) fn extract_single(path: &Path, cfg: &LanguageConfig) -> Result<Extraction, AstriaError> {
+pub(crate) fn extract_single(
+    path: &Path,
+    cfg: &LanguageConfig,
+    naming: &Path,
+) -> Result<Extraction, AstriaError> {
     let source = std::fs::read(path)?;
     let source_ref = source.as_slice();
 
@@ -942,7 +946,7 @@ pub(crate) fn extract_single(path: &Path, cfg: &LanguageConfig) -> Result<Extrac
         })?;
 
     let root = tree.root_node();
-    let fid = file_stem(path);
+    let fid = file_stem(naming);
     let file_id = make_node_id(&[&fid]);
 
     let mut state = ExtractionState {
