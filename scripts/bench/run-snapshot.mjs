@@ -32,9 +32,12 @@ const PARITY_BUDGET = '4000';
 // installed; parity counts then degrade to null and the note says so.
 const tok = await loadTokenizer();
 
+// Windows resolves global CLIs through a .cmd shim, which spawnSync only
+// finds with a shell; POSIX keeps the exact-spawn (no-shell) behavior.
+const shellOpt = () => (isWin ? { shell: true } : {});
 const sh = (cmd, args, opts = {}) =>
-  execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', ...opts });
-const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', ...opts });
+  execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', ...shellOpt(), ...opts });
+const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', ...shellOpt(), ...opts });
 const timed = (cmd, args, opts = {}) => {
   const t0 = Date.now();
   const r = run(cmd, args, opts);
