@@ -65,6 +65,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Blind judging (promptfoo, gated on judge key)
+        # Spend control: LLM judging runs ONLY on a manual dispatch by the
+        # maintainer. Automated snapshot runs (bench-trigger pushes) never
+        # call a paid API, and fork PRs neither trigger this workflow nor
+        # receive secrets.
+        if: github.event_name == 'workflow_dispatch' && github.actor == 'erictong0602'
         continue-on-error: true
         env:
           PROMPTFOO_JUDGE_KEY: ${{ secrets.PROMPTFOO_JUDGE_KEY }}
