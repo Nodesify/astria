@@ -984,7 +984,8 @@ mod tests {
         let db = open_db_in_memory().unwrap();
         let key = format!(":memory:empty_{}", std::process::id());
         let (text, nodes, edges, _) =
-            query::query_graph(&db, &key, "anything", "bfs", 3, 2000, false, 0.0, 0, false).unwrap();
+            query::query_graph(&db, &key, "anything", "bfs", 3, 2000, false, 0.0, 0, false)
+                .unwrap();
         assert_eq!(text, "No nodes in graph.");
         assert_eq!(nodes, 0);
         assert_eq!(edges, 0);
@@ -995,8 +996,19 @@ mod tests {
         let db = open_db_in_memory().unwrap();
         seed_graph(&db, &[("n1", "Alpha", "f.py", None)], &[]);
         let key = format!(":memory:nomatch_{}", std::process::id());
-        let (text, nodes, _, _) =
-            query::query_graph(&db, &key, "xyznonexistent", "bfs", 3, 2000, false, 0.0, 0, false).unwrap();
+        let (text, nodes, _, _) = query::query_graph(
+            &db,
+            &key,
+            "xyznonexistent",
+            "bfs",
+            3,
+            2000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
         assert_eq!(text, "No matching nodes found.");
         assert_eq!(nodes, 0);
     }
