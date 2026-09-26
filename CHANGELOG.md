@@ -21,6 +21,12 @@ this file is the per-version summary.
   its first run.
 - Blind LLM judging (promptfoo) is wired as a workflow job, gated on the
   `PROMPTFOO_JUDGE_KEY` secret.
+- Query seed selection caps documentation-type seeds at 2 of 5 and scores
+  directory/crate-name path matches above bare substrings; the self-corpus
+  ignores `worked/` via `.astriaignore`. Measured on the golden set:
+  MRR 0.537 -> 0.576, recall@5 62.9% -> 71.4%, recall@10 85.7% -> 88.6%.
+  The three former full misses (tree-sitter language support, MCP tool
+  exposure, LLM semantic enrichment) now surface their implementing files.
 
 ## [1.0.4] — 2026-09-26
 
