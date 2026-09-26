@@ -47,9 +47,10 @@ The miss mode was consistent and fixable:
 
 | recall@1 | recall@5 | recall@10 | MRR |
 |---|---|---|---|
-| 42.9% | 65.7% | 85.7% | 0.537 |
+| 45.7% | 71.4% | 88.6% | 0.576 |
 
-(35/35 answered, avg 0.19 s/query.) Note the harness measures **hybrid**
+(35/35 answered; measured with the seed quota, tiered path scoring, the
+`worked/` ignore, and embedding seeds active in the graph.) Note the harness measures **hybrid**
 scoring once embeddings exist: `query` merges embedding-seed candidates
 automatically when the graph has vectors and the model is cached — there is
 no flag, and a pure-token comparison would need an opt-out. Remaining

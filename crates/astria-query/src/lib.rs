@@ -455,8 +455,17 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
                 0.0
             };
 
-            // Layer 3: path + fuzzy fallback (typo / word-variant rescue)
-            let path_score = if sf_lower.contains(&term_lower)
+            // Layer 3: path + fuzzy fallback (typo / word-variant rescue).
+            // A term naming a directory or crate segment ("mcp" in
+            // crates/astria-mcp/...) is a strong locating signal and scores
+            // above a bare substring hit.
+            let path_score = if file_tokens.iter().any(|ft| {
+                term_tokens
+                    .iter()
+                    .any(|tt| ft == tt || stem(ft) == stem(tt))
+            }) {
+                0.8
+            } else if sf_lower.contains(&term_lower)
                 || file_tokens.iter().any(|ft| term_tokens.contains(ft))
             {
                 0.5
@@ -879,7 +888,28 @@ pub fn query_graph_with_semantic(
         return Ok((msg, 0, 0, None));
     }
 
-    let seed_nodes: Vec<NodeIndex> = scored.iter().take(5).map(|(_, idx)| *idx).collect();
+    // Seed quota: at most 2 of 5 seeds may be documentation-type nodes.
+    // Doc headings keyword-match almost as strongly as code, and when they
+    // dominate the seed set the traversal starts in prose and never reaches
+    // the implementing crate file. Code/pattern/package seeds are unbounded.
+    let mut seed_nodes: Vec<NodeIndex> = Vec::new();
+    let mut doc_seeds = 0usize;
+    for &(_, idx) in scored.iter() {
+        if seed_nodes.len() == 5 {
+            break;
+        }
+        let is_doc = matches!(
+            loaded.graph[idx].file_type.as_str(),
+            "document" | "reference" | "paper"
+        );
+        if is_doc {
+            if doc_seeds == 2 {
+                continue;
+            }
+            doc_seeds += 1;
+        }
+        seed_nodes.push(idx);
+    }
     let (visited, edges_seen, distance) = if mode == "dfs" {
         dfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength)
     } else {
@@ -1511,6 +1541,51 @@ mod tests {
             first_plain.contains("helper()"),
             "plain ordering changed: {first_plain}"
         );
+    }
+
+    #[test]
+    fn doc_seed_quota_lets_code_enter_the_traversal() {
+        // Eight documents keyword-match the question; without the seed quota
+        // all five seeds were documents, traversal never left prose, and the
+        // implementing code file was unreachable.
+        let db = open_db_in_memory().unwrap();
+        let mut inserts = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('sym', 'validation()', 'code', 'src/v.rs')",
+        );
+        for i in 0..8 {
+            inserts.push_str(&format!(
+                ", ('d{i}', 'validation notes {i}', 'document', 'docs/n{i}.md')"
+            ));
+        }
+        inserts.push(';');
+        db.execute_batch(&inserts).unwrap();
+
+        let (text, nodes, _, _) = query_graph(
+            &db,
+            "seed-quota-test",
+            "validation",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        assert!(nodes > 0);
+        // at least one of the top five seeds must be the code symbol
+        assert!(
+            text.contains("validation()"),
+            "code symbol must be seeded despite doc competition"
+        );
+        let doc_seeds = text
+            .lines()
+            .next()
+            .map(|l| l.matches("validation notes").count())
+            .unwrap_or(0);
+        assert!(doc_seeds <= 2, "doc seeds exceeded the quota: {doc_seeds}");
     }
 
     #[test]
