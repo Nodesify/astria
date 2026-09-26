@@ -35,6 +35,11 @@ export async function saveResultCommand(
     );
     console.log(`Memory saved: ${saved.memoryPath}`);
     console.log(`Graph node: ${saved.nodeId}`);
+    if (!opts.outcome) {
+      console.log(
+        'note: no outcome recorded — pass --outcome useful, dead_end, or corrected; entries without an outcome are skipped by reflect'
+      );
+    }
     console.log('Run `astria update .` to re-embed and re-cluster.');
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);

@@ -8,10 +8,12 @@ use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};
 use astria_core::AstriaError;
 
 /// Extract markdown-style structure from a .md/.mdx file.
-pub(crate) fn extract_markdown(path: &Path) -> Result<Extraction, AstriaError> {
+pub(crate) fn extract_markdown(path: &Path, naming: &Path) -> Result<Extraction, AstriaError> {
     let bytes = std::fs::read(path)?;
     let content = String::from_utf8_lossy(&bytes).into_owned();
-    Ok(extract_markdown_from_string(path, "markdown", &content))
+    Ok(extract_markdown_from_string(
+        path, "markdown", &content, naming,
+    ))
 }
 
 /// Extract markdown-style structure from a string. Used for both .md/.mdx files
@@ -20,8 +22,9 @@ pub(crate) fn extract_markdown_from_string(
     path: &Path,
     language: &str,
     content: &str,
+    naming: &Path,
 ) -> Extraction {
-    let fid = file_stem(path);
+    let fid = file_stem(naming);
     let file_id = make_node_id(&[&fid]);
 
     let mut nodes = Vec::new();
@@ -152,10 +155,14 @@ pub(crate) fn extract_markdown_from_string(
 }
 
 /// Extract structure from plain text files (.txt).
-pub(crate) fn extract_text_file(path: &Path, language: &str) -> Result<Extraction, AstriaError> {
+pub(crate) fn extract_text_file(
+    path: &Path,
+    language: &str,
+    naming: &Path,
+) -> Result<Extraction, AstriaError> {
     let bytes = std::fs::read(path)?;
     let content = String::from_utf8_lossy(&bytes).into_owned();
-    let fid = file_stem(path);
+    let fid = file_stem(naming);
     let file_id = make_node_id(&[&fid]);
 
     let mut nodes = Vec::new();
@@ -255,10 +262,10 @@ fn truncate_with_ellipsis(text: &str, max: usize) -> String {
 }
 
 /// Extract structure from reStructuredText files (.rst).
-pub(crate) fn extract_rst(path: &Path) -> Result<Extraction, AstriaError> {
+pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, AstriaError> {
     let bytes = std::fs::read(path)?;
     let content = String::from_utf8_lossy(&bytes).into_owned();
-    let fid = file_stem(path);
+    let fid = file_stem(naming);
     let file_id = make_node_id(&[&fid]);
 
     let mut nodes = Vec::new();

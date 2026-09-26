@@ -13,7 +13,7 @@ keywords: [install, npm, getting started, quickstart, astria]
 npm install -g @nodesify/astria
 ```
 
-Requires no Rust toolchain — ships prebuilt native binaries via napi-rs. Node.js >= 20.
+Requires no Rust toolchain — ships prebuilt native binaries via napi-rs. Node.js >= 22.
 
 ## Build your first graph
 

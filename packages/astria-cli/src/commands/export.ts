@@ -4,6 +4,11 @@ export async function exportCommand(opts: { graph: string; out: string; format: 
   try {
     const format = opts.format || 'json';
 
+    if (!['json', 'html', 'graphml', 'cypher'].includes(format)) {
+      const hint = format === 'obsidian' ? ' (obsidian is a wiki format: astria wiki --format obsidian)' : '';
+      throw new Error(`Unknown export format "${format}". Valid formats: json, html, graphml, cypher${hint}`);
+    }
+
     if (format === 'html') {
       const outPath = opts.out.replace(/\.json$/, '.html');
       exportHtmlCmd(opts.graph, outPath, opts.mode || 'standard');

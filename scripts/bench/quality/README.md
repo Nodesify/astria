@@ -27,21 +27,31 @@ Metrics per question: rank of the best expected file/symbol in the answer
 
 That is deliberately unflattering and it is the point: the token benchmark
 says answers cost ~3k tokens; this says they rarely surface the *right* file.
-The miss mode is consistent and fixable:
+The miss mode was consistent and fixable:
 
-1. **Output is hub-ranked, not relevance-ranked** — `query` orders matched
+1. **Output was hub-ranked, not relevance-ranked** — `query` ordered matched
    nodes by degree (`astria-query`'s render loop), so the load-bearing hubs
-   drown the on-topic node.
-2. **Doc nodes dominate seeds** — documentation headings keyword-match
-   strongly, and traversal from them rarely reaches the implementing crate
-   file within the budget (e.g. "how does the token benchmark work" returns
-   `benchmarks.md` headings, never `crates/astria-napi/src/benchmark.rs`).
+   drowned the on-topic node.
+2. **Doc nodes dominated seeds** — documentation headings keyword-match
+   strongly, and traversal from them rarely reached the implementing crate
+   file within the budget.
 
-Engine-side fixes to try, in order: rank answer nodes by seed-distance ×
-match score instead of raw degree; cap doc-heading nodes per answer; re-run
-with `--embed` (semantic seeds + `similar_to` edges) — the embedding
-experiment's community consolidation suggests it should move this number;
-prefer file-level nodes in `--detail high` mode.
+## After the ranking fixes (same set, same graph, no embeddings)
+
+1. **Answers rank by relevance, not degree** — seed-match score first, then
+   traversal distance to the matching seeds, then degree as a tiebreak
+   (`astria-query`'s render loop).
+2. **Question words are filtered as stopwords** and a node-type prior ranks
+   code symbols above prose/stub nodes on equal term evidence
+   (`astria-query`'s scorer).
+
+| recall@1 | recall@5 | recall@10 | MRR |
+|---|---|---|---|
+| 42.9% | 65.7% | 85.7% | 0.537 |
+
+(35/35 answered, avg 0.19 s/query.) Remaining headroom: semantic recall via
+`--embed` for paraphrases with no lexical overlap, and per-answer
+doc-heading caps; measure before and after with this harness.
 
 ## Blind judging (promptfoo)
 

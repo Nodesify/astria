@@ -220,6 +220,7 @@ pub mod pipeline;
 pub mod query;
 
 use napi_derive::napi;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 // ---- napi-exposed types ----
@@ -238,6 +239,7 @@ pub struct GraphStatsJs {
     pub edge_count: i64,
     pub community_count: i64,
     pub file_count: i64,
+    pub type_counts: HashMap<String, i64>,
 }
 
 #[napi(object)]
@@ -403,11 +405,20 @@ pub fn graph_stats(root: String) -> napi::Result<GraphStatsJs> {
     let file_count: i64 = db
         .query_row("SELECT COUNT(*) FROM file_manifest", [], |r| r.get(0))
         .unwrap_or(0);
+    let mut stmt = db
+        .prepare("SELECT file_type, COUNT(*) FROM nodes GROUP BY file_type ORDER BY COUNT(*) DESC")
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let type_counts: HashMap<String, i64> = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
     Ok(GraphStatsJs {
         node_count,
         edge_count,
         community_count,
         file_count,
+        type_counts,
     })
 }
 
@@ -1040,6 +1051,44 @@ mod tests {
         assert_eq!(hops, 2);
         assert!(text.contains("Alpha"));
         assert!(text.contains("Gamma"));
+    }
+
+    #[test]
+    fn find_shortest_path_exact_id_wins_over_fuzzy() {
+        // Reproduces the path defect: exact qualified ids were fed to fuzzy
+        // scoring, so "fetch_bytes" top-ranked an unrelated "as_bytes" node
+        // and the returned path connected the wrong endpoints entirely.
+        let db = open_db_in_memory().unwrap();
+        seed_graph(
+            &db,
+            &[
+                ("src_lib::ingest_url", "ingest_url()", "ing.rs", None),
+                ("src_lib::fetch_bytes", "fetch_bytes()", "ing.rs", None),
+                ("decoy_as_bytes", "as_bytes", "cli.ts", None),
+            ],
+            &[("src_lib::ingest_url", "src_lib::fetch_bytes", "calls")],
+        );
+        let key = format!(":memory:path_exact_{}", std::process::id());
+        let (found, hops, text) = query::find_shortest_path(
+            &db,
+            &key,
+            "src_lib::ingest_url",
+            "src_lib::fetch_bytes",
+            false,
+            0.0,
+        )
+        .unwrap();
+        assert!(found);
+        assert_eq!(hops, 1);
+        assert!(
+            text.contains("ingest_url"),
+            "source endpoint missing: {text}"
+        );
+        assert!(
+            text.contains("fetch_bytes"),
+            "target endpoint missing: {text}"
+        );
+        assert!(!text.contains("as_bytes"), "decoy leaked into path: {text}");
     }
 
     #[test]

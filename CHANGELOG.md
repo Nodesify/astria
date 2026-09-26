@@ -4,6 +4,33 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.0.4] — 2026-09-26
+
+### Changed
+- **Query answers are relevance-ranked, not hub-ranked.** Answer nodes
+  order by question-match score first, then traversal distance to the
+  matching seeds, then degree — pure degree ordering buried the files a
+  question was about beneath graph-wide hubs. Question words ("where",
+  "does", "what"…) are filtered as stopwords before scoring, and code
+  symbols outrank prose/stub nodes on equal term evidence. Measured with
+  the golden-QA harness on this repo: MRR 0.058 → 0.533, recall@5
+  2.9% → 65.7%, recall@10 11.4% → 80%.
+- `stats` now prints a node-type breakdown (code/stub/document/…), keeping
+  `status` focused on graph health and staleness.
+- `save-result` without `--outcome` prints how to record one — reflect
+  skips outcome-less entries.
+
+### Fixed
+- `path` fed exact qualified ids to fuzzy scoring, so endpoints silently
+  resolved to unrelated nodes ("src_lib::fetch_bytes" top-ranked an
+  "as_bytes" node). Exact ids now win over scoring, with the same
+  stub-does-not-shadow rule as affected/explain; scoring stays as the
+  fallback for natural-language endpoints.
+- Node-id prefixes were derived from the CWD-joined path, so identical
+  content at different roots (relocated checkouts, clones) churned every
+  id and `diff`/`merge` mismatched whole graphs. Prefixes now come from
+  the path relative to the scanned root.
+
 ## [1.0.3] — 2026-09-26
 
 ### Fixed
@@ -123,6 +150,7 @@ installed skill files. `astria migrate` moves pre-1.0 layouts.
 
 See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
+[1.0.4]: https://github.com/Nodesify/astria/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Nodesify/astria/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Nodesify/astria/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Nodesify/astria/compare/v1.0.0...v1.0.1
