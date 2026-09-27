@@ -468,11 +468,7 @@ kernel void tintkernel() {}
             );
             // Label-level assertions: the extraction must identify the actual
             // declared symbols, not just emit a bare file node.
-            let labels: Vec<String> = results[0]
-                .nodes
-                .iter()
-                .map(|n| n.label.clone())
-                .collect();
+            let labels: Vec<String> = results[0].nodes.iter().map(|n| n.label.clone()).collect();
             match *name {
                 "infra.tf" => assert!(
                     labels.iter().any(|l| l.contains("aws_s3_bucket"))

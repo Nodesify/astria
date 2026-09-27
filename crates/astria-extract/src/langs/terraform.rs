@@ -9,7 +9,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &[],
         import_types: &[],
         call_type: "function_call",
-        name_child: Some(1),
+        name_child: Some(2),
         name_field: "",
         body_field: Some("body"),
         body_fallback_types: &["object", "tuple"],
