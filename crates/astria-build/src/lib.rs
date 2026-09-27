@@ -1,11 +1,12 @@
 // astria-build: merge extractions into SQLite graph
 
+pub mod crosslayer;
 pub mod dedup;
 pub mod hyperedges;
 pub mod minhash;
 pub mod validate;
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use astria_core::Result;
 use astria_extract::Extraction;
@@ -20,47 +21,86 @@ pub struct BuildResult {
 }
 
 pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult> {
+    let tx = db.unchecked_transaction()?;
+    let result = build_in_transaction(extractions, &tx)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+/// Replace file-owned facts in the caller's transaction, so the graph and
+/// successful-file manifest can be published atomically.
+pub fn build_in_transaction(
+    extractions: &[Extraction],
+    tx: &Transaction<'_>,
+) -> Result<BuildResult> {
     // Fail loud on corrupted extractions before anything touches the DB.
     validate::assert_valid(extractions)?;
 
     let mut nodes_added = 0;
     let mut edges_added = 0;
     let mut duplicates_merged = 0;
+    let refreshed_files: HashSet<String> = extractions
+        .iter()
+        .map(|ext| normalize(&ext.file_path))
+        .collect();
+    // Index retention once instead of scanning/decoding the whole corpus for
+    // every file. Temporary state belongs to this connection and transaction.
+    tx.execute_batch("CREATE TEMP TABLE astria_build_live_nodes (id TEXT PRIMARY KEY, defined INTEGER NOT NULL);")?;
+    {
+        let mut definition =
+            tx.prepare("INSERT OR REPLACE INTO astria_build_live_nodes VALUES (?1, 1)")?;
+        let mut reference =
+            tx.prepare("INSERT OR IGNORE INTO astria_build_live_nodes VALUES (?1, 0)")?;
+        for extraction in extractions {
+            for node in &extraction.nodes {
+                definition.execute([&node.id])?;
+            }
+            for edge in &extraction.edges {
+                reference.execute([&edge.source])?;
+                reference.execute([&edge.target])?;
+            }
+        }
+    }
 
-    let tx = db.unchecked_transaction()?;
-
+    // Retain nodes that still exist: deleting them would cascade embeddings
+    // and lose incoming relationships owned by unchanged files. Finish all
+    // removals before inserting any facts, independent of file order.
     for extraction in extractions {
         let file_path = normalize(&extraction.file_path);
+        tx.execute(
+            "DELETE FROM edges WHERE source_file = ?1 AND context IS NULL",
+            rusqlite::params![file_path],
+        )?;
+        tx.execute(
+            "DELETE FROM edges WHERE source IN (SELECT id FROM nodes WHERE source_file = ?1 AND NOT EXISTS (SELECT 1 FROM astria_build_live_nodes live WHERE live.id = nodes.id AND (live.defined = 1 OR nodes.file_type = 'stub'))) OR target IN (SELECT id FROM nodes WHERE source_file = ?1 AND NOT EXISTS (SELECT 1 FROM astria_build_live_nodes live WHERE live.id = nodes.id AND (live.defined = 1 OR nodes.file_type = 'stub')))",
+            rusqlite::params![file_path],
+        )?;
+        tx.execute(
+            "DELETE FROM nodes WHERE source_file = ?1 AND NOT EXISTS (SELECT 1 FROM astria_build_live_nodes live WHERE live.id = nodes.id AND (live.defined = 1 OR nodes.file_type = 'stub'))",
+            rusqlite::params![file_path],
+        )?;
+    }
 
-        // Delete old edges first (foreign key references nodes), then old nodes.
-        // Must also delete edges from other files that reference nodes being removed.
-        tx.execute(
-            "DELETE FROM edges WHERE source_file = ?1",
-            rusqlite::params![file_path],
-        )?;
-        tx.execute(
-            "DELETE FROM edges WHERE source IN (SELECT id FROM nodes WHERE source_file = ?1) OR target IN (SELECT id FROM nodes WHERE source_file = ?1)",
-            rusqlite::params![file_path],
-        )?;
-        tx.execute(
-            "DELETE FROM nodes WHERE source_file = ?1",
-            rusqlite::params![file_path],
-        )?;
-
+    let mut written = HashSet::new();
+    for extraction in extractions {
         for node in &extraction.nodes {
+            if !written.insert(&node.id) {
+                duplicates_merged += 1;
+                continue;
+            }
             // An existing non-stub node with this id is a cross-file merge
             // (e.g. shared concepts); skip it. A stub (created speculatively
             // by an earlier file's edges) must be replaced by the real
             // definition via the upsert below.
-            let existing_ft: Option<String> = tx
+            let existing: Option<(String, String)> = tx
                 .query_row(
-                    "SELECT file_type FROM nodes WHERE id = ?1",
+                    "SELECT file_type, source_file FROM nodes WHERE id = ?1",
                     rusqlite::params![node.id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .ok();
-            if let Some(ft) = existing_ft {
-                if ft != "stub" {
+            if let Some((ft, owner)) = existing {
+                if ft != "stub" && !refreshed_files.contains(&owner) {
                     duplicates_merged += 1;
                     continue;
                 }
@@ -68,6 +108,7 @@ pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult>
 
             let file_type = match node.node_type.as_str() {
                 "rationale" => "rationale",
+                "test" => "test",
                 "concept" | "entity" | "pattern" | "module" | "reference" | "package"
                 | "mcp_config" | "mcp_server" | "mcp_command" | "mcp_package" | "env_var" => {
                     node.node_type.as_str()
@@ -81,9 +122,11 @@ pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult>
                 }
             };
 
-            // Insert the node; a real definition always replaces a stub with
-            // the same id (stubs are created speculatively by edges and may
-            // land before the definition's own extraction is processed).
+            // Embeddings are reusable only while their source text is unchanged.
+            tx.execute(
+                "DELETE FROM node_embeddings WHERE node_id = ?1 AND EXISTS (SELECT 1 FROM nodes WHERE id = ?1 AND (label IS NOT ?2 OR docstring IS NOT ?3 OR signature IS NOT ?4))",
+                rusqlite::params![node.id, astria_core::sanitize_label(&node.label), node.docstring.as_deref().map(astria_core::sanitize_docstring), node.signature.as_deref().map(astria_core::sanitize_docstring)],
+            )?;
             tx.execute(
                 "INSERT INTO nodes (id, label, file_type, source_file, source_line, docstring, signature) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(id) DO UPDATE SET
@@ -92,8 +135,7 @@ pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult>
                    source_file = excluded.source_file,
                    source_line = excluded.source_line,
                    docstring = excluded.docstring,
-                   signature = excluded.signature
-                 WHERE nodes.file_type = 'stub'",
+                   signature = excluded.signature",
                 rusqlite::params![
                     node.id,
                     astria_core::sanitize_label(&node.label),
@@ -109,34 +151,20 @@ pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult>
             )?;
             nodes_added += 1;
         }
+    }
 
-        // INFERRED call edges carry unresolved bare-name targets
-        // ("validate_url"). If an unrelated file owns a stub with that bare
-        // id, the edge silently attaches there and the real symbol loses its
-        // callers. When this extraction defines the symbol, prefer its
-        // qualified id. Sources are always this file's own symbols, so only
-        // targets need resolving.
-        let mut local_defs: HashMap<&str, &str> = HashMap::new();
-        for node in &extraction.nodes {
-            if let Some(bare) = node.label.strip_suffix("()") {
-                local_defs.entry(bare).or_insert(node.id.as_str());
-            }
-        }
-
+    for extraction in extractions {
         for edge in &extraction.edges {
-            let target: &str = match local_defs.get(edge.target.as_str()) {
-                Some(qualified) if !edge.target.contains("::") => qualified,
-                _ => edge.target.as_str(),
-            };
+            let target = edge.target.as_str();
             // Ensure source node exists (stub if missing)
             ensure_node_exists(
-                &tx,
+                tx,
                 &edge.source,
                 &edge.source,
                 &normalize(&edge.source_file),
             )?;
             // Ensure target node exists (stub if missing)
-            ensure_node_exists(&tx, target, target, &normalize(&edge.source_file))?;
+            ensure_node_exists(tx, target, target, &normalize(&edge.source_file))?;
 
             tx.execute(
                 "INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file, source_line) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -154,7 +182,7 @@ pub fn build(extractions: &[Extraction], db: &Connection) -> Result<BuildResult>
         }
     }
 
-    tx.commit()?;
+    tx.execute_batch("DROP TABLE astria_build_live_nodes;")?;
     Ok(BuildResult {
         nodes_added,
         edges_added,

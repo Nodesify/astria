@@ -2,8 +2,10 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Zig",
-        extensions: &[".zig"],
+        name: astria_core::languages::LanguageId::Zig.registration().name,
+        extensions: astria_core::languages::LanguageId::Zig
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_zig::LANGUAGE.into(),
         class_types: &[
             "struct_declaration",
@@ -14,6 +16,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &["function_declaration", "test_declaration"],
         import_types: &["using_namespace_declaration"],
         call_type: "call_expression",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["block"],

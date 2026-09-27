@@ -1,0 +1,16 @@
+[
+  {
+    "question": "express1",
+    "path": "lib/response.js",
+    "line": 250,
+    "symbol": "res.json",
+    "contains": "res.json ="
+  },
+  {
+    "question": "express2",
+    "path": "lib/response.js",
+    "line": 419,
+    "symbol": "res.sendFile",
+    "contains": "res.sendFile ="
+  }
+]

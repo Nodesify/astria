@@ -1,27 +1,29 @@
 import * as pathMod from 'path';
 import { runPipeline, exportWiki, tokenBenchmark, globalAdd } from '../native';
+import { printLlmSummary } from './llm-summary';
 
 export async function runCommand(
   path: string,
-  opts: { dedup?: boolean; backend?: string; model?: string; wiki?: boolean; embed?: boolean; global?: boolean; as?: string },
+  opts: { dedup?: boolean; backend?: string; model?: string; wiki?: boolean; embed?: boolean; labelCommunities?: boolean; deep?: boolean; global?: boolean; as?: string },
 ) {
   if (opts.backend) process.env.ASTRIA_LLM_BACKEND = opts.backend;
   if (opts.model) process.env.ASTRIA_LLM_MODEL = opts.model;
   try {
     console.log(`Running astria pipeline on: ${path}`);
-    const result = runPipeline(path, opts.dedup === false, opts.embed === true);
+    const result = runPipeline(path, opts.dedup === false, opts.embed === true, opts.labelCommunities === true, opts.deep === true);
     console.log(`Nodes added: ${result.nodesAdded}`);
     console.log(`Edges added: ${result.edgesAdded}`);
     console.log(`Communities: ${result.communities}`);
+    printLlmSummary(result);
     console.log(`Report written to: ${pathMod.join(path, '.astria', 'graph_report.md')}`);
     if (opts.wiki) {
       const outDir = pathMod.join(path, '.astria', 'wiki');
       const articles = exportWiki(path, outDir, 25);
       console.log(`Wiki written: ${articles} articles -> ${pathMod.join(outDir, 'index.md')}`);
+    }
     if (opts.global) {
       const merged = globalAdd(path, opts.as);
       console.log(`Global graph: repo '${merged.tag}' merged (${merged.nodesAdded} nodes, ${merged.edgesAdded} edges, ${merged.sameTypeEdges} same_type_as, ${merged.crossRepoCallEdges} cross-repo calls)`);
-    }
     }
     const benchmark = tokenBenchmark(path);
     if (benchmark) console.log(benchmark);

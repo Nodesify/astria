@@ -2,8 +2,10 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Lua",
-        extensions: &[".lua"],
+        name: astria_core::languages::LanguageId::Lua.registration().name,
+        extensions: astria_core::languages::LanguageId::Lua
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_lua::LANGUAGE.into(),
         class_types: &[], // Lua has no native class system
         function_types: &["function_declaration", "function_definition"],
@@ -12,6 +14,7 @@ pub fn config() -> &'static LanguageConfig {
         // left empty. A future enhancement could filter by callee name == "require".
         import_types: &[],
         call_type: "function_call",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["block"],

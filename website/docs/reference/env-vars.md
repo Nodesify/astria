@@ -9,7 +9,7 @@ keywords: [environment variables, ASTRIA_LLM, ASTRIA_EMBED_CACHE_DIR, ASTRIA_QUE
 
 Every variable is optional — the default pipeline is fully local and needs none of them.
 
-> Pre-1.0 `GRAPHIFY_*` names are still read everywhere as a fallback; an `ASTRIA_*` variable always takes precedence. Set the new names, then remove the old ones.
+> Legacy `GRAPHIFY_*` configuration names remain fallback inputs where supported. Backend activation is an exception: only `ASTRIA_LLM_BACKEND` or the CLI `--backend` flag opts into LLM enrichment; `GRAPHIFY_LLM_BACKEND` does not activate it.
 
 ## LLM semantic enrichment
 
@@ -17,17 +17,16 @@ Activates the `enrich_with_semantics()` pipeline stage (docs, papers, images →
 
 | Variable | Purpose |
 |---|---|
-| `ASTRIA_LLM_BACKEND` | Selects the backend explicitly: `claude`, `openai`, or `gemini` |
-| `ASTRIA_LLM_API_KEY` | API key — Anthropic Claude by default, or the OpenAI-compatible provider when `ASTRIA_LLM_BASE_URL` is set |
+| `ASTRIA_LLM_BACKEND` | Required opt-in selection: `claude`, `openai`, or `gemini`; `none` disables enrichment |
+| `ASTRIA_LLM_API_KEY` | API key for the explicitly selected backend; does not select or activate a backend |
 | `ASTRIA_LLM_BASE_URL` | Endpoint for any OpenAI-compatible provider (OpenAI, DeepSeek, Ollama, LM Studio, custom) |
 | `ASTRIA_LLM_MODEL` | Overrides the default model for the selected backend |
 | `ASTRIA_LLM_CONCURRENCY` | Size of the parallel LLM worker pool |
-| `ASTRIA_LLM_PROVIDER` | Legacy alias: if set together with `ASTRIA_LLM_BASE_URL`, forces the OpenAI-compatible backend |
 | `OPENAI_API_KEY` | Fallback key for the OpenAI-compatible backend |
 | `OPENAI_BASE_URL` | Fallback base URL for the OpenAI-compatible backend when `ASTRIA_LLM_BASE_URL` is unset |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Key for the Gemini backend |
 
-Without a backend configured, builds stay fully offline and deterministic. Per-run overrides without env vars: `astria run . --backend openai --model gpt-4o-mini`.
+Keys and endpoint variables do not activate enrichment. Without explicit backend selection, the pipeline makes no LLM calls. Per-run overrides without env vars: `astria run . --backend openai --model gpt-4o-mini`.
 
 Keys are sent in request headers (the Gemini key never goes in the URL, where it would leak into logs and history). When `ASTRIA_LLM_BASE_URL` points at a plain-`http` endpoint that is not local (localhost, `127.0.0.1`, `[::1]` — Ollama/LM Studio setups are silent), a warning is printed because the API key travels unencrypted.
 

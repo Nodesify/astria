@@ -19,7 +19,9 @@ impl std::fmt::Display for ValidationIssue {
     }
 }
 
-const CONFIDENCE_VALUES: &[&str] = &["EXTRACTED", "INFERRED", "AMBIGUOUS"];
+/// EXTRACTED/INFERRED/AMBIGUOUS are the AST tiers; SEMANTIC is stamped on
+/// LLM-enrichment edges (query ranking treats it above INFERRED).
+const CONFIDENCE_VALUES: &[&str] = &["EXTRACTED", "INFERRED", "AMBIGUOUS", "SEMANTIC"];
 
 pub fn validate_extractions(extractions: &[Extraction]) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
@@ -185,6 +187,14 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown confidence"), "{err}");
+    }
+
+    #[test]
+    fn semantic_confidence_is_valid() {
+        // LLM-enrichment edges carry SEMANTIC; the validator must accept it
+        // or `run` with a semantic backend fails wholesale at build time.
+        let valid = assert_valid(&[ext("a", "a()", vec![("a", "b", "uses", "SEMANTIC")])]);
+        assert!(valid.is_ok());
     }
 
     #[test]

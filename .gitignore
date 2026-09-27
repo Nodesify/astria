@@ -35,3 +35,6 @@ worked/graphify-python/graph.json
 
 # fetched URL documents (astria add <url>)
 raw/
+
+# local-only: OpenRouter judge key for promptfoo smoke runs (never commit)
+.env.local
