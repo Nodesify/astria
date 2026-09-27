@@ -121,15 +121,7 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 cursor,
                 min_strength_for(&detail) >= 0.9,
             )
-            .map(|(text, n, e, next)| {
-                let mut out = format!("{text}\n\n({n} nodes, {e} edges)");
-                if let Some(next) = next {
-                    out.push_str(&format!(
-                        "\n(continuation: re-run with cursor {next} for the next nodes)"
-                    ));
-                }
-                text_result(out)
-            })
+            .map(|(text, _, _, _)| text_result(text))
         }
         "repo_map" => {
             let budget = args.get("budget").and_then(|v| v.as_u64()).unwrap_or(2000) as i64;

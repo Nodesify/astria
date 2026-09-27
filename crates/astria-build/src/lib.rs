@@ -108,6 +108,7 @@ pub fn build_in_transaction(
 
             let file_type = match node.node_type.as_str() {
                 "rationale" => "rationale",
+                "test" => "test",
                 "concept" | "entity" | "pattern" | "module" | "reference" | "package"
                 | "mcp_config" | "mcp_server" | "mcp_command" | "mcp_package" | "env_var" => {
                     node.node_type.as_str()

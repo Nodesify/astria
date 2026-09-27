@@ -24,10 +24,7 @@ export async function queryCommand(question: string, opts: {
       opts.detail,
       cursor
     );
-    console.log(result.text);
-    if (result.graphBuiltAt) {
-      console.log(`# graph built at ${result.graphBuiltAt}`);
-    }
+    process.stdout.write(result.text);
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);
     process.exitCode = 1;

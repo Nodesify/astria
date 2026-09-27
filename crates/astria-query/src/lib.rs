@@ -7,10 +7,6 @@ use rusqlite::Connection;
 
 use astria_paths::relative_display;
 
-/// Fraction of the output budget reserved for EDGE lines. Nodes alone are
-/// capped at this share so a traversal never returns a bag of labels with
-/// the relationships truncated away.
-const NODE_BUDGET_SHARE: f64 = 0.6;
 /// How many near-miss labels to suggest when a query matches nothing.
 const SUGGESTION_COUNT: usize = 3;
 
@@ -395,14 +391,24 @@ fn import_degrees(
 /// the program's front door, so they are excluded from entry candidacy.
 fn is_testish_path(path: &str) -> bool {
     let p = path.to_lowercase().replace('\\', "/");
-    ["test", "spec", "example", "fixture", "benchmark"]
-        .iter()
-        .any(|marker| {
-            p.contains(&format!("/{marker}"))
-                || p.contains(&format!("{marker}s/"))
-                || p.contains(&format!("_{marker}."))
-                || p.contains(&format!(".{marker}."))
+    p.split('/').any(|segment| {
+        let words = tokenize(segment);
+        words.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "test"
+                    | "tests"
+                    | "spec"
+                    | "specs"
+                    | "example"
+                    | "examples"
+                    | "fixture"
+                    | "fixtures"
+                    | "benchmark"
+                    | "benchmarks"
+            )
         })
+    })
 }
 
 /// Phrases whose presence marks a question as asking for the program's
@@ -418,24 +424,52 @@ const ENTRY_INTENT_PHRASES: &[&str] = &[
 /// Minimum outgoing imports for a file to count as an entry candidate —
 /// below this it is a leaf module, not a front door.
 const ENTRY_MIN_IMPORTS: u32 = 3;
-/// Score added to a structural entry candidate when entry intent is present.
-const ENTRY_INTENT_BOOST: f64 = 2.0;
 
 /// IDF floor/floor-cap: even a term in every label keeps a quarter of its
 /// label weight, so ubiquitous terms still break ties, just never dominate.
 const IDF_FLOOR: f64 = 0.25;
 
-/// Hybrid seed scoring, layered from cheap/exact to expensive/fuzzy so a
-/// paraphrased or slightly-misspelled question still finds its entry nodes:
-/// 1. label/path substring, exact & prefix token match (deterministic, free)
-/// 2. docstring token matches (where prose descriptions of symbols live)
-/// 3. fuzzy token match (Jaro-Winkler) for typos and word variants
-///
-/// Label/doc contributions are scaled by an IDF weight: a term that matches a
-/// large share of labels ("index" hits every index.* file in a repo) carries
-/// little locating signal, while a term naming one or two nodes is the
-/// question's real target. Path matches keep full weight — a directory or
-/// crate segment is locating evidence regardless of how common the term is.
+/// Score complete normalized identifiers above partial component matches.
+fn normalized_identifier(text: &str) -> String {
+    tokenize(text).concat()
+}
+
+/// Reservation applies to written identifiers, not ordinary prose terms.
+fn is_explicit_identifier(term: &str) -> bool {
+    let quoted = term.starts_with(['`', '\"', '\'']);
+    let text = term.trim_matches(|c: char| matches!(c, '`' | '\"' | '\'' | ',' | '?' | '!' | ';'));
+    quoted
+        || text.contains(['_', '-', '.', '/', '\\', ':', '('])
+        || text
+            .chars()
+            .zip(text.chars().skip(1))
+            .any(|(a, b)| a.is_lowercase() && b.is_uppercase())
+}
+
+fn component_coverage(needle: &[String], haystack: &[String]) -> f64 {
+    if needle.is_empty() {
+        return 0.0;
+    }
+    needle
+        .iter()
+        .filter(|part| {
+            haystack
+                .iter()
+                .any(|word| word == *part || stem(word) == stem(part))
+        })
+        .count() as f64
+        / needle.len() as f64
+}
+
+fn wants_docs(terms: &[String]) -> bool {
+    terms.iter().flat_map(|t| tokenize(t)).any(|t| {
+        matches!(
+            t.as_str(),
+            "docs" | "documentation" | "readme" | "guide" | "tutorial"
+        )
+    })
+}
+
 fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> {
     // IDF weights + per-node lowercase labels, one shared pre-pass.
     let n_nodes = loaded.graph.node_count().max(1) as f64;
@@ -444,6 +478,11 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         .graph
         .node_indices()
         .map(|idx| loaded.graph[idx].label.to_lowercase())
+        .collect();
+    let label_components: Vec<Vec<String>> = loaded
+        .graph
+        .node_indices()
+        .map(|idx| tokenize(&loaded.graph[idx].label))
         .collect();
     let mut idf: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
     let mut effective: Vec<&String> = Vec::new();
@@ -455,8 +494,11 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         effective.push(term);
     }
     for term in &effective {
-        let tl = term.trim().to_lowercase();
-        let hits = labels_lower.iter().filter(|l| l.contains(&tl)).count();
+        let parts = tokenize(term);
+        let hits = label_components
+            .iter()
+            .filter(|parts_in_label| component_coverage(&parts, parts_in_label) == 1.0)
+            .count();
         let w = if hits == 0 {
             1.0
         } else {
@@ -468,6 +510,21 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
 
     // Entry-point intent: detect once, pay for the degree maps only then.
     let joined = terms.join(" ").to_lowercase();
+    let wants_tests = terms.iter().flat_map(|t| tokenize(t)).any(|t| {
+        matches!(
+            t.as_str(),
+            "test"
+                | "tests"
+                | "testing"
+                | "spec"
+                | "specs"
+                | "benchmark"
+                | "benchmarks"
+                | "example"
+                | "examples"
+        )
+    });
+    let wants_docs = wants_docs(terms);
     let wants_entry = ENTRY_INTENT_PHRASES.iter().any(|p| joined.contains(p));
     let (imports_out, imports_in) = if wants_entry {
         import_degrees(loaded)
@@ -479,15 +536,36 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
     };
 
     let mut scored: Vec<(f64, NodeIndex)> = Vec::new();
+    let mut entry_candidates = HashSet::new();
     for (i, idx) in loaded.graph.node_indices().enumerate() {
         let node = &loaded.graph[idx];
         // Code answers rank above documentation and speculative stubs on
         // equal term evidence: without the prior, prose-heavy doc nodes and
         // std-call stubs crowd code symbols out of the seed set.
-        let prior = match node.file_type.as_str() {
-            "code" | "rationale" | "package" => 1.0,
-            "stub" | "document" | "reference" | "paper" | "image" | "video" => 0.85,
-            _ => 1.0,
+        let is_doc = matches!(node.file_type.as_str(), "document" | "reference" | "paper");
+        let symbol_parts = &label_components[i];
+        let is_test = node.file_type == "test"
+            || is_testish_path(&node.source_file)
+            || symbol_parts
+                .first()
+                .is_some_and(|p| matches!(p.as_str(), "test" | "tests" | "spec" | "bench"))
+            || node.id.contains("::tests::");
+        let prior = if is_test {
+            if wants_tests {
+                1.25
+            } else {
+                0.4
+            }
+        } else if is_doc {
+            if wants_docs {
+                1.25
+            } else {
+                0.55
+            }
+        } else if node.file_type == "stub" {
+            0.4
+        } else {
+            1.0
         };
         // Consecutive question tokens that appear verbatim in a node's label
         // or docstring ("blast radius") mark the node as the concept's home;
@@ -505,7 +583,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             }
         }
         let phrase_bonus = phrase_bonus.min(1.0);
-        let label_tokens = tokenize(&node.label);
+        let label_tokens = &label_components[i];
         let file_tokens = tokenize(&node.source_file);
         let doc_tokens: Vec<String> = node
             .docstring
@@ -527,100 +605,60 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
                 continue;
             }
             let term_tokens = tokenize(term);
-            let label_lower = labels_lower[i].as_str();
-            let sf_lower = node.source_file.to_lowercase();
-
-            // Layer 1: label + path
-            let label_score = if label_lower.contains(&term_lower) {
-                1.0
+            let normalized = normalized_identifier(term);
+            let label_normalized = normalized_identifier(&node.label);
+            let coverage = component_coverage(&term_tokens, label_tokens);
+            let label_score = if normalized == label_normalized {
+                4.0
+            } else if coverage == 1.0 {
+                2.0
             } else {
-                term_tokens
-                    .iter()
-                    .map(|tt| {
-                        let st = stem(tt);
-                        if label_tokens
-                            .iter()
-                            .any(|lt| lt == tt || stem(lt) == st || stem(lt).starts_with(st))
-                        {
-                            0.9
-                        } else if label_tokens.iter().any(|lt| lt.starts_with(tt.as_str())) {
-                            0.7
-                        } else if label_tokens.iter().any(|lt| lt.contains(tt.as_str())) {
-                            0.5
-                        } else {
-                            0.0
-                        }
-                    })
-                    .fold(0.0_f64, f64::max)
+                0.5 * coverage * coverage
             };
-
-            // Layer 2: docstring prose
-            let doc_score = if !doc_tokens.is_empty() {
-                let exact = doc_tokens.iter().any(|dt| {
-                    term_tokens
-                        .iter()
-                        .any(|tt| dt == tt || stem(dt) == stem(tt))
-                });
-                let contains = node
-                    .docstring
-                    .as_deref()
-                    .map(|d| d.to_lowercase().contains(&term_lower))
-                    .unwrap_or(false);
-                if exact {
-                    0.4
-                } else if contains {
-                    0.35
-                } else {
-                    0.0
-                }
-            } else {
-                0.0
-            };
-
-            // Layer 3: path + fuzzy fallback (typo / word-variant rescue).
-            // A term naming a directory or crate segment ("mcp" in
-            // crates/astria-mcp/...) is a strong locating signal and scores
-            // above a bare substring hit.
-            let path_score = if file_tokens.iter().any(|ft| {
-                term_tokens
-                    .iter()
-                    .any(|tt| ft == tt || stem(ft) == stem(tt))
-            }) {
-                0.8
-            } else if sf_lower.contains(&term_lower)
-                || file_tokens.iter().any(|ft| term_tokens.contains(ft))
-            {
-                0.5
-            } else {
-                0.0
-            };
+            let doc_coverage = component_coverage(&term_tokens, &doc_tokens);
+            let path_coverage = component_coverage(&term_tokens, &file_tokens);
+            let doc_score = 0.35 * doc_coverage * doc_coverage;
+            let path_score = 0.55 * path_coverage * path_coverage;
             let fuzzy_score = if label_score + doc_score + path_score == 0.0
-                && term_tokens.iter().any(|tt| {
-                    label_tokens
-                        .iter()
-                        .any(|lt| strsim::jaro_winkler(lt, tt) > 0.85)
-                }) {
-                0.4
+                && term_tokens.len() == 1
+                && label_tokens
+                    .iter()
+                    .any(|lt| strsim::jaro_winkler(lt, &term_tokens[0]) > 0.9)
+            {
+                0.15
             } else {
                 0.0
             };
-
-            let scaled = label_score.max(doc_score) * idf_weight(term);
-            score += scaled + path_score + fuzzy_score;
+            score += (label_score.max(doc_score) + path_score + fuzzy_score) * idf_weight(term);
         }
         // Entry-point intent: a file that imports many modules and is
         // imported by none is the program's front door, whatever it is
         // named ("index.ts", "main.rs", "cli.py").
         if wants_entry
             && label_is_file(&node.label)
-            && !is_testish_path(&node.source_file)
+            && node.file_type == "code"
+            && !is_test
             && imports_in.get(&idx).copied().unwrap_or(0) == 0
             && imports_out.get(&idx).copied().unwrap_or(0) >= ENTRY_MIN_IMPORTS
         {
-            score += ENTRY_INTENT_BOOST;
+            entry_candidates.insert(idx);
         }
-        if score > 0.0 {
+        if score > 0.0 || entry_candidates.contains(&idx) {
             scored.push(((score + phrase_bonus) * prior, idx));
+        }
+    }
+    // Explicit entry intent gives import roots precedence over lexical
+    // mentions of "entry point". The tier is derived from this candidate
+    // set, so changing lexical weights cannot drown out structural evidence.
+    if !entry_candidates.is_empty() {
+        let lexical_ceiling = scored
+            .iter()
+            .map(|(score, _)| *score)
+            .fold(0.0_f64, f64::max);
+        for (score, idx) in &mut scored {
+            if entry_candidates.contains(idx) {
+                *score += lexical_ceiling + 1.0;
+            }
         }
     }
     // Deterministic order: score desc, then label, then id.
@@ -701,10 +739,6 @@ fn dfs_subgraph(
     (visited, edges_seen, HashMap::new())
 }
 
-/// At most this many document-type nodes render per answer page: doc
-/// headings keyword-match almost any question and can absorb the budget.
-const MAX_DOC_NODES_PER_ANSWER: usize = 6;
-
 /// A label that names a file ("lib.rs", "benchmark.md") rather than a symbol.
 fn label_is_file(label: &str) -> bool {
     match label.rfind('.') {
@@ -725,14 +759,9 @@ fn subgraph_to_text(
     distance: &HashMap<NodeIndex, u32>,
     prefer_files: bool,
     token_budget: i64,
-    mut skip_nodes: usize,
-) -> (String, Option<usize>) {
-    let char_budget = (token_budget as usize) * 3;
-    // Nodes alone may not consume more than their share — the relationships
-    // are the point of a graph traversal, so edges always keep budget.
-    let node_budget = (char_budget as f64 * NODE_BUDGET_SHARE) as usize;
-    let mut out = String::new();
-
+    skip_records: usize,
+    header: &str,
+) -> astria_core::Result<(String, Option<usize>)> {
     // Relevance-ranked, not hub-ranked: question-matched seeds surface
     // first, then nodes by traversal distance to those seeds, and only
     // then by degree. Pure degree ordering buried the files the question
@@ -772,26 +801,8 @@ fn subgraph_to_text(
             .then_with(|| na.id.cmp(&nb.id))
     });
 
-    // Doc-heading cap: documentation nodes keyword-match almost anything and
-    // can absorb the whole node budget; per answer only the strongest few
-    // survive. Dropped from the list so continuation cursors stay consistent.
-    let mut doc_seen = 0usize;
-    node_list.retain(|&idx| {
-        if loaded.graph[idx].file_type == "document" {
-            doc_seen += 1;
-            doc_seen <= MAX_DOC_NODES_PER_ANSWER
-        } else {
-            true
-        }
-    });
-
-    if skip_nodes >= node_list.len() {
-        skip_nodes = 0; // stale/overshot cursor: restart from the top
-    }
-
-    let mut shown_nodes = 0usize;
-    #[allow(clippy::explicit_counter_loop)]
-    for (_pos, idx) in node_list.iter().enumerate().skip(skip_nodes) {
+    let mut records = Vec::new();
+    for idx in &node_list {
         let idx = *idx;
         let node = &loaded.graph[idx];
         let comm = node.community.map_or("?".to_string(), |c| c.to_string());
@@ -812,57 +823,34 @@ fn subgraph_to_text(
                 line.push_str(&format!("  summary: {}\n", summary));
             }
         }
-        if out.len() + line.len() > node_budget && shown_nodes > 0 {
-            out.push_str(&format!(
-                "... (showing nodes {}-{} of {}; edges follow)\n",
-                skip_nodes + 1,
-                skip_nodes + shown_nodes,
-                node_list.len()
-            ));
-            let next = skip_nodes + shown_nodes;
-            let cursor = (next < node_list.len()).then_some(next);
-            return (
-                finish_edges(
-                    loaded,
-                    out,
-                    edges_seen,
-                    token_budget,
-                    char_budget,
-                    node_budget,
-                ),
-                cursor,
-            );
-        }
-        out.push_str(&line);
-        shown_nodes += 1;
+        records.push(line);
     }
-
-    (
-        finish_edges(
-            loaded,
-            out,
-            edges_seen,
-            token_budget,
-            char_budget,
-            node_budget,
-        ),
-        None,
-    )
-}
-
-/// Edge section shared by both node-loop exits: remaining budget with a
-/// floor so even a tiny budget still yields some relationships.
-fn finish_edges(
-    loaded: &LoadedGraph,
-    mut out: String,
-    edges_seen: &[EdgeIndex],
-    token_budget: i64,
-    char_budget: usize,
-    node_budget: usize,
-) -> String {
-    let edge_budget = char_budget.saturating_sub(node_budget).max(200);
-    let mut edge_spent = 0usize;
-    for &edge_id in edges_seen {
+    let mut edge_records = Vec::new();
+    let mut edge_list = edges_seen.to_vec();
+    edge_list.sort_by(|&a, &b| {
+        let key = |edge| {
+            let (source, target) = loaded.graph.edge_endpoints(edge).unwrap();
+            let score = relevance
+                .get(&source)
+                .copied()
+                .unwrap_or(0.0)
+                .max(relevance.get(&target).copied().unwrap_or(0.0));
+            (
+                score,
+                &loaded.graph[source].id,
+                &loaded.graph[target].id,
+                &loaded.graph[edge].relation,
+            )
+        };
+        let ka = key(a);
+        let kb = key(b);
+        kb.0.total_cmp(&ka.0)
+            .then_with(|| ka.1.cmp(kb.1))
+            .then_with(|| ka.2.cmp(kb.2))
+            .then_with(|| ka.3.cmp(kb.3))
+            .then_with(|| a.index().cmp(&b.index()))
+    });
+    for &edge_id in &edge_list {
         if let Some((src_idx, tgt_idx)) = loaded.graph.edge_endpoints(edge_id) {
             let src = &loaded.graph[src_idx];
             let tgt = &loaded.graph[tgt_idx];
@@ -875,18 +863,85 @@ fn finish_edges(
                 "EDGE {} --{} [{}]--> {}{}\n",
                 src.label, edge.relation, edge.confidence, tgt.label, loc
             );
-            if edge_spent > 0 && edge_spent + line.len() > edge_budget {
-                out.push_str(&format!(
-                    "... (truncated to ~{} token budget)\n",
-                    token_budget
-                ));
-                return out;
-            }
-            out.push_str(&line);
-            edge_spent += line.len();
+            edge_records.push(line);
         }
     }
-    out
+    // Fixed interleaving keeps relationships on the first page while the
+    // cursor still addresses every complete node and edge exactly once.
+    let mut interleaved = Vec::with_capacity(records.len() + edge_records.len());
+    let mut nodes = records.into_iter();
+    let mut edges = edge_records.into_iter();
+    loop {
+        let before = interleaved.len();
+        interleaved.extend(nodes.by_ref().take(2));
+        interleaved.extend(edges.by_ref().take(1));
+        if interleaved.len() == before {
+            break;
+        }
+    }
+    render_page(header, &interleaved, skip_records, token_budget)
+}
+
+/// Public output contract: o200k_base, ordinary text (special-looking strings
+/// are encoded literally). All headers, timestamps and pagination count.
+pub fn count_response_tokens(text: &str) -> usize {
+    tiktoken_rs::o200k_base_singleton()
+        .encode_ordinary(text)
+        .len()
+}
+
+fn render_page(
+    header: &str,
+    records: &[String],
+    cursor: usize,
+    budget: i64,
+) -> astria_core::Result<(String, Option<usize>)> {
+    let limit = usize::try_from(budget)
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| {
+            astria_core::AstriaError::Graph(
+                "budget must be a positive o200k_base token count".into(),
+            )
+        })?;
+    if cursor > records.len() {
+        return Err(astria_core::AstriaError::Graph(format!(
+            "cursor {cursor} exceeds {} records",
+            records.len()
+        )));
+    }
+    let mut body = String::new();
+    let mut best = None;
+    for end in cursor..=records.len() {
+        let next = (end < records.len()).then_some(end);
+        let footer = next
+            .map(|n| format!("\n(continuation: re-run with cursor {n} for the next records)\n"))
+            .unwrap_or_default();
+        let text = format!("{header}{body}{footer}");
+        if count_response_tokens(&text) > limit {
+            break;
+        }
+        if end > cursor || end == records.len() {
+            best = Some((text, next));
+        }
+        if let Some(record) = records.get(end) {
+            body.push_str(record);
+        }
+    }
+    // A final page has no continuation footer. Even if the footer alone
+    // does not fit, the remaining complete response may still fit.
+    if best.is_none() {
+        let final_page = format!("{header}{}", records[cursor..].concat());
+        if count_response_tokens(&final_page) <= limit {
+            return Ok((final_page, None));
+        }
+    }
+    best.ok_or_else(|| {
+        astria_core::AstriaError::Graph(
+            "budget too small for the response metadata and next complete record; increase budget"
+                .into(),
+        )
+    })
 }
 
 fn shortest_path_bfs(
@@ -1015,6 +1070,7 @@ pub fn query_graph_with_metadata(
         cursor,
         &semantic,
         prefer_files,
+        graph_built_at.as_deref(),
     )
     .map(|result| (result, graph_built_at))
 }
@@ -1058,6 +1114,7 @@ pub fn query_graph_with_semantic(
         cursor,
         semantic,
         prefer_files,
+        None,
     )
 }
 
@@ -1074,9 +1131,11 @@ fn query_graph_loaded(
     cursor: usize,
     semantic: &[(String, f64)],
     prefer_files: bool,
+    graph_built_at: Option<&str>,
 ) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
     if loaded.graph.node_count() == 0 {
-        return Ok(("No nodes in graph.".to_string(), 0, 0, None));
+        let (text, _) = render_page("", &["No nodes in graph.\n".into()], 0, budget)?;
+        return Ok((text, 0, 0, None));
     }
 
     let terms: Vec<String> = question.split_whitespace().map(|s| s.to_string()).collect();
@@ -1111,7 +1170,8 @@ fn query_graph_loaded(
                 suggestions.join(", ")
             )
         };
-        return Ok((msg, 0, 0, None));
+        let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
+        return Ok((text, 0, 0, None));
     }
 
     // Seed quota: at most 2 of 5 seeds may be documentation-type nodes.
@@ -1119,17 +1179,54 @@ fn query_graph_loaded(
     // dominate the seed set the traversal starts in prose and never reaches
     // the implementing crate file. Code/pattern/package seeds are unbounded.
     let mut seed_nodes: Vec<NodeIndex> = Vec::new();
-    let mut doc_seeds = 0usize;
+    // Reserve one candidate per explicitly named identifier or scope when a
+    // full match exists. Weak partial words cannot claim coverage.
+    for term in &terms {
+        if !is_explicit_identifier(term) || term.len() <= 2 {
+            continue;
+        }
+        let parts = tokenize(term);
+        if let Some(&(_, idx)) = scored.iter().find(|(_, idx)| {
+            let node = &loaded.graph[*idx];
+            if node.file_type == "stub" {
+                return false;
+            }
+            normalized_identifier(term) == normalized_identifier(&node.label)
+                || (parts.len() > 1 && component_coverage(&parts, &tokenize(&node.label)) == 1.0)
+                || node
+                    .source_file
+                    .replace('\\', "/")
+                    .split('/')
+                    .any(|segment| normalized_identifier(segment) == normalized_identifier(term))
+        }) {
+            if !seed_nodes.contains(&idx) {
+                seed_nodes.push(idx);
+            }
+        }
+    }
+    let seed_limit = 5.max(seed_nodes.len());
+    let mut doc_seeds = seed_nodes
+        .iter()
+        .filter(|&&idx| {
+            matches!(
+                loaded.graph[idx].file_type.as_str(),
+                "document" | "reference" | "paper"
+            )
+        })
+        .count();
     for &(_, idx) in scored.iter() {
-        if seed_nodes.len() == 5 {
+        if seed_nodes.len() == seed_limit {
             break;
+        }
+        if seed_nodes.contains(&idx) {
+            continue;
         }
         let is_doc = matches!(
             loaded.graph[idx].file_type.as_str(),
             "document" | "reference" | "paper"
         );
         if is_doc {
-            if doc_seeds == 2 {
+            if doc_seeds >= 2 && !wants_docs(&terms) {
                 continue;
             }
             doc_seeds += 1;
@@ -1147,7 +1244,7 @@ fn query_graph_loaded(
         .map(|&idx| loaded.graph[idx].label.clone())
         .collect();
 
-    let header = format!(
+    let mut header = format!(
         "Traversal: {} depth={}{} | Start: {:?} | {} nodes found\n\n",
         mode.to_uppercase(),
         depth,
@@ -1155,8 +1252,11 @@ fn query_graph_loaded(
         seed_labels,
         visited.len()
     );
+    if let Some(timestamp) = graph_built_at {
+        header.push_str(&format!("# graph built at {timestamp}\n"));
+    }
     let relevance: HashMap<NodeIndex, f64> = scored.iter().map(|(s, i)| (*i, *s)).collect();
-    let (body, next_cursor) = subgraph_to_text(
+    let (result_text, next_cursor) = subgraph_to_text(
         &loaded,
         &visited,
         &edges_seen,
@@ -1165,13 +1265,8 @@ fn query_graph_loaded(
         prefer_files,
         budget,
         cursor,
-    );
-    let mut result_text = header + &body;
-    if let Some(next) = next_cursor {
-        result_text.push_str(&format!(
-            "\n(continuation: re-run with cursor {next} for the next nodes)\n"
-        ));
-    }
+        &header,
+    )?;
 
     log_query(db, question, &result_text);
     record_query_pairs(db, &loaded, &seed_nodes, &visited, question);
@@ -1822,9 +1917,9 @@ mod tests {
     use astria_core::db::open_db_in_memory;
 
     #[test]
-    fn doc_heading_nodes_are_capped_per_answer() {
-        // Eight document nodes keyword-match the question; only the cap
-        // (6) may render, and the code symbol must still be present.
+    fn doc_seeds_do_not_displace_code() {
+        // Eight document nodes keyword-match the question; the seed quota
+        // keeps the code symbol present without hiding visited records.
         let db = open_db_in_memory().unwrap();
         let mut inserts = String::from(
             "INSERT INTO nodes (id, label, file_type, source_file) VALUES
@@ -1860,12 +1955,12 @@ mod tests {
             .filter(|l| l.starts_with("NODE ") && l.contains("docs/"))
             .count();
         assert!(
-            doc_lines <= 6,
-            "doc cap exceeded: {doc_lines} doc nodes shown"
+            doc_lines <= 2,
+            "doc seed quota exceeded: {doc_lines} doc nodes shown"
         );
         assert!(
             text.contains("validation()"),
-            "code symbol must survive the cap"
+            "code symbol must remain present"
         );
     }
 
@@ -2449,13 +2544,12 @@ mod tests {
     fn no_match_suggests_nearest_labels() {
         let db = open_db_in_memory().unwrap();
         let key = seed(&db);
-        // Hybrid retrieval: a typo'd term ("Alpga") is rescued by the fuzzy
-        // layer and matches Alpha directly.
-        let (text, nodes, _, _) =
+        // A typo can be rescued by fuzzy retrieval or nearest-label guidance.
+        let (text, _, _, _) =
             query_graph(&db, &key, "Alpga", "bfs", 2, 2000, false, 0.0, 0, false).unwrap();
         assert!(
-            nodes > 0 && text.contains("Alpha"),
-            "typo should still match, got: {text}"
+            text.contains("Alpha"),
+            "typo should retain matching guidance, got: {text}"
         );
 
         // Gibberish with no near match: clean no-match, no suggestions.
@@ -2518,7 +2612,7 @@ mod tests {
     }
 
     #[test]
-    fn tiny_budget_keeps_edges_not_just_nodes() {
+    fn tiny_budget_rejects_incomplete_records() {
         let db = open_db_in_memory().unwrap();
         db.execute_batch(
             "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
@@ -2532,7 +2626,7 @@ mod tests {
                 ('a', 'd', 'calls', 'EXTRACTED', 'f.rs');",
         )
         .unwrap();
-        let (text, _, _, next) = query_graph(
+        let result = query_graph(
             &db,
             ":memory:edgebudget",
             "Alpha",
@@ -2543,13 +2637,8 @@ mod tests {
             0.0,
             0,
             false,
-        )
-        .unwrap();
-        assert!(next.is_none() || next.is_some(), "cursor shape check");
-        assert!(
-            text.contains("EDGE"),
-            "edge lines must survive a tiny budget, got: {text}"
         );
+        assert!(result.is_err(), "one token cannot hold a complete response");
     }
 
     #[test]
@@ -2622,8 +2711,8 @@ mod tests {
         let key = ":memory:cursor";
 
         let (text1, _, _, next1) =
-            query_graph(&db, key, "Node", "bfs", 1, 30, false, 0.0, 0, false).unwrap();
-        assert!(next1.is_some(), "30 nodes cannot fit in 30 tokens: {text1}");
+            query_graph(&db, key, "Node", "bfs", 1, 120, false, 0.0, 0, false).unwrap();
+        assert!(next1.is_some(), "records cannot fit in 120 tokens: {text1}");
         assert!(text1.contains("cursor"));
 
         let (text2, _, _, _) = query_graph(
@@ -2632,18 +2721,18 @@ mod tests {
             "Node",
             "bfs",
             1,
-            30,
+            120,
             false,
             0.0,
             next1.unwrap(),
             false,
         )
         .unwrap();
-        // The second page must start past the first page's nodes.
+        // The second page must start past the first page's records.
         assert_ne!(
             text1.lines().nth(2),
             text2.lines().nth(2),
-            "cursor should advance the node window"
+            "cursor should advance the record window"
         );
     }
 

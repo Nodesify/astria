@@ -1,6 +1,7 @@
 // refs: cross-file reference resolution — matches call/import targets
 // against all known node ids once every file has been extracted.
 
+use crate::naming::make_target_id;
 use crate::schema::Extraction;
 use std::collections::HashMap;
 
@@ -21,9 +22,11 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
     let mut bare_ids: HashMap<String, String> = HashMap::new();
     for ext in results.iter() {
         for node in &ext.nodes {
-            // Map: lowercase label -> actual node ID
-            known_ids.insert(node.label.to_lowercase(), node.id.clone());
-            *label_counts.entry(node.label.to_lowercase()).or_insert(0) += 1;
+            // Use the same canonical spelling as call targets, including
+            // qualified JS bindings such as `response.sendFile()`.
+            let label = make_target_id(node.label.trim_end_matches("()"));
+            known_ids.insert(label.clone(), node.id.clone());
+            *label_counts.entry(label).or_insert(0) += 1;
             // Also map by the last segment of the ID (e.g. "greet" from "main::Greeter::greet")
             let parts: Vec<&str> = node.id.split("::").collect();
             if let Some(last) = parts.last() {
@@ -41,13 +44,16 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
         // one file remain ambiguous; this is still name inference.
         let mut local_ids: HashMap<String, Option<String>> = HashMap::new();
         for node in &ext.nodes {
-            let name = node
-                .id
-                .rsplit("::")
-                .next()
-                .unwrap_or(&node.id)
-                .trim_end_matches("()")
-                .to_lowercase();
+            let name = if matches!(ext.language.as_str(), "JavaScript" | "TypeScript") {
+                make_target_id(node.label.trim_end_matches("()"))
+            } else {
+                node.id
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or(&node.id)
+                    .trim_end_matches("()")
+                    .to_lowercase()
+            };
             local_ids
                 .entry(name)
                 .and_modify(|id| *id = None)
@@ -80,7 +86,9 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
                     })
                     .or_else(|| {
                         // Bare-name resolution only when unambiguous.
-                        if bare_counts.get(&last_segment) == Some(&1) {
+                        if !label_counts.contains_key(&target_lower)
+                            && bare_counts.get(&last_segment) == Some(&1)
+                        {
                             bare_ids.get(&last_segment)
                         } else {
                             None

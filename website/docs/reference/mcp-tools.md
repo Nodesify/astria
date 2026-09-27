@@ -35,7 +35,7 @@ BFS/DFS traversal of the knowledge graph for a natural-language question. Return
 | `question` | string | — | **required** |
 | `mode` | `bfs` \| `dfs` | `bfs` | |
 | `depth` | integer | `2` | Maximum traversal depth |
-| `budget` | integer | `2000` | Output token budget |
+| `budget` | integer | `2000` | Maximum query text tokens (`o200k_base`), including header and continuation metadata; excludes the MCP JSON envelope |
 | `directed` | boolean | `false` | Follow edges only in stored direction (caller → callee, importer → module) |
 | `detail` | `all` \| `high` | `all` | `high` keeps only `EXTRACTED` and `DECLARED` facts, regardless of numeric popularity scores |
 | `cursor` | integer | `0` | Continuation token from a previous truncated result |
@@ -44,7 +44,7 @@ CLI and MCP use the same query engine, including optional embedding recall when 
 
 Undirected traversal can cross an edge backwards, but returned arrows always retain the stored source and target and the exact relationship traversed.
 
-Truncated results report the next cursor value — re-run with `cursor` set to fetch the next slice.
+Truncated results report the next cursor value — re-run with `cursor` set to fetch the next slice of node and edge records. CLI and MCP use the same budgeted query text; transport wrappers do not append an extra summary.
 
 ### `repo_map`
 

@@ -22,7 +22,9 @@ astria is inspired by the Python [Graphify](https://github.com/safishamsi/graphi
 
 Find source-grounded code context before changing a repository. Astria retrieves symbols, file locations, and relationships from the latest committed graph snapshot through the same CLI and MCP query engine. Updates reuse cached AST extraction and reconcile references across the current corpus; inferred name matches remain distinct from declared facts.
 
-Retrieval quality and delivered context cost are measured separately. The [benchmark methodology](scripts/bench/quality/README.md) defines exact-file hit@k, recall@k, MRR, failure accounting, and the external repository baseline. Historical full-corpus/query token ratios are size diagnostics, not measured savings over targeted source search; this update publishes no new benchmark results.
+Retrieval quality and delivered context cost are measured separately. The [paired benchmark methodology](scripts/bench/paired/README.md) records file recall, source-grounded symbol checks, exact response tokens and failures. The [latest results](website/docs/explanation/retrieval-validation.md) include improvements and regressions. Historical full-corpus/query token ratios are size diagnostics, not measured savings over targeted source search.
+
+Code definitions retain their scoped identities during deduplication. Extraction includes assigned JS/TS functions and Python implementations behind overload declarations. Query text uses exact `o200k_base` budgets shared by CLI and MCP. After upgrading, run `astria update .` to refresh extraction and restore previously merged definitions; start fresh pagination because cursors now count both node and edge records.
 
 Three things a folder full of files can't give you:
 
