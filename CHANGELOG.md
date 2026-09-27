@@ -39,6 +39,56 @@ this file is the per-version summary.
   a query-capable CLI): the blind answer-quality comparison now compares
   against answers instead of errors. The speed/density corpus changes
   accordingly; historical numbers remain labeled at their original pins.
+- **File ids are collision-free across a workspace**: extraction rooted node
+  ids at the last path directory only, so every crate's `src/lib.rs`
+  produced the same `src_lib` id and build treated the later crates' lib.rs
+  as cross-file merges of the first — one hub node absorbed the whole
+  workspace's `contains` edges (degree 400+ in the self graph). Stems now
+  join every path component; flat layouts keep their old ids.
+- **Thematic community labels**: communities are named after their most
+  distinctive term ("Extract", "Similarity") — the token that concentrates
+  inside the community relative to the whole graph — instead of the
+  highest-degree member's name ("get()", "lib.rs"). Sub-support communities
+  keep the deterministic hub label; naming is a pure function of the graph.
+- `learned`-edge regeneration drops every learned edge, not only rows
+  stamped `query_history` — a stale row from an older convention no longer
+  survives beside its regenerated twin.
+- Self-corpus ignore additions: `website/versioned_docs/` (frozen docusaurus
+  copies duplicate the live docs byte-for-byte and split clusters against
+  their live twins) and `crates/astria-napi/tests/fixtures/` (parser
+  fixtures held community slots without aiding orientation).
+
+### Added
+- **Measured, capped, cached LLM enrichment**: every backend response's
+  usage block is counted (OpenAI/Anthropic/Gemini wire formats), the run
+  summary prints `LLM usage: N API calls, X in / Y out tokens` plus the
+  cache-hit count, and `pipeline_runs` persists the spend per run.
+  `ASTRIA_LLM_BUDGET` caps a run's total tokens; remaining files fail
+  loudly instead of silently degrading.
+- **`run --label-communities` / `update --label-communities`**: thematic
+  community naming with one LLM call per *changed* community (membership
+  fingerprint cached in `communities.member_hash`; rebuilds preserve LLM
+  labels while membership is unchanged and drop them when it drifts).
+  Labels carry a one-line summary and explicit provenance
+  (`communities.label_source`: `llm` vs `hub`), surfaced in MCP
+  `list_communities`, `graph_report.md`, the new `communities` array in
+  `graph.json`, and exports. `ASTRIA_LLM_COMMUNITY_MAX` caps calls per run
+  (default 48, largest communities first); communities under 3 nodes keep
+  deterministic names.
+- **`run --deep` / `update --deep`**: second extraction tier — one LLM call
+  per file links the file's code symbols to concept nodes from other files
+  as `INFERRED` edges (`context='deep'`), the cross-file concept mesh the
+  AST cannot see. Cached per file content hash; stale links are replaced
+  idempotently on rebuild.
+- **`.github/copilot-instructions.md` injection** for `install copilot`:
+  the managed section now lands in Copilot's native custom-instructions
+  file in addition to AGENTS.md (parity with upstream's installer).
+
+### Fixed
+- Build validation rejected the pipeline's own `SEMANTIC` edge confidence
+  (added by LLM enrichment) — `run` with any semantic backend failed
+  wholesale at build time. `SEMANTIC` is now part of the accepted
+  vocabulary (query ranking already treats it above `INFERRED`).
 
 ## [1.0.4] — 2026-09-26
 

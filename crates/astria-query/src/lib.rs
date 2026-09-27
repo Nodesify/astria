@@ -1065,10 +1065,11 @@ pub fn promote_learned_edges(
         rows.flatten().collect()
     };
 
-    db.execute(
-        "DELETE FROM edges WHERE relation = 'learned' AND source_file = 'query_history'",
-        [],
-    )?;
+    // Promotion is the only writer of `learned` edges and regenerates them
+    // from query_pairs, so drop every learned edge regardless of the
+    // source_file stamp — a stale row from an older convention would
+    // otherwise survive next to its regenerated twin.
+    db.execute("DELETE FROM edges WHERE relation = 'learned'", [])?;
 
     let tx = db.unchecked_transaction()?;
     {

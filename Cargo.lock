@@ -103,6 +103,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "unicode-normalization",
 ]

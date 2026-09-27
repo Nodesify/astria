@@ -52,7 +52,7 @@ fn tools() -> Value {
             "relation": {"type": "string"}}, "required": ["node"]}},
         {"name": "god_nodes", "description": "The highest-degree nodes — what everything connects through.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "list_communities", "description": "All communities with their hub-based labels, sizes, and cohesion.",
+        {"name": "list_communities", "description": "All communities with labels, sizes, and cohesion. Labels are LLM-thematic when a semantic backend ran with --label-communities, else deterministic thematic/hub terms.",
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "graph_stats", "description": "Node/edge/community/file counts for the graph.",
          "inputSchema": {"type": "object", "properties": {}}}
@@ -256,10 +256,22 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             text_result(out)
         }),
         "list_communities" => {
-            let mut stmt =
-                db.prepare("SELECT id, label, cohesion, size FROM communities ORDER BY size DESC")?;
-            let rows: Vec<(i64, String, Option<f64>, i64)> = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            let mut stmt = db.prepare(
+                "SELECT id, label, summary, label_source, cohesion, size
+                 FROM communities ORDER BY size DESC",
+            )?;
+            #[allow(clippy::type_complexity)]
+            let rows: Vec<(i64, String, Option<String>, String, Option<f64>, i64)> = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                })?
                 .collect::<std::result::Result<_, _>>()?;
             let modularity: Option<f64> = db
                 .query_row(
@@ -271,13 +283,26 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             let modularity_txt = modularity
                 .map(|q| format!(" (modularity {q:.3})"))
                 .unwrap_or_default();
+            let llm_named = rows
+                .iter()
+                .filter(|(_, _, _, source, _, _)| source.as_str() == "llm")
+                .count();
             let mut out = format!("{} communities{modularity_txt}:\n", rows.len());
-            for (id, label, cohesion, size) in rows {
+            for (id, label, summary, source, cohesion, size) in rows {
+                // Provenance matters: an LLM label is a summary of the code,
+                // a hub label is a fact about it.
+                let source_tag = if source == "llm" { "" } else { " [hub]" };
+                let summary_txt = summary.map(|s| format!(" — {s}")).unwrap_or_default();
                 out.push_str(&format!(
-                    "  [{id}] {label} - {size} nodes, cohesion {}\n",
+                    "  [{id}] {label}{source_tag} - {size} nodes, cohesion {}{summary_txt}\n",
                     cohesion
                         .map(|c| format!("{c:.2}"))
                         .unwrap_or_else(|| "-".into())
+                ));
+            }
+            if llm_named > 0 {
+                out.push_str(&format!(
+                    "\n{llm_named} communities carry LLM thematic labels (astria run --label-communities)."
                 ));
             }
             Ok(text_result(out))

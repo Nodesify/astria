@@ -12,6 +12,8 @@ use astria_core::AstriaError;
 use astria_core::Result;
 use base64::Engine as _;
 
+pub mod enrichment;
+
 /// Maximum image size sent to vision endpoints (5 MB, matching upstream).
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
@@ -79,6 +81,16 @@ pub trait SemanticBackend {
     ) -> Result<SemanticExtraction> {
         Err(AstriaError::Graph(
             "this backend does not support image extraction".into(),
+        ))
+    }
+
+    /// Single-shot completion for the auxiliary passes (community naming,
+    /// deep concept linking). One request, no chunking; the model's raw
+    /// text comes back for the caller to parse. Every response is counted
+    /// in the usage tracker.
+    fn complete(&self, _system: &str, _user: &str) -> Result<String> {
+        Err(AstriaError::Graph(
+            "this backend does not support auxiliary completions".into(),
         ))
     }
 }
@@ -404,6 +416,7 @@ impl ClaudeBackend {
     fn parse_messages_response(&self, response: &str) -> Result<SemanticExtraction> {
         let json: serde_json::Value = serde_json::from_str(response)
             .map_err(|e| AstriaError::Graph(format!("Failed to parse Claude API response: {e}")))?;
+        enrichment::record_usage(&json);
         let text = json
             .get("content")
             .and_then(|c| c.get(0))
@@ -411,6 +424,41 @@ impl ClaudeBackend {
             .and_then(|t| t.as_str())
             .unwrap_or("");
         Ok(parse_extraction_text(text))
+    }
+
+    /// Single-turn Messages-API body for the auxiliary passes.
+    fn claude_chat_body(&self, system: &str, user: &str) -> serde_json::Value {
+        serde_json::json!({
+            "model": self.model,
+            "max_tokens": 1024,
+            "system": system,
+            "messages": [
+                {"role": "user", "content": user}
+            ]
+        })
+    }
+
+    fn claude_complete_text(&self, body: serde_json::Value) -> Result<String> {
+        let body_str = serde_json::to_string(&body)?;
+        let headers = self.headers();
+        let hdr: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let response = post_json(
+            &self.agent,
+            "https://api.anthropic.com/v1/messages",
+            &hdr,
+            &body_str,
+            "Claude",
+        )?;
+        let json: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|e| AstriaError::Graph(format!("Failed to parse Claude API response: {e}")))?;
+        enrichment::record_usage(&json);
+        Ok(json
+            .get("content")
+            .and_then(|c| c.get(0))
+            .and_then(|block| block.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string())
     }
 
     fn extract_image_raw(
@@ -444,6 +492,10 @@ impl SemanticBackend for ClaudeBackend {
         media_type: &str,
     ) -> Result<SemanticExtraction> {
         self.extract_image_raw(image_bytes, media_type)
+    }
+
+    fn complete(&self, system: &str, user: &str) -> Result<String> {
+        self.claude_complete_text(self.claude_chat_body(system, user))
     }
 }
 
@@ -541,6 +593,7 @@ impl OpenAiBackend {
         let response = post_json(&self.agent, &url, &hdr, &body_str, "OpenAI-compatible")?;
         let json: serde_json::Value = serde_json::from_str(&response)
             .map_err(|e| AstriaError::Graph(format!("Failed to parse OpenAI response: {e}")))?;
+        enrichment::record_usage(&json);
         let text = json
             .get("choices")
             .and_then(|c| c.get(0))
@@ -549,6 +602,37 @@ impl OpenAiBackend {
             .and_then(|t| t.as_str())
             .unwrap_or("");
         Ok(parse_extraction_text(text))
+    }
+
+    /// Chat-completions body for the auxiliary passes (smaller output cap).
+    fn chat_body(&self, system: &str, user: &str, max_tokens: u32) -> serde_json::Value {
+        serde_json::json!({
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user}
+            ]
+        })
+    }
+
+    fn complete_text(&self, body: serde_json::Value) -> Result<String> {
+        let body_str = serde_json::to_string(&body)?;
+        let url = format!("{}/chat/completions", self.base_url);
+        let headers = self.headers();
+        let hdr: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let response = post_json(&self.agent, &url, &hdr, &body_str, "OpenAI-compatible")?;
+        let json: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|e| AstriaError::Graph(format!("Failed to parse OpenAI response: {e}")))?;
+        enrichment::record_usage(&json);
+        Ok(json
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string())
     }
 }
 
@@ -566,6 +650,10 @@ impl SemanticBackend for OpenAiBackend {
     ) -> Result<SemanticExtraction> {
         let encoded = base64::engine::general_purpose::STANDARD.encode(image_bytes);
         self.extract_raw(self.build_image_request_body(&encoded, media_type))
+    }
+
+    fn complete(&self, system: &str, user: &str) -> Result<String> {
+        self.complete_text(self.chat_body(system, user, 1024))
     }
 }
 
@@ -654,16 +742,31 @@ impl GeminiBackend {
         )?;
         let json: serde_json::Value = serde_json::from_str(&response)
             .map_err(|e| AstriaError::Graph(format!("Failed to parse Gemini response: {e}")))?;
-        let text = json
-            .get("candidates")
+        enrichment::record_usage(&json);
+        let text = Self::gemini_text(&json);
+        Ok(parse_extraction_text(text))
+    }
+
+    /// The first candidate's text part, shared by extraction and the
+    /// auxiliary passes.
+    fn gemini_text(json: &serde_json::Value) -> &str {
+        json.get("candidates")
             .and_then(|c| c.get(0))
             .and_then(|c| c.get("content"))
             .and_then(|c| c.get("parts"))
             .and_then(|p| p.get(0))
             .and_then(|p| p.get("text"))
             .and_then(|t| t.as_str())
-            .unwrap_or("");
-        Ok(parse_extraction_text(text))
+            .unwrap_or("")
+    }
+
+    /// generateContent body for the auxiliary passes (smaller output cap).
+    fn gemini_chat_body(&self, system: &str, user: &str) -> serde_json::Value {
+        serde_json::json!({
+            "system_instruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "generationConfig": {"maxOutputTokens": 1024}
+        })
     }
 }
 
@@ -681,6 +784,25 @@ impl SemanticBackend for GeminiBackend {
     ) -> Result<SemanticExtraction> {
         let encoded = base64::engine::general_purpose::STANDARD.encode(image_bytes);
         self.extract_raw(self.build_image_request_body(&encoded, media_type))
+    }
+
+    fn complete(&self, system: &str, user: &str) -> Result<String> {
+        let body_str = serde_json::to_string(&self.gemini_chat_body(system, user))?;
+        let response = post_json(
+            &self.agent,
+            &self.url(),
+            &self
+                .headers()
+                .iter()
+                .map(|(k, v)| (*k, v.as_str()))
+                .collect::<Vec<(&str, &str)>>(),
+            &body_str,
+            "Gemini",
+        )?;
+        let json: serde_json::Value = serde_json::from_str(&response)
+            .map_err(|e| AstriaError::Graph(format!("Failed to parse Gemini response: {e}")))?;
+        enrichment::record_usage(&json);
+        Ok(Self::gemini_text(&json).to_string())
     }
 }
 
@@ -774,6 +896,12 @@ pub fn extract_semantic_for_files(
         if i > 0 {
             // Simple rate-limiting: pause between API calls to avoid hitting limits.
             std::thread::sleep(Duration::from_millis(500));
+        }
+        // Honor the run's token budget: remaining files fail explicitly
+        // instead of silently degrading to fewer extractions.
+        if let Err(e) = enrichment::ensure_budget() {
+            results.push((path.clone(), Err(e)));
+            continue;
         }
         if is_image_file(path) {
             let bytes = match std::fs::read(path) {

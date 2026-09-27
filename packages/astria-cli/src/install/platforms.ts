@@ -7,6 +7,8 @@ export interface PlatformConfig {
   claudeMd: boolean;
   agentsMd: boolean;
   geminiMd: boolean;
+  /** Inject the managed section into `<project>/.github/copilot-instructions.md`. */
+  copilotMd?: boolean;
   settingsHook: 'claude' | 'codex' | 'gemini' | 'opencode' | 'none';
   /** Register the astria MCP server in this platform's project-scoped config. */
   mcp?: 'zcode' | 'claude' | 'cursor' | 'gemini';
@@ -80,6 +82,9 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     claudeMd: false,
     agentsMd: true,
     geminiMd: false,
+    // Copilot reads custom instructions from .github/copilot-instructions.md;
+    // AGENTS.md support varies by Copilot version, so write both.
+    copilotMd: true,
     settingsHook: 'none',
   },
   trae: {

@@ -5,6 +5,13 @@ export interface PipelineResultJs {
   edgesAdded: number;
   communities: number;
   report: string;
+  semanticCached: number;
+  llmInputTokens: number;
+  llmOutputTokens: number;
+  llmApiCalls: number;
+  communitiesLabeled: number;
+  communitiesReused: number;
+  deepLinks: number;
 }
 
 export interface GraphStatsJs {
@@ -69,8 +76,8 @@ export interface HistoryEntryJs {
   queriedAt: string;
 }
 
-export function runPipeline(root: string, noDedup?: boolean, embed?: boolean): PipelineResultJs;
-export function updatePipeline(root: string, noDedup?: boolean, embed?: boolean): PipelineResultJs;
+export function runPipeline(root: string, noDedup?: boolean, embed?: boolean, labelCommunities?: boolean, deep?: boolean): PipelineResultJs;
+export function updatePipeline(root: string, noDedup?: boolean, embed?: boolean, labelCommunities?: boolean, deep?: boolean): PipelineResultJs;
 export function graphStats(root: string): GraphStatsJs;
 export function getNode(root: string, nodeId: string): NodeJs | null;
 export function getNeighbors(root: string, nodeId: string): NodeJs[];
