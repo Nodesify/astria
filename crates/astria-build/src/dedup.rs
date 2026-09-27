@@ -210,7 +210,10 @@ impl UnionFind {
 
 /// Merge near-duplicate nodes. Returns the number of nodes removed.
 pub fn dedup_nodes(db: &Connection) -> Result<usize> {
-    // Load candidate nodes (skip stubs and already-merged empty labels)
+    // Definitions have identity, not merely a spelling. Two methods with the
+    // same name in different scopes must retain their own bodies and callers.
+    // Exclude structural nodes before unioning so transitive fuzzy matches
+    // cannot delete a definition through an intermediate semantic entity.
     let mut rows: Vec<NodeRow> = Vec::new();
     {
         let mut stmt =
@@ -230,7 +233,12 @@ pub fn dedup_nodes(db: &Connection) -> Result<usize> {
             // fuzzy-dedup candidate - and a file node must never merge away,
             // because transitive union chains can defeat pair-level guards
             // (index.ts ~ index.tsx ~ install/index.ts erases an entry file).
-            if r.file_type == "stub" || r.label.is_empty() || label_shape(&r.label) == Shape::File {
+            if matches!(
+                r.file_type.as_str(),
+                "code" | "test" | "stub" | "package" | "rationale"
+            ) || r.label.is_empty()
+                || label_shape(&r.label) == Shape::File
+            {
                 continue;
             }
             r.norm = normalize_label(&r.label);
@@ -412,9 +420,9 @@ mod tests {
     #[test]
     fn merges_casing_and_separator_variants() {
         let db = open_db_in_memory().unwrap();
-        insert(&db, "a", "UserService", "code", "a.rs", Some(1));
-        insert(&db, "b", "user service", "code", "b.rs", Some(1));
-        insert(&db, "c", "userservice", "code", "c.rs", Some(1));
+        insert(&db, "a", "UserService", "entity", "a.rs", Some(1));
+        insert(&db, "b", "user service", "entity", "b.rs", Some(1));
+        insert(&db, "c", "userservice", "entity", "c.rs", Some(1));
         insert(&db, "caller1", "caller()", "code", "d.rs", Some(2));
         edge(&db, "caller1", "a");
         edge(&db, "a", "b"); // becomes a self-loop after merge → dropped

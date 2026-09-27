@@ -6,6 +6,13 @@ this file is the per-version summary.
 
 ## [Unreleased]
 
+### Retrieval correctness and response budgets
+- Preserve scoped code/test definitions during semantic deduplication. Extraction cache invalidation lets `astria update .` restore previously lost definitions.
+- Extract JS/TS assigned functions with qualified bindings, scope, documentation and callback bodies. Prefer Python concrete implementations over same-scope overload declarations.
+- Rank complete identifiers and honor explicit test/documentation intent; classify Rust inline tests from AST attributes and modules.
+- Enforce exact `o200k_base` query-text budgets, including metadata, in CLI and MCP. Invalid or insufficient budgets return errors. MCP transport JSON is excluded. Continuation cursors now count node and edge records; discard old cursors after upgrading or rebuilding.
+- Add pinned paired benchmarks, grounded symbol diagnostics and ID collision reporting. See [current results and limitations](website/docs/explanation/retrieval-validation.md).
+
 ### Added
 - **Cross-layer linking** (`astria-build::crosslayer`): three deterministic
   post-build passes bridge layers the per-file extractors cannot see, all

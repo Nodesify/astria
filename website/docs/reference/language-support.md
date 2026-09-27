@@ -16,8 +16,8 @@ The table lists configured tree-sitter node kinds, not a promise of complete lan
 | Language | Discovered extensions | Class/container kinds | Function kinds | Import kinds | Call kind | Closure kinds |
 | --- | --- | --- | --- | --- | --- | --- |
 | Python | `.py` | `class_definition` | `function_definition` | `import_statement`, `import_from_statement` | `call` | None |
-| JavaScript | `.js`, `.jsx`, `.mjs` | `class_declaration` | `function_declaration`, `generator_function_declaration`, `method_definition` | `import_statement`, `import_declaration` | `call_expression` | None |
-| TypeScript | `.ts`, `.tsx` | `class_declaration` | `function_declaration`, `generator_function_declaration`, `method_definition` | `import_statement`, `import_declaration` | `call_expression` | None |
+| JavaScript | `.js`, `.jsx`, `.mjs` | `class_declaration` | `function_declaration`, `generator_function_declaration`, `method_definition`, `function_expression`, `generator_function`, `arrow_function` | `import_statement`, `import_declaration` | `call_expression` | None |
+| TypeScript | `.ts`, `.tsx` | `class_declaration` | `function_declaration`, `generator_function_declaration`, `method_definition`, `function_expression`, `generator_function`, `arrow_function` | `import_statement`, `import_declaration` | `call_expression` | None |
 | Rust | `.rs` | `struct_item`, `enum_item`, `trait_item`, `impl_item` | `function_item`, `function_signature_item` | `use_declaration` | `call_expression` | None |
 | Go | `.go` | `type_declaration` | `function_declaration`, `method_declaration` | `import_declaration` | `call_expression` | None |
 | Java | `.java` | `class_declaration`, `interface_declaration`, `enum_declaration` | `method_declaration`, `constructor_declaration` | `import_declaration` | `method_invocation` | None |
