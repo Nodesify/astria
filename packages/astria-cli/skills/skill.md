@@ -245,6 +245,8 @@ astria export --format graphml --out graph.graphml
 astria export --format cypher --out astria.cypher   # idempotent MERGE script for Neo4j
 ```
 
+`--format html` writes a self-contained interactive viewer (opens as community bubbles; click to expand, search to jump, "All nodes" for the full graph). `--mode standard` allows up to 5,000 nodes; `--mode large` lifts the cap.
+
 ### `astria wiki [options]`
 
 Wikipedia-style markdown wiki of the graph: `index.md` plus one article per community and per god node, cross-linked with relative markdown links. Readable by any agent without the CLI — point an agent at `.astria/wiki/index.md` and it navigates by reading files.

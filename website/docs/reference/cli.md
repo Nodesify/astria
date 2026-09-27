@@ -97,7 +97,7 @@ astria wiki [--out .astria/wiki] [--max-nodes 25] [--format markdown|obsidian] [
 astria prs [20] [--conflicts] [--graph .]           # Map open PRs onto the graph - impact + merge-order risk
 ```
 
-`export --format html` creates an interactive vis-network graph view. The default `--mode standard` exports the full interactive graph when it contains at most 5,000 nodes and fails with an actionable message for larger graphs. `--mode large` opts into a precomputed-layout viewer (physics-free, key nodes first, batched search) that opens instantly on any repo size.
+`export --format html` creates a self-contained interactive graph view. The default `--mode standard` accepts graphs of at most 5,000 nodes and fails with an actionable message for larger graphs; `--mode large` lifts the cap. The viewer opens as community bubbles (click to expand into member nodes), supports search, 1-hop neighborhood focus, and a level-of-detail "All nodes" mode that opens instantly on any repo size because positions are precomputed and physics is disabled.
 
 `--format cypher` writes an idempotent Neo4j import script (MERGE statements — safe to re-run):
 

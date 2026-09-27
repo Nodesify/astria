@@ -35,13 +35,15 @@ On this repository the vault produced 2,040 notes and 5,000 canvas edges.
 astria export --graph . --format html --out graph-view.html
 ```
 
-The default `--mode standard` exports the full interactive vis-network graph when it contains at most 5,000 nodes and fails with an actionable message for larger graphs. For larger repositories, explicitly opt into the optimized large-graph viewer:
+The exporter renders a self-contained interactive viewer (no network access needed, works in sandboxed previewers) organized around community bubbles: the graph opens as one bubble per community, sized by member count, with links between bubbles weighted by how many edges connect them. Click a bubble to expand it into its member nodes, click a member node to focus its 1-hop neighborhood, and use the search box to jump straight to any symbol. "All nodes" expands every community at once, with level-of-detail labels that only appear once you zoom in.
+
+The default `--mode standard` accepts graphs of at most 5,000 nodes and fails with an actionable message for larger graphs. For larger repositories, explicitly opt into the large-graph mode:
 
 ```bash
 astria export --graph . --format html --mode large --out graph-view.html
 ```
 
-Large mode precomputes node positions, disables physics, shows the highest-degree nodes first, supports debounced search and a "Show all nodes" toggle, caps the community legend, and disables expensive edge arrows for very large graphs.
+Large mode uses the same community-bubble viewer with no node-count cap. Because the exported layout is precomputed (no physics), even the large files open instantly; zooming is equally responsive because only what is on screen is drawn.
 
 The viewer is safe to open on graphs built from untrusted repositories: node and community labels come from repo content (identifiers, docstrings, LLM output) and are rendered strictly as text — never interpolated as HTML — so a crafted label cannot inject script into the exported page.
 
