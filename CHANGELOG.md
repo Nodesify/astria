@@ -10,7 +10,7 @@ this file is the per-version summary.
 - Markdown, text, and RST document bodies are chunked into searchable section nodes (~1200 characters each; `ASTRIA_CHUNK_CHARS` overrides, clamped 400–8000). Extraction rules bump to v10, so the first `astria update .` after upgrading re-extracts documents.
 - Consecutive chunks share a line-snapped ~180-character overlap tail, so evidence spanning a chunk boundary surfaces from either side; chunk records cite their covered line range (`span: L14-L18`).
 - Chunks are their own `chunk` node type: on code-majority graphs they rank under code and documents so body-term luck cannot displace exact code answers, while doc-only graphs treat them as the corpus. Chunk docstring evidence scores at label parity, with a coverage multiplier rewarding nodes that match most question terms.
-- `ASTRIA_EMBED=off` (or `astria query --no-embed`) opts out of query-time embedding seeds while keeping structural queries working. Measured on LoCoMo (first 100 evidence-backed questions, structural only): recall@1 16% → 54%, recall@10 53% → 81%, MRR 0.308 → 0.637.
+- `ASTRIA_EMBED=off` (or `astria query --no-embed`) opts out of query-time embedding seeds while keeping structural queries working. Measured on the full LoCoMo set (1,977 evidence-backed questions, structural only): recall@10 0.2% → 84.5%, recall@1 → 63.5%, MRR → 0.717.
 
 ### Added
 - **MCP parity on the CLI** — `astria god-nodes`, `astria communities`, and `astria neighbors <node> [--relation R]` answer what the MCP `god_nodes`/`list_communities`/`get_neighbors` tools answer, for scripts and non-MCP agents.
