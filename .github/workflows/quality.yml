@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -28,7 +28,7 @@ jobs:
         run: |
           node packages/astria-cli/dist/index.js run .
           node scripts/bench/quality/run-quality.mjs --astria "$GITHUB_WORKSPACE/packages/astria-cli/dist/index.js" --min-recall5 50
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: source-retrieval-quality
