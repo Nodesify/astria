@@ -1213,12 +1213,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_graphify_env_still_resolves() {
+    fn legacy_backend_does_not_enable_network_enrichment() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("ASTRIA_LLM_BACKEND");
         std::env::set_var("GRAPHIFY_LLM_BACKEND", "openai");
         std::env::set_var("OPENAI_API_KEY", "test");
-        assert!(backend_from_env().is_ok());
+        let err = backend_from_env()
+            .err()
+            .expect("explicit backend selection required");
+        assert!(err.to_string().contains("semantic enrichment is disabled"));
         std::env::remove_var("GRAPHIFY_LLM_BACKEND");
         std::env::remove_var("OPENAI_API_KEY");
     }
