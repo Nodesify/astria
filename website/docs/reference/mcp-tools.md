@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: MCP tools reference
-description: The nine tools exposed by the astria MCP stdio server, with arguments, defaults, and example calls.
+description: The ten tools exposed by the astria MCP stdio server, with arguments, defaults, and example calls.
 keywords: [mcp, tools, query_graph, repo_map, explain, affected, model context protocol]
 ---
 
@@ -104,6 +104,10 @@ All communities with their hub-based labels, sizes, and cohesion. No arguments.
 ### `graph_stats`
 
 Node/edge/community/file counts for the graph. No arguments. If it reports 0 nodes, the graph has not been built yet — run `astria run <path>` first.
+
+### `health`
+
+Code-health report with unreachable-symbol candidates, circular file dependencies, hub concentration, and graph staleness. Returns a heuristic score from 0 to 100. No arguments.
 
 ## Example session
 

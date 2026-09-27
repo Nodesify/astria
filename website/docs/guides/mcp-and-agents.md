@@ -15,7 +15,7 @@ The graph is most useful when your AI assistant reaches for it automatically. Th
 astria mcp [--graph .]
 ```
 
-Runs the MCP stdio server — nine tools for querying the graph from any MCP-capable agent. The full tool list, arguments, and example calls are in the [MCP tools reference](../reference/mcp-tools). Add it to your agent's MCP config:
+Runs the MCP stdio server — ten tools for querying and assessing the graph from any MCP-capable agent. The full tool list, arguments, and example calls are in the [MCP tools reference](../reference/mcp-tools). Add it to your agent's MCP config:
 
 ```json
 {

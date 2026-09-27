@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Wiki and exports
-description: Export the graph as an agent-crawlable markdown wiki, an Obsidian vault, an interactive HTML viewer, or GraphML/JSON/Neo4j.
+description: Export the graph as a markdown wiki, Obsidian vault, HTML or SVG visualization, GraphML/JSON, Neo4j, or FalkorDB.
 keywords: [wiki, obsidian, export, html, graphml, neo4j, cypher, visualization]
 ---
 
@@ -81,6 +81,15 @@ communities sit on a ring, members spread around each center, hub symbols
 labeled. No physics, no JS — byte-identical on every run, so it diffs
 cleanly and embeds anywhere (GitHub READMEs render it natively). Graphs
 beyond 2,000 nodes / 6,000 edges degrade gracefully with a `(capped)` note.
+
+## FalkorDB
+
+```bash
+astria export --graph . --format falkordb --out graph.falkordb.cypher
+astria export --graph . --format falkordb --redis-push localhost:6379 --graph-name astria
+```
+
+The first command writes an idempotent openCypher script with load instructions. The second sends its statements to a running FalkorDB instance through `redis-cli` (which must be on `PATH`).
 
 ## Hyperedges in exports
 

@@ -79,13 +79,15 @@ astria hook install|uninstall|status
 Three more loops worth knowing about (full flags in the [CLI reference](./reference/cli)):
 
 ```bash
-astria diagnose                        # read-only graph health report (--json for tooling)
+astria diagnose                        # read-only graph integrity report (--json for tooling)
+astria health                          # code-health heuristics and staleness score
+astria risk                            # impact of the current git diff
 astria save-result "Q" --answer "A"    # curate a settled Q/A into graph memory
 astria reflect                         # aggregate memory outcomes into LESSONS.md
 astria run . --global --as myrepo      # merge this repo into the cross-repo global graph
 ```
 
-`diagnose` is the first stop when a graph looks wrong (see [Troubleshooting](./reference/troubleshooting)). The memory loop (`save-result` → `update` → `reflect`) turns settled questions into graph nodes — curated, on top of the automatic learned edges (see [Memory and learning](./guides/memory-and-learning)). And the [global graph](./guides/global-graph) merges many repos into one queryable store, unifying shared external symbols across repos.
+`diagnose` is the first stop when a graph looks wrong (see [Troubleshooting](./reference/troubleshooting)); `health` scores code-health heuristics, and `risk` assesses changed files before a PR. The memory loop (`save-result` → `update` → `reflect`) turns settled questions into graph nodes — curated, on top of the automatic learned edges (see [Memory and learning](./guides/memory-and-learning)). The [global graph](./guides/global-graph) merges many repos into one queryable store, unifying shared external symbols across repos.
 
 ## Excluding files
 
@@ -93,6 +95,6 @@ Place a `.astriaignore` file in your project root (gitignore syntax) to exclude 
 
 ## Where the token savings come from
 
-Every `run` and `update` prints an honest cost measurement: corpus tokens (the real file sizes from the manifest) versus the tokens a graph query actually returns, sampled over five representative questions. On this repository at v0.8.0: ~333,000 corpus tokens vs ~3,000 per query — **110× fewer tokens per query**; on the Python Graphify codebase: **52×**. On tiny corpora it will honestly report &lt;1×; there the graph's value is structure, not compression, and the output says so.
+Every `run` and `update` prints a size comparison: corpus tokens (from the file manifest) versus the tokens a graph query returns, sampled over five representative questions. The historical v0.8.0 run measured about 333,000 corpus tokens versus 3,000 per query on this repository. That ratio describes delivered text size; it does not measure savings against targeted source search or establish answer correctness. On tiny corpora it may be below 1×.
 
-Numbers vary per run and per corpus — the full methodology, a head-to-head against the Python Graphify project that inspired astria, and the embedding experiment are on the [Benchmarks and evidence](./explanation/benchmarks) page.
+Numbers vary per run and per corpus. See [Benchmarks and evidence](./explanation/benchmarks) for the historical measurements and [Retrieval validation](./explanation/retrieval-validation) for paired file recall, symbol retrieval, budget, and latency results.

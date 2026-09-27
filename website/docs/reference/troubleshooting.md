@@ -17,7 +17,7 @@ astria run <path>
 
 ## Install fails or the native binary is missing
 
-- Node.js **>= 20** is required.
+- Node.js **>= 22** is required.
 - No Rust toolchain is needed — the native core ships as prebuilt per-platform binaries via the package's optional dependencies. If your npm setup skips optional dependencies (`--no-optional`, an `omit=optional` in `.npmrc`), the binary never downloads; remove that and reinstall.
 
 ## Query results look stale

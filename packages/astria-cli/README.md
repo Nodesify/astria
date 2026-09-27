@@ -56,7 +56,7 @@ Large mode uses precomputed positions and disabled physics, starts with key node
 
 ## Supported languages
 
-Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, CSS.
+Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, CSS, Terraform/HCL, PowerShell, Verilog/SystemVerilog, and Metal. See the [generated language table](https://nodesify.github.io/astria/docs/reference/language-support) for extensions and extraction details.
 
 ## AI platform integration
 

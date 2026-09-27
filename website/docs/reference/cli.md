@@ -43,7 +43,8 @@ astria path <A> <B> [--directed] [--detail high] [--graph .]   # Shortest path b
 astria affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - what breaks if you change this node
 astria map [--budget 2000] [--detail high] [--graph .]  # PageRank-ranked repo map with top symbols
 astria stats [--graph .]                       # Node/edge/community counts
-astria status [--graph .]                      # Graph health and staleness
+astria status [--graph .]                      # Graph freshness and status
+astria callflow <node> [--depth 2] [--direction out|in|both] [--out flow.md] [--graph .]  # Mermaid call graph
 astria history [--limit 20] [--graph .]        # Show recent query history
 ```
 
@@ -73,7 +74,7 @@ Every query can also append a JSONL line (ts, kind, question, nodes, duration) t
 ## Exports and visualization
 
 ```bash
-astria export [--graph .] [--out graph.json] [--format json|html|graphml|cypher] [--mode standard|large]
+astria export [--graph .] [--out graph.json] [--format json|html|graphml|cypher|svg|falkordb] [--mode standard|large]
 astria tree [--out tree.html] [--max-children 40]   # Collapsible filesystem tree of all symbols (HTML)
 astria wiki [--out .astria/wiki] [--max-nodes 25] [--format markdown|obsidian] [--graph .]  # Wikipedia-style markdown wiki, or an Obsidian vault
 astria prs [20] [--conflicts] [--graph .]           # Map open PRs onto the graph - impact + merge-order risk
@@ -90,13 +91,19 @@ cypher-shell -u neo4j -p <password> -f astria.cypher
 
 See [Wiki and exports](../guides/wiki-and-exports) for details.
 
+`--format svg` creates a deterministic static diagram. `--format falkordb` writes openCypher for FalkorDB; add `--redis-push <host:port>` and optionally `--graph-name <name>` to send it through `redis-cli`. `--neo4j-push <bolt://host:port>` sends Cypher directly to Neo4j, with `--neo4j-user` and `--neo4j-pass` (or their environment variables).
+
 ## Graph health
 
 ```bash
 astria diagnose [--graph .] [--json]
+astria health [--graph .] [--json]
+astria risk [--graph .] [--staged] [--json]
 ```
 
 Read-only health report over an existing graph: dangling edge endpoints (stub vs actionable), self-loops, duplicate edges, unclassified files, and zero-cohesion communities. `--json` emits machine-readable output. Never mutates the graph.
+
+`health` scores code-health heuristics (unreachable-symbol candidates, file cycles, hub concentration, and staleness) from 0 to 100. `risk` maps the current git diff to impacted symbols and communities; use `--staged` to inspect only staged changes. Both support `--json`.
 
 ### Migrating from pre-1.0 layouts
 
@@ -160,7 +167,7 @@ astria hook install|uninstall|status  # Git hook management
 astria hook-guard <mode>            # Editor PreToolUse guard (search | read | gemini) — installed into .claude/settings.json
 ```
 
-Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`. Setup walkthrough in [Agent integration](../guides/mcp-and-agents); the nine MCP tools are documented in the [MCP tools reference](./mcp-tools).
+Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`. Setup walkthrough in [Agent integration](../guides/mcp-and-agents); the ten MCP tools are documented in the [MCP tools reference](./mcp-tools).
 
 `install` also injects an always-on `## astria` instruction block into `AGENTS.md`/`CLAUDE.md` (query before grep, run `update` after edits) — idempotent, removed by `uninstall`. `hook-guard` is the editor-side companion to git hooks: it nudges agents toward `query` before raw searches and can (strict mode, opt-in) gate un-indexed reads. It fails open — any error means the tool call proceeds untouched.
 

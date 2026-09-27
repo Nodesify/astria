@@ -71,7 +71,7 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 | **Getting started** | [Install and first graph](https://nodesify.github.io/astria/docs/getting-started) |
 | **Guides** | [Agent integration (MCP + install)](https://nodesify.github.io/astria/docs/guides/mcp-and-agents) · [Wiki and exports](https://nodesify.github.io/astria/docs/guides/wiki-and-exports) · [Semantic enrichment](https://nodesify.github.io/astria/docs/guides/semantic-enrichment) · [Global graph](https://nodesify.github.io/astria/docs/guides/global-graph) · [Memory and learning](https://nodesify.github.io/astria/docs/guides/memory-and-learning) |
 | **Reference** | [CLI](https://nodesify.github.io/astria/docs/reference/cli) · [MCP tools](https://nodesify.github.io/astria/docs/reference/mcp-tools) · [Environment variables](https://nodesify.github.io/astria/docs/reference/env-vars) · [Graph model](https://nodesify.github.io/astria/docs/reference/graph-model) · [The .astria directory](https://nodesify.github.io/astria/docs/reference/directory-layout) · [Language support](https://nodesify.github.io/astria/docs/reference/language-support) · [Troubleshooting](https://nodesify.github.io/astria/docs/reference/troubleshooting) |
-| **Explanation** | [Architecture](https://nodesify.github.io/astria/docs/explanation/architecture) · [Benchmarks and evidence](https://nodesify.github.io/astria/docs/explanation/benchmarks) |
+| **Explanation** | [Architecture](https://nodesify.github.io/astria/docs/explanation/architecture) · [Benchmarks and evidence](https://nodesify.github.io/astria/docs/explanation/benchmarks) · [Retrieval validation](https://nodesify.github.io/astria/docs/explanation/retrieval-validation) |
 
 ### Feature highlights
 
@@ -88,7 +88,16 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 
 - **Agent skill on skills.sh** - `npx skills add Nodesify/astria` installs the graph-first skill on its own; it detects the CLI and guides install on first use ([skill file](https://github.com/Nodesify/astria/blob/main/skills/astria/SKILL.md))
 
-## What's new in 1.0.0
+## What's new in 1.0.5
+
+- **More complete code retrieval** — preserve scoped definitions, extract assigned JavaScript/TypeScript functions, prefer concrete Python implementations over overloads, and rank complete identifiers. Queries now enforce exact text budgets; restart pagination after upgrading.
+- **More ways to inspect changes** — `callflow` renders a Mermaid call graph, `health` scores code-health heuristics, and `risk` maps the current git diff onto impacted graph nodes.
+- **More export targets** — static SVG and FalkorDB openCypher join JSON, GraphML, HTML, and Neo4j.
+- **Broader language support** — Terraform/HCL, PowerShell, Verilog/SystemVerilog, and Metal bring the registry to 25 configurations.
+
+See the [1.0.5 changelog](CHANGELOG.md) and [retrieval validation](website/docs/explanation/retrieval-validation.md) for behavior, measurements, and limitations.
+
+### The 1.0 rebrand
 
 The rebrand release — everything is now astria: the binary, the npm package, the `.astria/` graph directory, `ASTRIA_*` env vars, and the installed skill files. `astria migrate` moves pre-1.0 layouts.
 

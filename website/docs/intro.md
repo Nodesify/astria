@@ -11,7 +11,7 @@ keywords: [knowledge graph, codebase, ast, tree-sitter, rust, agents, mcp]
 
 astria is inspired by the Python [Graphify](https://github.com/safishamsi/graphify) project's core idea — turn a corpus into a queryable knowledge graph — but it is an independent, from-scratch implementation: a deterministic, offline-first Rust/tree-sitter pipeline, not a fork or a port. astria is not affiliated with, sponsored by, or endorsed by the Graphify project or Graphify Labs.
 
-You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run; varies by corpus — see [Benchmarks and evidence](./explanation/benchmarks)).
+You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Astria returns a budgeted graph view with source locations and explicit provenance. Historical corpus-to-query token ratios describe output size, while the [paired retrieval validation](./explanation/retrieval-validation) measures file recall, symbol retrieval, response budgets, and latency against pinned corpora.
 
 ## Three things a folder full of files can't give you
 
@@ -24,7 +24,7 @@ You drop into an unfamiliar repo and need to know: what is load-bearing here, wh
 - [Getting started](./getting-started) — install and run your first graph
 - [Agent integration](./guides/mcp-and-agents) — wire the graph into Claude Code, Codex, Cursor, …
 - [CLI reference](./reference/cli) — every command and flag
-- [MCP tools reference](./reference/mcp-tools) — the nine tools your agent can call
+- [MCP tools reference](./reference/mcp-tools) — the ten tools your agent can call
 - [Wiki and exports](./guides/wiki-and-exports) — markdown wiki, Obsidian vault, HTML viewer, Neo4j
 - [Semantic enrichment](./guides/semantic-enrichment) — local embeddings and LLM backends
 - [Global graph](./guides/global-graph) — one queryable store across repos
