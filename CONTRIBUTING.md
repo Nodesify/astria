@@ -17,12 +17,21 @@ cd astria
 cargo build --release
 cargo test
 
+# Make the built native module available to the source CLI (Linux)
+mkdir -p packages/astria-cli/dist
+cp target/release/libastria_napi.so packages/astria-cli/dist/astria.node
+# macOS: copy target/release/libastria_napi.dylib to the same destination
+# Windows PowerShell: New-Item -ItemType Directory -Force packages/astria-cli/dist
+# Windows PowerShell: Copy-Item target/release/astria_napi.dll packages/astria-cli/dist/astria.node
+
 # Build the Node.js CLI and run its tests
 cd packages/astria-cli
 npm ci
 npm run build
 npm test   # includes an end-to-end test against the compiled binary (needs dist/)
 ```
+
+The source CLI must load the native artifact built from the same checkout. A `packages/astria-cli/astria.node` file takes precedence over `dist/astria.node`; keep that path absent or update it to the same build before measuring source behavior. See the [quality benchmark methodology](scripts/bench/quality/README.md) for provenance and comparison rules.
 
 ### Documentation site
 
@@ -39,13 +48,13 @@ When you change behavior, update the docs in `website/docs/` in the same PR. Not
 
 ## Project layout
 
-- `crates/` — the Rust workspace (15 crates, one pipeline stage each; see the crate list in the [README](README.md) or the [architecture docs](https://nodesify.github.io/astria/docs/explanation/architecture))
-- `crates/astria-extract/src/langs/` — one config module per supported language; adding a language means adding a file there and registering it in `langs/mod.rs`
+- `crates/` — the Rust workspace (16 crates with separate responsibilities; see the crate list in the [README](README.md) or the [architecture docs](https://nodesify.github.io/astria/docs/explanation/architecture))
+- `crates/astria-extract/src/langs/` — one config module per supported language; export a new module in `langs/mod.rs`, register names/extensions/parser once in `crates/astria-core/src/languages.rs`, then regenerate documentation with `node scripts/generate-language-support.mjs`
 - `packages/astria-cli/` — the Commander-based CLI
 - `website/` — the documentation site
 - `worked/` — worked examples and benchmarks, including honest head-to-head data
 
-Each pipeline stage is a pure function in its own crate. Keep extraction deterministic: anything an LLM produces must be opt-in and clearly provenance-labeled (`INFERRED`, never `EXTRACTED`).
+Pipeline stages separate extraction, persistence, and derived outputs. Keep extraction deterministic: anything an LLM produces must be opt-in and clearly provenance-labeled (`INFERRED`, never `EXTRACTED`).
 
 ## Conventions
 

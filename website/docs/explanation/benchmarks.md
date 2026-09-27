@@ -9,13 +9,13 @@ import BenchmarkSnapshot from '@site/src/components/BenchmarkSnapshot';
 
 # Benchmarks and evidence
 
-Every claim on this site is measured, printed after every run, and reproducible with the commands below. This page collects the canonical numbers (v0.8.0), the methodology behind them, and a head-to-head against the Python Graphify project that inspired it.
+The tables below are historical measurements with the methodology and limitations recorded here. This page collects the canonical numbers (v0.8.0), the methodology behind them, and a head-to-head against the Python Graphify project that inspired it.
 
 ## How the token benchmark works
 
 Every `run` and `update` prints a measured comparison:
 
-- **Corpus side** — the real file sizes from the extraction manifest, converted with a fixed chars-per-token estimate. This is what a naive agent would read to answer questions.
+- **Corpus side** — the real file sizes from the extraction manifest, converted with a fixed chars-per-token estimate. This is a full-corpus size reference; agents typically use targeted search and read only selected files.
 - **Query side** — five fixed questions are run through the actual query engine and the answer text is counted. No sampling, no hand-picked best case.
 
 The ratio is printed even when it is unflattering: on tiny corpora the benchmark honestly reports &lt;1× and says so — there the graph's value is structure, not compression.
@@ -53,7 +53,7 @@ Honest reading:
 
 ## Live benchmark snapshot
 
-The table below is **regenerated automatically**: run **Benchmark snapshot → Run workflow** from the [Actions tab](https://github.com/Nodesify/astria/actions/workflows/bench-snapshot.yml), and the workflow runs both tools on a fresh GitHub runner, commits the updated snapshot JSON, and redeploys this site. This is the continuous proof that the numbers above stay honest.
+The table below is **regenerated automatically**: run **Benchmark snapshot → Run workflow** from the [Actions tab](https://github.com/Nodesify/astria/actions/workflows/bench-snapshot.yml), and the workflow runs both tools on a fresh GitHub runner, commits the updated snapshot JSON, and redeploys this site. The snapshot measures the installed release; proposed-source quality is checked separately.
 
 <BenchmarkSnapshot />
 
@@ -68,13 +68,19 @@ CI runners are shared hardware, so treat snapshot numbers as trend data; the man
 | this repository | 428 communities, 7,546 edges | **201** communities, 10,781 edges (**+3,235** `similar_to`) |
 | original Graphify corpus | 161 communities | **91** communities (**+2,453** `similar_to`) |
 
-Findings: `similar_to` edges consolidate communities by **44–53%** on both corpora, and the token ratio is unchanged (~109× / ~51.5×) — embeddings buy semantic recall and cleaner communities, not smaller output.
+Findings: `similar_to` edges consolidate communities by **44–53%** on both corpora, and the token ratio is unchanged (~109× / ~51.5×) — this experiment shows different graph structure and similar output size; it does not establish a retrieval-quality improvement.
 
 ## Retrieval quality — not just compression
 
 Cost says the graph is cheap; retrieval quality says whether it answers *well*. Three measurements live under `scripts/bench/`:
 
-**Golden-QA recall** (`scripts/bench/quality/`) — 35 questions about this repository with ground-truth files, run through the real query engine and scored by the rank of the first expected file or symbol in the answer (recall@k, MRR). Expectations are validated against the tree (`--check`), so the set cannot silently rot. First structural (no-embeddings) measurement: recall@5 **8.6%**, recall@10 **17.1%**, MRR **0.094** — deliberately unflattering and useful: the miss mode was hub-ranked output and doc-dominated seeds. The fixes it pointed at shipped and were re-measured on the same set: answer nodes now rank by question-relevance first (then traversal distance, then degree), question words are filtered as stopwords, and code symbols outrank prose/stub nodes on equal term evidence. Current numbers: recall@1 **45.7%**, recall@5 **71.4%**, recall@10 **88.6%**, MRR **0.576** (35/35 answered) — hybrid scoring, i.e. embedding seeds are active once `run --embed` has populated them and the model is cached. The seed stage also caps documentation-type nodes at 2 of 5 seeds and boosts directory/crate-name path matches, so traversal starts in code rather than prose. CI runs it on every snapshot dispatch (non-blocking while the golden set matures) and commits `website/src/data/quality-snapshot.json`.
+**Repository retrieval (schema v2)** (`scripts/bench/quality/`) reports exact-file hit@k, true recall@k across all expected files, and MRR. All questions remain in the denominator, including failed queries. Historical scores labeled �recall� measured first file-or-symbol hits and omitted errors; they are not schema v2 measurements. No new scores have been recorded for the revised harness.
+
+**External comparison** (`scripts/bench/external/`) pins Click, Express and ripgrep to immutable commits and supplies eight source-grounded navigation questions. The runner compares astria with question-derived rg searches and source windows at requested budgets of 1000 and 4000 tokens, counting delivered context with o200k_base. Both outputs are clipped with the same exact tokenizer budget before file parsing and quality scoring; reports retain raw and delivered token counts. This initial symbol-heavy set is not evidence of broad reasoning quality. No external results have been published yet.
+
+Full-corpus/query ratios measure context size, not actual agent token savings. The targeted baseline measures retrieval output only; graph construction, search scan cost and end-to-end task completion are outside its scope. See [the harness methodology](https://github.com/Nodesify/astria/tree/main/scripts/bench/quality) for reproduction and limitations.
+
+**Source quality gate** (`quality.yml`) builds the native module and CLI from each proposed checkout and requires self-corpus recall@5 of at least 50%. Reports record CLI version, checkout commit and dirty state, corpus revision, golden hash and query settings. The installed-release snapshot is a separate workflow and cannot validate proposed changes.
 
 **Blind LLM judging** (`scripts/bench/quality/promptfoo/`) — astria and the original Graphify answer the same golden questions; an LLM rubric grades each answer without knowing which tool produced it. Wired into the benchmark snapshot workflow as a gated step, and **deliberately restricted to the maintainer**: it runs only on a manual `Run workflow` dispatch by the maintainer account with the `OPENROUTER_API_KEY` secret set to an **OpenRouter** key (judge model: any OpenRouter model — set the repo variable `JUDGE_MODEL` under Settings → Actions → Variables, e.g. `openrouter:anthropic/claude-3.5-haiku`; default `openai/gpt-4o-mini`), uploading the graded results as a workflow artifact. Automated runs and pull requests never call a paid API: fork PRs neither trigger this workflow nor receive secrets, and push-triggered snapshots skip judging.
 

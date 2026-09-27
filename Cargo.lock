@@ -261,6 +261,7 @@ name = "astria-query"
 version = "1.0.0"
 dependencies = [
  "astria-core",
+ "astria-embed",
  "astria-paths",
  "petgraph",
  "rusqlite",
@@ -284,6 +285,7 @@ name = "astria-semantic"
 version = "1.0.0"
 dependencies = [
  "astria-core",
+ "astria-pdf",
  "base64 0.22.1",
  "serde",
  "serde_json",

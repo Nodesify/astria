@@ -2,8 +2,10 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Go",
-        extensions: &[".go"],
+        name: astria_core::languages::LanguageId::Go.registration().name,
+        extensions: astria_core::languages::LanguageId::Go
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_go::LANGUAGE.into(),
         class_types: &["type_declaration"],
         function_types: &["function_declaration", "method_declaration"],

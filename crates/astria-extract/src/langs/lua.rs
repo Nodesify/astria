@@ -2,8 +2,10 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Lua",
-        extensions: &[".lua"],
+        name: astria_core::languages::LanguageId::Lua.registration().name,
+        extensions: astria_core::languages::LanguageId::Lua
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_lua::LANGUAGE.into(),
         class_types: &[], // Lua has no native class system
         function_types: &["function_declaration", "function_definition"],

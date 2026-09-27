@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "C#",
-        extensions: &[".cs"],
+        name: astria_core::languages::LanguageId::CSharp
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::CSharp
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_c_sharp::LANGUAGE.into(),
         class_types: &[
             "class_declaration",

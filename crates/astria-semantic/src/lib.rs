@@ -70,6 +70,11 @@ impl SemanticExtraction {
 
 /// Trait for semantic extraction backends.
 pub trait SemanticBackend {
+    /// Non-secret effective configuration used to invalidate cached output.
+    fn cache_identity(&self) -> String {
+        std::any::type_name::<Self>().to_string()
+    }
+
     fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction>;
 
     /// Vision extraction: describe concepts from image bytes (PNG/JPEG/
@@ -482,6 +487,9 @@ impl ClaudeBackend {
 }
 
 impl SemanticBackend for ClaudeBackend {
+    fn cache_identity(&self) -> String {
+        format!("claude:https://api.anthropic.com:{}", self.model)
+    }
     fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
         extract_content_chunked(content, file_type, |c, ft| self.extract_raw(c, ft))
     }
@@ -637,6 +645,9 @@ impl OpenAiBackend {
 }
 
 impl SemanticBackend for OpenAiBackend {
+    fn cache_identity(&self) -> String {
+        format!("openai:{}:{}", self.base_url, self.model)
+    }
     fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
         extract_content_chunked(content, file_type, |c, ft| {
             self.extract_raw(self.build_request_body(c, ft))
@@ -771,6 +782,12 @@ impl GeminiBackend {
 }
 
 impl SemanticBackend for GeminiBackend {
+    fn cache_identity(&self) -> String {
+        format!(
+            "gemini:https://generativelanguage.googleapis.com:{}",
+            self.model
+        )
+    }
     fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
         extract_content_chunked(content, file_type, |c, ft| {
             self.extract_raw(self.build_request_body(c, ft))
@@ -812,43 +829,46 @@ impl SemanticBackend for GeminiBackend {
 
 /// Resolve the semantic backend from the environment.
 ///
-/// `ASTRIA_LLM_BACKEND` selects explicitly (`claude`/`anthropic`,
-/// `openai`/`openai-compatible`, `gemini`); otherwise backends are
-/// auto-detected from which variables are set, in the order
-/// Claude → OpenAI-compatible → Gemini.
+/// Network enrichment requires explicit `ASTRIA_LLM_BACKEND` selection.
+/// Credentials configure a selected backend; they never activate one.
 pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
-    let explicit = astria_core::env_var("LLM_BACKEND").unwrap_or_default();
+    let explicit = std::env::var("ASTRIA_LLM_BACKEND").unwrap_or_default();
     let explicit = explicit.trim().to_lowercase();
     match explicit.as_str() {
-        "claude" | "anthropic" => return Ok(Box::new(ClaudeBackend::from_env()?)),
+        "claude" | "anthropic" => Ok(Box::new(ClaudeBackend::from_env()?)),
         "openai" | "openai-compatible" | "openai_compatible" => {
-            return Ok(Box::new(OpenAiBackend::from_env()?))
+            Ok(Box::new(OpenAiBackend::from_env()?))
         }
-        "gemini" | "google" => return Ok(Box::new(GeminiBackend::from_env()?)),
-        "" => {}
+        "gemini" | "google" => Ok(Box::new(GeminiBackend::from_env()?)),
+        "" | "none" => {
+            Err(AstriaError::Graph(
+                "semantic enrichment is disabled; select --backend claude|openai|gemini or ASTRIA_LLM_BACKEND explicitly".into(),
+            ))
+        }
         other => {
-            return Err(AstriaError::Graph(format!(
+            Err(AstriaError::Graph(format!(
                 "unknown ASTRIA_LLM_BACKEND '{other}' (expected claude, openai, or gemini)"
             )))
         }
     }
+}
 
-    if astria_core::env_var("LLM_PROVIDER").is_some()
-        && astria_core::env_var("LLM_BASE_URL").is_some()
-    {
-        return Ok(Box::new(OpenAiBackend::from_env()?));
-    }
-    // ASTRIA_LLM_API_KEY alone historically meant Claude; a base URL or
-    // Gemini/Google key steers elsewhere.
-    if astria_core::env_var("LLM_BASE_URL").is_some() {
-        return Ok(Box::new(OpenAiBackend::from_env()?));
-    }
-    if (std::env::var("GEMINI_API_KEY").is_ok() || std::env::var("GOOGLE_API_KEY").is_ok())
-        && astria_core::env_var("LLM_API_KEY").is_none()
-    {
-        return Ok(Box::new(GeminiBackend::from_env()?));
-    }
-    Ok(Box::new(ClaudeBackend::from_env()?))
+/// Includes effective backend/model/endpoint and prompt/chunking inputs, never
+/// credentials. Callers hash this material with the stage's actual inputs.
+pub fn cache_configuration(backend: &dyn SemanticBackend) -> String {
+    format!(
+        "semantic-v2\n{}\n{MAX_CHUNK_CHARS}:{MAX_CHUNKS}\n{}\n{}\n{}",
+        backend.cache_identity(),
+        system_prompt("code"),
+        system_prompt("document"),
+        vision_prompt()
+    )
+}
+
+pub fn enrichment_enabled() -> bool {
+    std::env::var("ASTRIA_LLM_BACKEND")
+        .map(|value| !value.trim().is_empty() && !value.trim().eq_ignore_ascii_case("none"))
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -906,9 +926,19 @@ pub fn extract_semantic_for_files(
         if is_image_file(path) {
             let bytes = match std::fs::read(path) {
                 Ok(b) => b,
-                Err(_) => continue,
+                Err(error) => {
+                    results.push((path.clone(), Err(error.into())));
+                    continue;
+                }
             };
             if bytes.len() > MAX_IMAGE_BYTES {
+                results.push((
+                    path.clone(),
+                    Err(AstriaError::Graph(format!(
+                        "image exceeds the {MAX_IMAGE_BYTES}-byte vision limit: {}",
+                        path.display()
+                    ))),
+                ));
                 continue;
             }
             results.push((
@@ -917,9 +947,21 @@ pub fn extract_semantic_for_files(
             ));
             continue;
         }
-        let content = match std::fs::read_to_string(path) {
+        let content = if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+        {
+            astria_pdf::extract_text(path)
+        } else {
+            std::fs::read_to_string(path).map_err(AstriaError::from)
+        };
+        let content = match content {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(error) => {
+                results.push((path.clone(), Err(error)));
+                continue;
+            }
         };
         let ext = path
             .extension()

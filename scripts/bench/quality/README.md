@@ -1,98 +1,31 @@
-# Retrieval quality — golden QA + recall@k + blind judging
+# Retrieval quality
 
-Token compression says the graph is *cheap*; this layer measures whether it
-answers *well*. It runs a golden QA set through the real query engine and
-scores the files/symbols each answer surfaces.
+Build the native module and CLI from the checkout, install `js-tiktoken` at the repository root, then build a fresh corpus graph. Pass the absolute `packages/astria-cli/dist/index.js` path with `--astria`; JavaScript entrypoints run with Node without shell interpolation. `--astria` also accepts a native executable path, not a shell command prefix.
 
-## The harness
-
-```bash
-# validate the golden set against the current tree (CI-safe, no graph needed)
+```sh
 node scripts/bench/quality/run-quality.mjs --check
-
-# full run against a built graph (astria run . first, if needed)
-node scripts/bench/quality/run-quality.mjs --out out/quality-results.json
+node scripts/bench/quality/run-quality.mjs --astria /absolute/checkout/packages/astria-cli/dist/index.js --budget 4000 --min-recall5 50
 ```
 
-Metrics per question: rank of the best expected file/symbol in the answer
-(`hit_rank`), aggregated to `recall@1/3/5/10` and `MRR`. Zero dependencies.
+Schema v2 scores exact normalized, case-sensitive corpus-relative file paths. `hit@k` means at least one expected file appears in the first k unique files. `recall@k` is the fraction of all expected files retrieved, averaged across questions. MRR uses the first expected file. Symbol matches are diagnostics only. Failed, timed-out, nonzero-exit and empty responses remain in every quality denominator as zero. Source paths from NODE records rank before EDGE-only paths.
 
-## First measured result (structural graph, no embeddings)
+Reports include CLI version, checkout commit and dirty state, native and entrypoint SHA-256 hashes for local builds, corpus commit and file count, golden SHA-256, runtime, query budget and depth. Local runs require `dist/astria.node` and reject a package-root `astria.node`, which otherwise takes loader precedence. Missing or unloadable native builds fail instead of using the installed platform package. The source commit identifies the harness checkout; a local built artifact must come from that checkout. CI builds it in the same job. Installed binaries may have different source provenance.
 
-35 questions over this repository's own graph:
+Historical v1 scores called any-file-or-symbol hits �recall� and omitted failures. They cannot be compared directly to schema v2. The existing snapshot has not been remeasured by this change.
 
-| recall@1 | recall@5 | recall@10 | MRR |
-|---|---|---|---|
-| 5.7% | 8.6% | 17.1% | 0.094 |
+## External repositories and lexical baseline
 
-That is deliberately unflattering and it is the point: the token benchmark
-says answers cost ~3k tokens; this says they rarely surface the *right* file.
-The miss mode was consistent and fixable:
+`../external/corpora.json` pins Click 8.1.8, Express 4.21.2 and ripgrep 14.1.1 to immutable commits. Eight seed questions include upstream evidence links and source anchors, validated before each run. This small, symbol-heavy set checks basic navigation; it does not establish broad architectural reasoning quality. Expand independently authored, multi-file questions before making general quality claims.
 
-1. **Output was hub-ranked, not relevance-ranked** — `query` ordered matched
-   nodes by degree (`astria-query`'s render loop), so the load-bearing hubs
-   drowned the on-topic node.
-2. **Doc nodes dominated seeds** — documentation headings keyword-match
-   strongly, and traversal from them rarely reached the implementing crate
-   file within the budget.
-
-## After the ranking fixes (same set, same graph, no embeddings)
-
-1. **Answers rank by relevance, not degree** — seed-match score first, then
-   traversal distance to the matching seeds, then degree as a tiebreak
-   (`astria-query`'s render loop).
-2. **Question words are filtered as stopwords** and a node-type prior ranks
-   code symbols above prose/stub nodes on equal term evidence
-   (`astria-query`'s scorer).
-
-| recall@1 | recall@5 | recall@10 | MRR |
-|---|---|---|---|
-| 45.7% | 71.4% | 88.6% | 0.576 |
-
-(35/35 answered; measured with the seed quota, tiered path scoring, the
-`worked/` ignore, and embedding seeds active in the graph.) Note the harness measures **hybrid**
-scoring once embeddings exist: `query` merges embedding-seed candidates
-automatically when the graph has vectors and the model is cached — there is
-no flag, and a pure-token comparison would need an opt-out. Remaining
-headroom, in order: a pure-token opt-out for cleaner attribution, doc-heading
-caps measured per-variant, and blind LLM judging of the answers.
-
-## Blind judging (promptfoo)
-
-The deterministic harness scores retrieval; promptfoo judges *answer
-quality* blind — both tools answer the same questions, an LLM rubric grades
-each answer without knowing which tool produced it.
-
-```bash
-# regenerate tests after golden-set changes
-node scripts/bench/quality/promptfoo/gen-promptfoo-tests.mjs
-
-# run the matrix (needs a judge key: ANTHROPIC_API_KEY or OPENAI_API_KEY;
-# and GRAPHIFY_CMD for the original-tool provider, or delete that provider)
-npx promptfoo@latest eval -c scripts/bench/quality/promptfoo/promptfooconfig.yaml \
-  --output scripts/bench/quality/out/promptfoo-results.json
+```sh
+npm install --no-save js-tiktoken
+node scripts/bench/external/run.mjs
 ```
 
-`promptfooconfig.yaml` wires `astria-provider.mjs` (astria CLI on the corpus
-at `BENCH_CORPUS`) against `graphify-provider.mjs` (original Python tool).
-Each test carries the ground-truth rubric generated from the golden set.
+Requires git, rg, Node 22, and a locally built CLI/native module. The runner clones source only, never installs or executes upstream packages. It refuses dirty (including untracked source), mismatched or previously graphed corpus directories; generated `.astria` files are the only explicit status exclusion. Use a fresh `bench-work/external` directory for another run. Outputs land in `quality/out` and are not published automatically.
 
-> Disclosure: when the corpus graph is built with a local LLM endpoint, the
-> same endpoint currently powers both the graph's LLM enrichment passes and
-> promptfoo judging. At the token volumes involved this is negligible, but it
-> is mild self-preference by construction — keep it in mind when comparing
-> judged scores across setups, and prefer a different judge model for
-> published numbers.
+Each corpus runs the same questions with requested budgets of 1000 and 4000 tokens for astria and targeted rg plus source reads. The baseline derives search terms solely from the question, collects at most three matching lines per file, ranks by term occurrences (path order breaks ties), and reads a window of 10 lines before and 30 after the first match. Both methods pass through the same o200k_base clipping step before path parsing and quality scoring. Clipping drops any incomplete final line. Reports include delivered tokens, raw tokens and whether clipping occurred. Graph generation also receives the requested CLI budget, but its internal estimate does not govern the final scored context. Golden files and anchors never guide the baseline. The paired suite requires the shared tokenizer and fails if it is unavailable.
 
-## Golden set
+Token cost counts delivered retrieval context, not filesystem bytes scanned, graph construction, model reasoning, or a complete agent task. The baseline is deterministic, not a claim about expert iterative search. Full-corpus/query ratios are a separate size diagnostic and do not measure savings against targeted search.
 
-`golden/astria-self.jsonl` — one JSON object per line:
-
-```json
-{"id": "q01", "question": "…", "expected_files": ["crates/…"], "expected_symbols": ["fn_name"]}
-```
-
-Expectations are grounded paths: `--check` fails when an entry matches no
-real file, so the set cannot silently rot as code moves. Extend the set for
-new corpora by adding a jsonl and passing `--golden`; `path/to/file.rs`
-entries match as case-insensitive substrings of any surfaced path.
+`.github/workflows/quality.yml` gates proposed changes using the local native build and a 50% self-corpus recall@5 floor. External runs remain explicit opt-in; no external measurements are checked in yet. Blind promptfoo judging remains optional under `promptfoo/` and is separate from deterministic retrieval metrics.

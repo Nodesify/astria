@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Elixir",
-        extensions: &[".ex", ".exs"],
+        name: astria_core::languages::LanguageId::Elixir
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Elixir
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_elixir::LANGUAGE.into(),
         // Elixir uses `call` nodes for everything: defmodule, def, defp, import, use, alias,
         // and ordinary function calls. The tree-sitter grammar doesn't distinguish them by

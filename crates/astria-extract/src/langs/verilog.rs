@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Verilog/SystemVerilog",
-        extensions: &[".v", ".sv", ".svh", ".vh"],
+        name: astria_core::languages::LanguageId::Verilog
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Verilog
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_systemverilog::LANGUAGE.into(),
         class_types: &[
             "module_declaration",

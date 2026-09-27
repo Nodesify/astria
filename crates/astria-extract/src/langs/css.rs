@@ -2,8 +2,10 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "CSS",
-        extensions: &[".css", ".scss"],
+        name: astria_core::languages::LanguageId::Css.registration().name,
+        extensions: astria_core::languages::LanguageId::Css
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_css::LANGUAGE.into(),
         class_types: &["rule_set"], // CSS selector blocks act as "classes"
         function_types: &[],        // CSS has no functions in the traditional sense

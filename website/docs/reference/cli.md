@@ -17,14 +17,16 @@ astria run <path> --wiki          # ...also export a markdown wiki to .astria/wi
 astria run <path> --embed         # ...also compute local embeddings (similar_to edges + semantic query recall)
 astria run <path> --backend openai --model gpt-4o-mini  # ...with LLM semantic enrichment (see Semantic enrichment)
 astria run <path> --global --as <tag>  # ...also merge this repo into the cross-repo global graph (see Global graph)
-astria update <path>              # Incremental rebuild (only changed files; regenerates an existing wiki)
+astria update <path>              # Reuse cached ASTs, reconcile current corpus; regenerate an existing wiki
 astria watch <path> [--debounce 3000]  # Watch for file changes, auto-rebuild
 astria cluster-only <path>        # Re-cluster + analyze + report without re-extracting
 astria merge <pathA> <pathB> <outPath>  # Merge two graphs
 astria diff <pathA> <pathB>       # Compare two graphs
 ```
 
-`run` and `update` accept `--backend <claude|openai|gemini>` and `--model <name>` (per-run LLM enrichment without env vars) and `--no-dedup` (skip near-duplicate node merging).
+`run` and `update` accept `--backend <claude|openai|gemini|none>` and `--model <name>` (per-run LLM enrichment without env vars) and `--no-dedup` (skip near-duplicate node merging).
+
+Backend selection must be explicit through `--backend` or `ASTRIA_LLM_BACKEND`; credentials alone do not activate it. `none` disables enrichment. Cached ASTs avoid reparsing unchanged files, while references are reconciled across the current corpus. Graph facts and the manifest commit together after successful extraction; derived passes rerun after that commit and can be retried on the next update.
 
 Builds also pick up, automatically:
 
@@ -51,10 +53,10 @@ astria history [--limit 20] [--graph .]        # Show recent query history
 - `--depth N` — maximum traversal depth
 - `--budget N` — output token budget (default 2000)
 - `--directed` — follow edge direction instead of treating the graph as undirected
-- `--detail high` — fidelity tier: only declared (`EXTRACTED`) facts
+- `--detail high` — fidelity tier: only declared (`EXTRACTED`) facts, regardless of usage-adjusted confidence scores
 - `--cursor N` — continuation cursor for truncated traversals
 
-Query output reports when the graph was last built, so agents can judge freshness. Repeated queries promote recurring node pairs into `learned` edges — see [learning from usage](#learning-from-usage).
+CLI and MCP share hybrid retrieval and load a fresh SQLite graph snapshot for each request. Query output reports when the graph was last built, so agents can judge freshness. Repeated queries promote recurring node pairs into `learned` edges — see [learning from usage](#learning-from-usage).
 
 ### Query log (for tooling)
 

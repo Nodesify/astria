@@ -5,7 +5,6 @@ use std::time::Duration;
 use astria_core::db;
 use astria_paths;
 use rusqlite::Connection;
-use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
 pub struct PipelineResult {
@@ -57,205 +56,10 @@ fn timestamp() -> String {
         .to_string()
 }
 
-fn semantic_cache_key(path: &Path) -> String {
-    format!("semantic:{}", astria_paths::normalize(path))
-}
-
-fn file_hash(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Some(format!("{:x}", hasher.finalize()))
-}
-
-fn check_semantic_cache(
-    db: &Connection,
-    path: &Path,
-    hash: &str,
-) -> Option<astria_semantic::SemanticExtraction> {
-    let key = semantic_cache_key(path);
-    let mut stmt = db
-        .prepare(
-            "SELECT nodes, edges FROM extraction_cache WHERE file_path = ?1 AND content_hash = ?2",
-        )
-        .ok()?;
-    stmt.query_row(rusqlite::params![&key, hash], |row| {
-        let nodes_json: String = row.get(0)?;
-        let edges_json: String = row.get(1)?;
-        Ok((nodes_json, edges_json))
-    })
-    .ok()
-    .map(|(nodes_json, edges_json)| {
-        let nodes: Vec<astria_semantic::SemanticNode> =
-            serde_json::from_str(&nodes_json).unwrap_or_default();
-        let edges: Vec<astria_semantic::SemanticEdge> =
-            serde_json::from_str(&edges_json).unwrap_or_default();
-        astria_semantic::SemanticExtraction { nodes, edges }
-    })
-}
-
-fn save_semantic_cache(
-    db: &Connection,
-    path: &Path,
-    hash: &str,
-    extraction: &astria_semantic::SemanticExtraction,
-) {
-    let key = semantic_cache_key(path);
-    let nodes_json = serde_json::to_string(&extraction.nodes).unwrap_or_default();
-    let edges_json = serde_json::to_string(&extraction.edges).unwrap_or_default();
-    let now = timestamp();
-    if let Err(e) = db.execute(
-        "INSERT OR REPLACE INTO extraction_cache (file_path, content_hash, language, nodes, edges, extracted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![&key, hash, "semantic", nodes_json, edges_json, now],
-    ) {
-        eprintln!("warning: failed to cache semantic extraction for {}: {}", key, e);
-    }
-}
-
-/// Enrich existing extractions with LLM-based semantic data.
-/// No-op if no semantic backend is configured (ASTRIA_LLM_API_KEY /
-/// OPENAI_API_KEY / GEMINI_API_KEY, or an explicit ASTRIA_LLM_BACKEND).
-/// Image files (no AST extraction) get their own synthetic extraction via
-/// the backend's vision path. Cache misses are extracted in parallel by a
-/// bounded worker pool (`ASTRIA_LLM_CONCURRENCY`, default 4). Returns
-/// enriched/failed/cached file counts — failures are reported, never
-/// silently dropped.
-struct SemanticPassStats {
-    enriched: usize,
-    failed: usize,
-    cached: usize,
-}
-
-fn enrich_with_semantics(
-    files: &[PathBuf],
-    extractions: &mut Vec<astria_extract::Extraction>,
-    db: &Connection,
-) -> SemanticPassStats {
-    let backend_factory = || astria_semantic::backend_from_env();
-    // Gate on backend availability before doing any work.
-    if backend_factory().is_err() {
-        return SemanticPassStats {
-            enriched: 0,
-            failed: 0,
-            cached: 0,
-        };
-    }
-
-    let mut file_to_idx: HashMap<PathBuf, usize> = HashMap::new();
-    for (i, ext) in extractions.iter().enumerate() {
-        file_to_idx.insert(ext.file_path.clone(), i);
-    }
-
-    // First pass: resolve extraction slots and collect cache misses.
-    struct Pending {
-        path: PathBuf,
-        hash: String,
-        idx: usize,
-    }
-    let mut pending: Vec<Pending> = Vec::new();
-    let mut matched = 0usize;
-    for file_path in files {
-        let hash = match file_hash(file_path) {
-            Some(h) => h,
-            None => continue,
-        };
-
-        // Text extraction paths require an existing extraction (images have
-        // none); the vision path inside extract_semantic_for_files handles
-        // both kinds, so a synthetic extraction carries image results.
-        let idx = match file_to_idx.get(file_path) {
-            Some(&idx) => idx,
-            None if astria_semantic::is_image_file(file_path) => {
-                extractions.push(astria_extract::Extraction {
-                    file_path: file_path.clone(),
-                    language: "image".to_string(),
-                    nodes: Vec::new(),
-                    edges: Vec::new(),
-                });
-                let idx = extractions.len() - 1;
-                file_to_idx.insert(file_path.clone(), idx);
-                idx
-            }
-            None => continue,
-        };
-        matched += 1;
-
-        if check_semantic_cache(db, file_path, &hash).is_none() {
-            pending.push(Pending {
-                path: file_path.clone(),
-                hash,
-                idx,
-            });
-        }
-    }
-    let cached = matched - pending.len();
-
-    // Batch-extract cache misses in parallel.
-    let pending_paths: Vec<PathBuf> = pending.iter().map(|p| p.path.clone()).collect();
-    let results = astria_semantic::extract_semantic_for_files_parallel(
-        &pending_paths,
-        backend_factory,
-        astria_semantic::concurrency_from_env(),
-    );
-    let extraction_by_path: HashMap<PathBuf, astria_semantic::SemanticExtraction> = results
-        .into_iter()
-        .filter_map(|(path, result)| match result {
-            Ok(extraction) => {
-                let meta = pending.iter().find(|p| p.path == path);
-                if let Some(meta) = meta {
-                    save_semantic_cache(db, &path, &meta.hash, &extraction);
-                }
-                Some((path, extraction))
-            }
-            Err(e) => {
-                eprintln!(
-                    "warning: semantic extraction failed for {}: {}",
-                    path.display(),
-                    e
-                );
-                None
-            }
-        })
-        .collect();
-
-    // Second pass: merge results into the extractions.
-    let mut enriched = 0usize;
-    let failed = pending.len() - extraction_by_path.len();
-    for meta in &pending {
-        let Some(sem_ext) = extraction_by_path.get(&meta.path) else {
-            continue;
-        };
-        enriched += 1;
-        let ext = &mut extractions[meta.idx];
-        for sem_node in &sem_ext.nodes {
-            ext.nodes.push(astria_extract::ExtractedNode {
-                id: sem_node.id.clone(),
-                label: sem_node.label.clone(),
-                source_file: meta.path.clone(),
-                source_line: None,
-                docstring: Some(sem_node.summary.clone()),
-                signature: None,
-                node_type: sem_node.node_type.clone(),
-            });
-        }
-        for sem_edge in &sem_ext.edges {
-            ext.edges.push(astria_extract::ExtractedEdge {
-                source: sem_edge.source.clone(),
-                target: sem_edge.target.clone(),
-                relation: sem_edge.relation.clone(),
-                confidence: "SEMANTIC".to_string(),
-                confidence_score: None,
-                source_file: meta.path.clone(),
-                source_line: None,
-            });
-        }
-    }
-    SemanticPassStats {
-        enriched,
-        failed,
-        cached,
-    }
-}
+#[path = "graph_update.rs"]
+mod graph_update;
+#[path = "semantic_pass.rs"]
+mod semantic_pass;
 
 pub fn run_pipeline(root: &Path) -> astria_core::Result<PipelineResult> {
     run_pipeline_with(root, true, false, false, false)
@@ -306,10 +110,6 @@ pub fn run_pipeline_with(
         }
         _ => {}
     }
-    let _ = db.execute(
-        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('pipeline_version', ?1)",
-        rusqlite::params![this_version],
-    );
 
     // Record pipeline start (root is now canonicalized)
     let run_id: i64 = db.query_row(
@@ -414,7 +214,7 @@ fn embed_stage(_db: &Connection, requested: bool) -> astria_core::Result<()> {
 
 /// `--label-communities`: one LLM call per changed community replaces the
 /// hub-symbol label with a thematic name plus a one-line summary. Labels
-/// are cached on `member_hash` — unchanged membership is never re-billed —
+/// are cached by membership, labels, backend configuration, and prompt;
 /// and failures fall back to the hub label, never to a broken community.
 fn label_communities_stage(
     db: &Connection,
@@ -433,10 +233,11 @@ fn label_communities_stage_with(
     }
     let backend = backend_factory().map_err(|_| {
         astria_core::AstriaError::Graph(
-            "--label-communities needs a semantic backend (set ASTRIA_LLM_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY)"
+            "--label-communities needs an explicit semantic backend (use --backend or ASTRIA_LLM_BACKEND, and configure its credentials)"
                 .to_string(),
         )
     })?;
+    let backend_configuration = astria_semantic::cache_configuration(backend.as_ref());
     // Call ceiling per run: biggest communities are labeled first, so the
     // cap degrades gracefully instead of blocking the feature entirely.
     let max_calls = astria_core::env_var("LLM_COMMUNITY_MAX")
@@ -465,11 +266,11 @@ fn label_communities_stage_with(
         failed: 0,
     };
     let mut calls = 0usize;
-    for (id, hub_label, size) in communities {
+    for (id, _stored_label, size) in communities {
         let members: Vec<(String, String)> = {
             let mut stmt = db.prepare(
                 "SELECT id, label FROM nodes WHERE community = ?1
-                 ORDER BY degree_centrality DESC, id ASC LIMIT 40",
+                 ORDER BY degree_centrality DESC, id ASC",
             )?;
             let rows = stmt.query_map(rusqlite::params![id], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -480,9 +281,29 @@ fn label_communities_stage_with(
             continue;
         }
 
-        // Membership fingerprint: shared with cluster(), which stores it on
-        // every rebuild — a label is reused only when the source is LLM and
-        // the membership is byte-identical to the last labeling.
+        // Keep cluster's full membership hash separate from the LLM inputs.
+        let hub_label = members[0].1.clone();
+        let member_labels: Vec<String> = members.iter().map(|(_, label)| label.clone()).collect();
+        let members_json = serde_json::to_string(&members)?;
+        let prompt = astria_semantic::enrichment::community_label_user_prompt(
+            &hub_label,
+            size as usize,
+            &member_labels,
+        );
+        let cache_fingerprint = semantic_pass::fingerprint(&[
+            &backend_configuration,
+            &members_json,
+            astria_semantic::enrichment::community_label_system_prompt(),
+            &prompt,
+        ]);
+        let cache_key = format!("community_label_configuration:{id}");
+        let stored_configuration: Option<String> = db
+            .query_row(
+                "SELECT value FROM _meta WHERE key = ?1",
+                [&cache_key],
+                |r| r.get(0),
+            )
+            .ok();
         let member_hash = {
             let mut ids: Vec<&str> = members.iter().map(|(i, _)| i.as_str()).collect();
             ids.sort_unstable();
@@ -495,7 +316,10 @@ fn label_communities_stage_with(
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap_or_else(|_| ("hub".to_string(), None));
-        if stored_source == "llm" && stored_hash.as_deref() == Some(member_hash.as_str()) {
+        if stored_source == "llm"
+            && stored_hash.as_deref() == Some(member_hash.as_str())
+            && stored_configuration.as_deref() == Some(cache_fingerprint.as_str())
+        {
             stats.reused += 1;
             continue;
         }
@@ -509,7 +333,6 @@ fn label_communities_stage_with(
             break;
         }
 
-        let member_labels: Vec<String> = members.iter().map(|(_, label)| label.clone()).collect();
         calls += 1;
         match astria_semantic::enrichment::summarize_community(
             backend.as_ref(),
@@ -518,14 +341,25 @@ fn label_communities_stage_with(
             &member_labels,
         ) {
             Ok(naming) => {
-                if let Err(e) = db.execute(
-                    "UPDATE communities SET label = ?1, summary = ?2, label_source = 'llm', member_hash = ?3 WHERE id = ?4",
-                    rusqlite::params![naming.label, naming.summary, member_hash, id],
-                ) {
-                    eprintln!("warning: failed to store label for community {id}: {e}");
-                    stats.failed += 1;
-                } else {
-                    stats.labeled += 1;
+                let stored = (|| -> astria_core::Result<()> {
+                    let tx = db.unchecked_transaction()?;
+                    tx.execute(
+                        "UPDATE communities SET label = ?1, summary = ?2, label_source = 'llm', member_hash = ?3 WHERE id = ?4",
+                        rusqlite::params![naming.label, naming.summary, member_hash, id],
+                    )?;
+                    tx.execute(
+                        "INSERT OR REPLACE INTO _meta (key, value) VALUES (?1, ?2)",
+                        rusqlite::params![cache_key, cache_fingerprint],
+                    )?;
+                    tx.commit()?;
+                    Ok(())
+                })();
+                match stored {
+                    Ok(()) => stats.labeled += 1,
+                    Err(e) => {
+                        eprintln!("warning: failed to store label for community {id}: {e}");
+                        stats.failed += 1;
+                    }
                 }
             }
             Err(e) => {
@@ -550,7 +384,7 @@ fn label_communities_stage_with(
 /// `--deep`: the second extraction tier. For every file, one LLM call
 /// links the file's code symbols to concept nodes that live in *other*
 /// files — the cross-file concept mesh the AST cannot see. Results are
-/// cached per file content hash and written as INFERRED edges tagged
+/// cached by content, symbols, concept menu, backend, and prompt; written as INFERRED edges tagged
 /// `context='deep'`, so rebuilds are idempotent and free when nothing
 /// changed.
 fn deep_link_stage(
@@ -572,11 +406,12 @@ fn deep_link_stage_with(
     }
     let backend = backend_factory().map_err(|_| {
         astria_core::AstriaError::Graph(
-            "--deep needs a semantic backend (set ASTRIA_LLM_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY)"
+            "--deep needs an explicit semantic backend (use --backend or ASTRIA_LLM_BACKEND, and configure its credentials)"
                 .to_string(),
         )
     })?;
 
+    let backend_configuration = astria_semantic::cache_configuration(backend.as_ref());
     // The concept menu every file links into: semantic concept nodes
     // (built by extraction), strongest first.
     let concepts: Vec<(String, String)> = {
@@ -627,29 +462,45 @@ fn deep_link_stage_with(
             continue;
         }
         let cache_key = format!("deep:{file_path}");
-        let cached: bool = db
-            .query_row(
-                "SELECT 1 FROM extraction_cache WHERE file_path = ?1 AND content_hash = ?2",
-                rusqlite::params![&cache_key, &hash],
-                |r| r.get::<_, i64>(0),
-            )
-            .is_ok();
-        if cached {
-            stats.files_cached += 1;
-            continue;
-        }
-        if astria_semantic::enrichment::budget_exceeded() {
-            break;
-        }
-
         let display = astria_paths::relative_display(&file_path, &root.to_string_lossy());
         let symbol_labels: Vec<String> = symbols.iter().map(|(_, label)| label.clone()).collect();
-        match astria_semantic::enrichment::link_concepts(
-            backend.as_ref(),
-            &display,
-            &symbol_labels,
-            &concepts,
-        ) {
+        let symbols_json = serde_json::to_string(&symbols)?;
+        let concepts_json = serde_json::to_string(&concepts)?;
+        let prompt =
+            astria_semantic::enrichment::deep_link_user_prompt(&display, &symbol_labels, &concepts);
+        let cache_fingerprint = semantic_pass::fingerprint(&[
+            &hash,
+            &symbols_json,
+            &concepts_json,
+            &backend_configuration,
+            astria_semantic::enrichment::deep_link_system_prompt(),
+            &prompt,
+        ]);
+        let cached: Option<Vec<astria_semantic::enrichment::ConceptLink>> = db
+            .query_row(
+                "SELECT edges FROM extraction_cache WHERE file_path = ?1 AND content_hash = ?2",
+                rusqlite::params![&cache_key, &cache_fingerprint],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok());
+        let was_cached = cached.is_some();
+        let result = if let Some(links) = cached {
+            Ok(links)
+        } else {
+            if astria_semantic::enrichment::budget_exceeded() {
+                break;
+            }
+            astria_semantic::enrichment::link_concepts(
+                backend.as_ref(),
+                &display,
+                &symbol_labels,
+                &concepts,
+            )
+        };
+        // Cached and fresh links follow the same persistence path: rebuilding
+        // or deduplicating the base graph can have removed prior deep edges.
+        match result {
             Ok(links) => {
                 let links_json = serde_json::to_string(&links).unwrap_or_else(|_| "[]".into());
                 let tx = db.unchecked_transaction()?;
@@ -688,17 +539,23 @@ fn deep_link_stage_with(
                 }
                 tx.execute(
                     "INSERT OR REPLACE INTO extraction_cache (file_path, content_hash, language, nodes, edges, extracted_at) VALUES (?1, ?2, 'deep', '[]', ?3, ?4)",
-                    rusqlite::params![&cache_key, &hash, links_json, timestamp()],
+                    rusqlite::params![&cache_key, &cache_fingerprint, links_json, timestamp()],
                 )?;
                 tx.commit()?;
-                stats.files_linked += 1;
+                if was_cached {
+                    stats.files_cached += 1;
+                } else {
+                    stats.files_linked += 1;
+                }
                 stats.links_added += added;
             }
             Err(e) => {
                 eprintln!("warning: deep linking failed for {display}: {e}");
             }
         }
-        std::thread::sleep(Duration::from_millis(200));
+        if !was_cached {
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
 
     let _ = db.execute(
@@ -720,132 +577,49 @@ fn run_pipeline_inner(
     label_communities: bool,
     deep: bool,
 ) -> astria_core::Result<PipelineResult> {
-    let detected = astria_detect::detect(root, db)?;
-    astria_detect::update_manifest(&detected, db)?;
-
-    // Clean up removed files from the graph (transactional)
-    if !detected.removed.is_empty() {
-        let tx = db.unchecked_transaction()?;
-        for entry in &detected.removed {
-            // Match how build stores them: absolute path joined from root
-            let path_str = astria_paths::normalize(&root.join(&entry.path));
-            // Delete edges owned by this file
-            tx.execute(
-                "DELETE FROM edges WHERE source_file = ?1",
-                rusqlite::params![path_str],
-            )?;
-            // Delete edges from other files that reference nodes being removed
-            tx.execute(
-                "DELETE FROM edges WHERE source IN (SELECT id FROM nodes WHERE source_file = ?1) OR target IN (SELECT id FROM nodes WHERE source_file = ?1)",
-                rusqlite::params![path_str],
-            )?;
-            tx.execute(
-                "DELETE FROM nodes WHERE source_file = ?1",
-                rusqlite::params![path_str],
-            )?;
-            tx.execute(
-                "DELETE FROM extraction_cache WHERE file_path = ?1",
-                rusqlite::params![path_str],
-            )?;
-            let semantic_key = format!("semantic:{}", path_str);
-            tx.execute(
-                "DELETE FROM extraction_cache WHERE file_path = ?1",
-                rusqlite::params![semantic_key],
-            )?;
-            let deep_key = format!("deep:{}", path_str);
-            tx.execute(
-                "DELETE FROM extraction_cache WHERE file_path = ?1",
-                rusqlite::params![deep_key],
-            )?;
-        }
-        tx.commit()?;
+    if (label_communities || deep) && !astria_semantic::enrichment_enabled() {
+        return Err(astria_core::AstriaError::Graph(
+            "--label-communities and --deep require an explicit --backend or ASTRIA_LLM_BACKEND"
+                .into(),
+        ));
     }
-
-    let mut files_to_process: Vec<PathBuf> = detected
-        .new
-        .iter()
-        .chain(detected.changed.iter())
-        .map(|e| root.join(&e.path))
-        .collect();
-
-    // Transcript sidecars: `.astria/transcripts/*.{txt,md}` become document
-    // nodes. This is the local contract of the official astria's whisper
-    // step — any transcriber (or hand-written notes) drops a file here and it
-    // joins the graph on the next run. The walk skips `.astria/` by design,
-    // so these are ingested explicitly.
-    let transcripts_dir = astria_dir.join("transcripts");
-    if transcripts_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&transcripts_dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                let is_sidecar = p
-                    .extension()
-                    .and_then(|x| x.to_str())
-                    .map(|x| x == "txt" || x == "md")
-                    .unwrap_or(false);
-                if is_sidecar && !files_to_process.contains(&p) {
-                    files_to_process.push(p);
-                }
-            }
-        }
-    }
-
-    // A no-op pass (nothing changed) still runs the embed stage when it is
-    // requested or embeddings already exist — otherwise `run --embed` on an
-    // unchanged tree would never compute anything.
-    #[cfg(feature = "embed")]
-    let embed_wanted = embed || astria_embed::has_embeddings(db);
-    #[cfg(not(feature = "embed"))]
-    let embed_wanted = embed;
-
-    if files_to_process.is_empty()
-        && detected.removed.is_empty()
-        && !embed_wanted
-        && !label_communities
-        && !deep
-    {
-        // Nothing changed on disk, but a newer binary may bring new
-        // deterministic link passes — refresh cross-layer edges here too.
-        if let Err(e) = astria_build::crosslayer::link_cross_layer(db) {
-            eprintln!("warning: cross-layer linking failed: {e}");
-        }
-        // Nothing changed on disk, but queries may have accumulated new
-        // pairs worth promoting — the report should reflect them.
-        let _ = astria_query::promote_learned_edges(db, 2, 3);
-        let analysis = astria_analyze::analyze(db)?;
-        let report = astria_report::generate_report(db, &analysis)?;
-        write_report(astria_dir, &report)?;
-        export_json(db, &astria_dir.join("graph.json"))?;
-        // Report the communities that exist in the DB, not an empty
-        // placeholder - the CLI prints this count on every no-op update.
-        let community_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM communities", [], |r| r.get(0))
-            .unwrap_or(0);
-        return Ok(PipelineResult {
-            build_result: astria_build::BuildResult {
+    let detected = graph_update::detect(root, db)?;
+    let configuration = semantic_pass::configuration()?;
+    let build_configuration = format!("{configuration}:dedup={dedup}");
+    let previous_configuration: Option<String> = db
+        .query_row(
+            "SELECT value FROM _meta WHERE key = 'build_configuration'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    let files_processed = detected.new.len() + detected.changed.len();
+    let needs_build = files_processed > 0
+        || !detected.removed.is_empty()
+        || previous_configuration.as_deref() != Some(build_configuration.as_str());
+    // Resolve against the complete corpus, including cached raw facts for
+    // unchanged callers. AST parsing still runs only on cache misses.
+    let (build_result, semantic_stats) = if needs_build {
+        let files = graph_update::corpus(root, &detected);
+        let mut extractions = astria_extract::extract(&files, root, db)?;
+        let semantic_stats =
+            semantic_pass::enrich_with_semantics(&files, &mut extractions, db, &configuration)?;
+        let build_result =
+            graph_update::publish(root, db, &detected, &extractions, &build_configuration)?;
+        (build_result, semantic_stats)
+    } else {
+        (
+            astria_build::BuildResult {
                 nodes_added: 0,
                 edges_added: 0,
                 duplicates_merged: 0,
             },
-            cluster_result: astria_cluster::ClusterResult {
-                communities: (0..community_count.max(0) as u32).map(|i| (i, 0)).collect(),
-                labels: Default::default(),
-                iterations: 0,
-                modularity: 0.0,
+            semantic_pass::SemanticPassStats {
+                enriched: 0,
+                cached: 0,
             },
-            analysis,
-            report,
-            files_processed: 0,
-            semantic_cached: 0,
-            llm_usage: astria_semantic::enrichment::usage_snapshot(),
-            community_labels: None,
-            deep_links: None,
-        });
-    }
-
-    let mut extractions = astria_extract::extract(&files_to_process, root, db)?;
-    let semantic_stats = enrich_with_semantics(&files_to_process, &mut extractions, db);
-    let build_result = astria_build::build(&extractions, db)?;
+        )
+    };
 
     // Cross-layer linking: docs→packages, packages→entry files, napi FFI
     // imports→Rust functions. Deterministic DB passes (no LLM) that run over
@@ -885,13 +659,6 @@ fn run_pipeline_inner(
     ) {
         eprintln!("warning: failed to record semantic count: {}", e);
     }
-    if semantic_stats.failed > 0 {
-        let _ = db.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('last_semantic_failed', ?1)",
-            rusqlite::params![semantic_stats.failed.to_string()],
-        );
-    }
-
     // Deep concept linking runs BEFORE embeddings and clustering so its
     // cross-file INFERRED edges shape both: concept nodes bridge files the
     // AST never connected.
@@ -947,7 +714,7 @@ fn run_pipeline_inner(
         cluster_result,
         analysis,
         report,
-        files_processed: files_to_process.len(),
+        files_processed,
         semantic_cached: semantic_stats.cached,
         llm_usage: astria_semantic::enrichment::usage_snapshot(),
         community_labels: label_stats,

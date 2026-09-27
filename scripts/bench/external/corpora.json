@@ -1,0 +1,20 @@
+[
+  {
+    "name": "click",
+    "repository": "https://github.com/pallets/click",
+    "commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+    "golden": "click.jsonl"
+  },
+  {
+    "name": "express",
+    "repository": "https://github.com/expressjs/express",
+    "commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+    "golden": "express.jsonl"
+  },
+  {
+    "name": "ripgrep",
+    "repository": "https://github.com/BurntSushi/ripgrep",
+    "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+    "golden": "ripgrep.jsonl"
+  }
+]

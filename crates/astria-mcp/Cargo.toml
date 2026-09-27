@@ -8,6 +8,10 @@ rust-version.workspace = true
 # workspace-internal: distributed via npm (@nodesify/astria), not crates.io
 publish = false
 
+[features]
+default = []
+embed = ["astria-query/embed"]
+
 [dependencies]
 astria-core = { workspace = true }
 astria-paths = { workspace = true }

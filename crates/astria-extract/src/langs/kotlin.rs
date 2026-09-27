@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Kotlin",
-        extensions: &[".kt", ".kts"],
+        name: astria_core::languages::LanguageId::Kotlin
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Kotlin
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_kotlin_ng::LANGUAGE.into(),
         class_types: &[
             "class_declaration",

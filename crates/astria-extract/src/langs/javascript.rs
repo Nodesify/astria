@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "JavaScript",
-        extensions: &[".js", ".jsx", ".mjs"],
+        name: astria_core::languages::LanguageId::Javascript
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Javascript
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_javascript::LANGUAGE.into(),
         class_types: &["class_declaration"],
         function_types: &[

@@ -26,13 +26,13 @@ Override the model cache location with `ASTRIA_EMBED_CACHE_DIR` — all variable
 
 ## LLM enrichment
 
-Set any LLM backend and the pipeline enriches docs, papers, and images into concept nodes automatically.
+Select an LLM backend explicitly with `--backend` or `ASTRIA_LLM_BACKEND` to enrich documents, papers, and images. Credentials or endpoint variables alone never activate network enrichment. `--backend none` or `ASTRIA_LLM_BACKEND=none` disables it.
 
 | Backend | Env vars | Vision |
 |---------|----------|--------|
-| Anthropic Claude (default) | `ASTRIA_LLM_API_KEY` | ✓ |
-| OpenAI-compatible (OpenAI, DeepSeek, Ollama, LM Studio, custom) | `ASTRIA_LLM_BASE_URL` + `ASTRIA_LLM_API_KEY`/`OPENAI_API_KEY` | ✓ |
-| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | ✓ |
+| Anthropic Claude (`claude`) | `ASTRIA_LLM_API_KEY` | ✓ |
+| OpenAI-compatible (`openai`: OpenAI, DeepSeek, Ollama, LM Studio, custom) | `ASTRIA_LLM_BASE_URL` + `ASTRIA_LLM_API_KEY`/`OPENAI_API_KEY` | ✓ |
+| Google Gemini (`gemini`) | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | ✓ |
 
 - `ASTRIA_LLM_BACKEND` selects the backend explicitly
 - `ASTRIA_LLM_MODEL` overrides the model
@@ -40,7 +40,7 @@ Set any LLM backend and the pipeline enriches docs, papers, and images into conc
 - Images (png/jpg/webp/gif, ≤5 MB) go through each backend's vision API
 - `ASTRIA_LLM_CONCURRENCY` controls the parallel worker pool; long files are chunked and LLM output is validated
 
-Semantic enrichment is a pipeline stage — `enrich_with_semantics()` — that activates only when a backend is configured, so builds stay fully offline and deterministic without one.
+Once selected, a backend reads its configured credentials, including the generic provider environment variables listed above. Without explicit selection, the structural pipeline does not invoke an LLM. `--label-communities` and `--deep` also require explicit backend selection.
 
 ### Cost: measured, capped, and cached
 
@@ -52,11 +52,12 @@ LLM usage: 17 API calls, 3366 in / 1675 out tokens
 
 - `ASTRIA_LLM_BUDGET` (total tokens) stops extraction before the cap is exceeded; remaining files fail loudly instead of silently skipping.
 - `pipeline_runs` records each run's `llm_input_tokens` / `llm_output_tokens` / `llm_api_calls`, so spend is queryable history, not a vibe.
-- Extractions are cached per file content hash — an unchanged file is never re-billed on the next run.
+- Extraction caches include file content plus the effective backend, endpoint, model, and prompt configuration. Matching inputs reuse output; configuration changes invalidate it. Cached and fresh output follow the same merge path.
+- Failed semantic extraction leaves the core graph and successful-file manifest unadvanced, so a later update retries the work. Derived community-label and deep-link stages run after the core commit and can be retried separately on the next run.
 
 ### Thematic community labels — `--label-communities`
 
-`astria run . --label-communities` names communities with **one LLM call per changed community**:
+`astria run . --backend openai --label-communities` names communities with **one LLM call per changed community**:
 
 ```
 Communities labeled: 6 (--label-communities)
@@ -66,14 +67,14 @@ Communities labeled: 0, 6 unchanged (--label-communities)   # second run: all re
 
 - The label ships with a one-line **summary**, and both are first-class data: MCP `list_communities`, `graph_report.md`, `graph.json` (`communities` array), wiki, and Obsidian all show them.
 - Provenance is explicit — `label_source` is `llm` or `hub`, so a themed label is always distinguishable from the deterministic thematic/hub term that names the community otherwise.
-- Caching is a SHA-256 fingerprint of the community's member ids (`member_hash`): rebuilds preserve LLM labels while membership is unchanged and drop them the moment it changes. `ASTRIA_LLM_COMMUNITY_MAX` caps calls per run (default 48, largest communities first); communities under 3 nodes keep deterministic names.
+- Caching includes community membership, prompt inputs, and effective backend configuration: changed members, prompts, endpoint, or model require fresh output. `ASTRIA_LLM_COMMUNITY_MAX` caps calls per run (default 48, largest communities first); communities under 3 nodes keep deterministic names.
 
 ### Deep concept links — `--deep`
 
 `--deep` is the second extraction tier: one LLM call per file offers the file's code symbols against the graph's concept nodes and writes the meaningful matches as `INFERRED` edges tagged `context='deep'` — the cross-file concept mesh the AST cannot see.
 
-- Results are cached per file content hash, so incremental updates only bill changed files.
-- Stale links are replaced on rebuild (idempotent), and `--detail high` queries keep filtering them out like every other inferred fact.
+- Results are cached against file content, offered symbols and concepts, prompts, and effective backend configuration. Changes to any of those inputs can require a fresh call.
+- Source changes invalidate deep edges. Run with `--deep` again to replay valid cached links or regenerate links for changed inputs; ordinary updates do not restore them. `--detail high` continues to filter deep links as inferred evidence.
 ```
 Deep concept links: 27 (--deep)
 ```

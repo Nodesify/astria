@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Python",
-        extensions: &[".py"],
+        name: astria_core::languages::LanguageId::Python
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Python
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_python::LANGUAGE.into(),
         class_types: &["class_definition"],
         function_types: &["function_definition"],
