@@ -9,6 +9,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &["function_definition"],
         import_types: &["preproc_include"],
         call_type: "call_expression",
+        name_child: None,
         name_field: "declarator",
         body_field: Some("body"),
         body_fallback_types: &["compound_statement"],
@@ -23,6 +24,7 @@ pub fn config() -> &'static LanguageConfig {
 pub fn cpp_config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
         name: "C++",
+        name_child: None,
         extensions: &[".cpp", ".cc", ".cxx", ".hpp"],
         language_fn: || tree_sitter_cpp::LANGUAGE.into(),
         class_types: &["class_specifier", "struct_specifier", "enum_specifier"],

@@ -9,6 +9,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &["function_statement", "filter_statement"],
         import_types: &["using_statement"],
         call_type: "command_invocation",
+        name_child: None,
         name_field: "command_name",
         body_field: Some("statement_block"),
         body_fallback_types: &[],

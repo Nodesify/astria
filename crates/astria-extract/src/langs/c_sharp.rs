@@ -18,6 +18,7 @@ pub fn config() -> &'static LanguageConfig {
         ],
         import_types: &["using_directive"],
         call_type: "invocation_expression",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["block", "arrow_expression_clause"],

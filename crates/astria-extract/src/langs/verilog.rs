@@ -14,6 +14,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &["function_declaration", "task_declaration"],
         import_types: &["import_declaration"],
         call_type: "call",
+        name_child: None,
         name_field: "instance_identifier",
         body_field: Some("module_item"),
         body_fallback_types: &[],

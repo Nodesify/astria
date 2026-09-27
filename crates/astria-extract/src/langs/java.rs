@@ -13,6 +13,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &["method_declaration", "constructor_declaration"],
         import_types: &["import_declaration"],
         call_type: "method_invocation",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["block"],

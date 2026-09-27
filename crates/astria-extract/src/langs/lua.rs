@@ -12,6 +12,7 @@ pub fn config() -> &'static LanguageConfig {
         // left empty. A future enhancement could filter by callee name == "require".
         import_types: &[],
         call_type: "function_call",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["block"],

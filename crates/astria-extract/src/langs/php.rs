@@ -18,6 +18,7 @@ pub fn config() -> &'static LanguageConfig {
         ],
         import_types: &["namespace_use_declaration", "namespace_definition"],
         call_type: "function_call_expression",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["compound_statement", "declaration_list"],

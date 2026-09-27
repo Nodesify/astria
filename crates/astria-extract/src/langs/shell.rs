@@ -11,6 +11,7 @@ pub fn config() -> &'static LanguageConfig {
         // source/. is handled at the string level in extract_import_module if needed.
         import_types: &[],
         call_type: "command",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["compound_statement", "do_group"],

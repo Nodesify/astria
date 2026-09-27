@@ -13,6 +13,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &["call"],
         import_types: &["call"],
         call_type: "call",
+        name_child: None,
         name_field: "name",
         body_field: None,
         body_fallback_types: &["do_block", "stab_clause"],

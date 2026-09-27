@@ -466,6 +466,33 @@ kernel void tintkernel() {}
                 !results.is_empty() && !results[0].nodes.is_empty(),
                 "{name}: extraction produced no nodes"
             );
+            // Label-level assertions: the extraction must identify the actual
+            // declared symbols, not just emit a bare file node.
+            let labels: Vec<String> = results[0]
+                .nodes
+                .iter()
+                .map(|n| n.label.clone())
+                .collect();
+            match *name {
+                "infra.tf" => assert!(
+                    labels.iter().any(|l| l.contains("aws_s3_bucket"))
+                        && labels.iter().any(|l| l.contains("network")),
+                    "terraform resources missing from labels: {labels:?}"
+                ),
+                "tasks.ps1" => assert!(
+                    labels.iter().any(|l| l.contains("Deploy-Stack")),
+                    "powershell function missing from labels: {labels:?}"
+                ),
+                "counter.sv" => assert!(
+                    labels.iter().any(|l| l.contains("counter")),
+                    "systemverilog module missing from labels: {labels:?}"
+                ),
+                "render.metal" => assert!(
+                    labels.iter().any(|l| l.contains("render_vertex")),
+                    "metal vertex function missing from labels: {labels:?}"
+                ),
+                _ => {}
+            }
         }
     }
 
