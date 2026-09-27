@@ -1,5 +1,6 @@
 // astria-build: merge extractions into SQLite graph
 
+pub mod crosslayer;
 pub mod dedup;
 pub mod hyperedges;
 pub mod minhash;
