@@ -233,9 +233,14 @@ pub fn dedup_nodes(db: &Connection) -> Result<usize> {
             // fuzzy-dedup candidate - and a file node must never merge away,
             // because transitive union chains can defeat pair-level guards
             // (index.ts ~ index.tsx ~ install/index.ts erases an entry file).
+            // Prose nodes (document/reference/paper) carry evidence by file
+            // and line; their labels often share heading or speaker prefixes,
+            // so fuzzy-merging them erases retrieval evidence. Document
+            // concepts are merged by id at build time instead.
             if matches!(
                 r.file_type.as_str(),
-                "code" | "test" | "stub" | "package" | "rationale"
+                "code" | "test" | "stub" | "package" | "rationale" | "document" | "reference"
+                    | "paper"
             ) || r.label.is_empty()
                 || label_shape(&r.label) == Shape::File
             {
@@ -514,6 +519,34 @@ mod tests {
             None,
         );
         assert_eq!(dedup_nodes(&db).unwrap(), 0);
+    }
+
+    #[test]
+    fn same_file_document_labels_not_merged() {
+        // Transcript chunks share speaker/heading prefixes; their labels are
+        // near-identical by design and must not fuzzy-merge away evidence.
+        let db = open_db_in_memory().unwrap();
+        insert(
+            &db,
+            "d1",
+            "Installation guide part one",
+            "document",
+            "a.md",
+            Some(1),
+        );
+        insert(
+            &db,
+            "d2",
+            "Installation guide part two",
+            "document",
+            "a.md",
+            Some(1),
+        );
+        assert_eq!(dedup_nodes(&db).unwrap(), 0);
+        let count: i64 = db
+            .query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
     }
 
     #[test]

@@ -114,7 +114,10 @@ pub fn build_in_transaction(
                     node.node_type.as_str()
                 }
                 _ => {
-                    if extraction.language == "markdown" {
+                    if matches!(
+                        extraction.language.as_str(),
+                        "markdown" | "pdf" | "text" | "rst"
+                    ) {
                         "document"
                     } else {
                         "code"
