@@ -4,6 +4,13 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+### HTML visualization rewritten around drill-down
+- `astria export --format html` now ships a self-contained canvas viewer (no vis-network, no network access required) that opens as community bubbles — one per community, sized by membership, with edge-weighted links between bubbles. Click a bubble to expand it into member nodes, click a member to focus its 1-hop neighborhood, and search to jump straight to any symbol; "All nodes" expands everything with level-of-detail labels.
+- The exported layout stays fully precomputed (physics-free), and the viewer draws only what is on screen, so large graphs open and zoom instantly even in sandboxed HTML previewers.
+- Viewer source lives in `packages/viewer` (TypeScript, `npm run build`); the minified bundle is embedded at `crates/astria-napi/src/assets/viewer.js`. Community bubbles use themed labels from the `communities` table when `--label-communities` produced them.
+
 ## [1.0.6] — 2026-09-27
 
 ### Chunked document retrieval
