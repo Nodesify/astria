@@ -35,6 +35,7 @@ Keys are sent in request headers (the Gemini key never goes in the URL, where it
 | Variable | Purpose |
 |---|---|
 | `ASTRIA_EMBED_CACHE_DIR` | Overrides where the embedding model is cached (default `~/.astria-embed-cache`; ~90 MB downloaded once, then offline) |
+| `ASTRIA_EMBED` | `off` (or `0`/`false`/`no`) stops queries from auto-merging embedding seeds. Build-side `--embed` still computes vectors; this only turns off consuming them, so a graph that carries vectors can still be queried structurally. The `astria query --no-embed` flag sets the same switch per call. |
 
 ## Query logging
 

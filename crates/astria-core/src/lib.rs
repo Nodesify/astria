@@ -17,7 +17,8 @@ pub mod types;
 /// v6: cfg-gated twin definitions dedup to the first occurrence.
 /// v7: complete-corpus reference reconciliation and strict extraction errors.
 /// v8: preserve scoped definitions, assigned functions, test roles and Python implementations.
-pub const EXTRACTION_HASH_VERSION: &str = "v8";
+/// v9: chunk document body text into searchable section chunks (markdown, text, RST).
+pub const EXTRACTION_HASH_VERSION: &str = "v9";
 
 /// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`
 /// spelling so pre-1.0 env configs keep working. The new name wins; an empty

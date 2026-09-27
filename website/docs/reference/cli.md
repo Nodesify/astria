@@ -38,7 +38,7 @@ Builds also pick up, automatically:
 
 ```bash
 astria explain <node> [--graph .]              # Explain a node and its connections
-astria query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--graph .]  # BFS/DFS traversal
+astria query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--no-embed] [--graph .]  # BFS/DFS traversal
 astria path <A> <B> [--directed] [--detail high] [--graph .]   # Shortest path between two concepts
 astria affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - what breaks if you change this node
 astria map [--budget 2000] [--detail high] [--graph .]  # PageRank-ranked repo map with top symbols
@@ -56,6 +56,7 @@ astria history [--limit 20] [--graph .]        # Show recent query history
 - `--directed` — follow edge direction instead of treating the graph as undirected
 - `--detail high` — fidelity tier: only declared (`EXTRACTED`) facts, regardless of usage-adjusted confidence scores
 - `--cursor N` — continuation cursor for truncated traversals; use the returned value, which advances through node and edge records
+- `--no-embed` — skip auto-merged embedding seeds even when the graph carries vectors (same switch as `ASTRIA_EMBED=off`; see [Environment variables](./env-vars))
 
 CLI and MCP share hybrid retrieval and load a fresh SQLite graph snapshot for each request. Query output reports when the graph was last built, so agents can judge freshness. Repeated queries promote recurring node pairs into `learned` edges — see [learning from usage](#learning-from-usage).
 

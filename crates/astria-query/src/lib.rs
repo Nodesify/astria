@@ -585,10 +585,12 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         let phrase_bonus = phrase_bonus.min(1.0);
         let label_tokens = &label_components[i];
         let file_tokens = tokenize(&node.source_file);
+        // Chunked prose bodies live in the docstring; 400 tokens keeps
+        // whole-chunk scoring affordable while matching deep into the chunk.
         let doc_tokens: Vec<String> = node
             .docstring
             .as_deref()
-            .map(|d| tokenize(d).into_iter().take(120).collect())
+            .map(|d| tokenize(d).into_iter().take(400).collect())
             .unwrap_or_default();
         let mut score = 0.0;
         for term in terms {
@@ -1045,7 +1047,10 @@ pub fn query_graph_with_metadata(
         .ok();
     // Only use an already cached model: queries never initiate a download.
     #[cfg(feature = "embed")]
-    let semantic = if astria_embed::has_embeddings(db) && astria_embed::model_cached() {
+    let semantic = if !semantic_seeds_disabled()
+        && astria_embed::has_embeddings(db)
+        && astria_embed::model_cached()
+    {
         astria_embed::load_embedder()
             .ok()
             .and_then(|mut model| astria_embed::semantic_scores(db, &mut model, question).ok())
@@ -1080,6 +1085,23 @@ pub fn query_graph_with_metadata(
 /// mid-range matches land near the path/docstring layer.
 fn semantic_seed_score(cosine: f64) -> f64 {
     ((cosine - 0.55) * 1.5).clamp(0.0, 0.67)
+}
+
+/// `ASTRIA_EMBED=off|0|false|no` stops queries from auto-merging embedding
+/// seeds. Build-side `--embed` still computes vectors; this only turns off
+/// consuming them, so structural behavior can be measured or enforced on a
+/// graph that carries vectors.
+#[cfg_attr(not(feature = "embed"), allow(dead_code))]
+fn semantic_seeds_disabled() -> bool {
+    semantic_seeds_disabled_value(std::env::var("ASTRIA_EMBED").ok().as_deref())
+}
+
+#[cfg_attr(not(feature = "embed"), allow(dead_code))]
+fn semantic_seeds_disabled_value(value: Option<&str>) -> bool {
+    match value {
+        Some(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "0" | "false" | "no"),
+        None => false,
+    }
 }
 
 /// `query_graph` plus semantic seed candidates: `(node_id, cosine)` pairs
@@ -1205,14 +1227,22 @@ fn query_graph_loaded(
         }
     }
     let seed_limit = 5.max(seed_nodes.len());
+    // Doc-seed quota: on code corpora two prose seeds already outrank
+    // silence, and more would crowd code out of the seed set. On effectively
+    // doc-only graphs (transcript corpora, docs sites with no code) the
+    // quota would leave the traversal nearly seedless — there is no code to
+    // protect, so the quota opens up to the full seed limit.
+    let is_doc_type = |ft: &str| matches!(ft, "document" | "reference" | "paper");
+    let doc_node_count = loaded
+        .graph
+        .node_indices()
+        .filter(|&i| is_doc_type(&loaded.graph[i].file_type))
+        .count();
+    let doc_share = doc_node_count as f64 / loaded.graph.node_count().max(1) as f64;
+    let doc_seed_quota = if doc_share > 0.95 { seed_limit } else { 2 };
     let mut doc_seeds = seed_nodes
         .iter()
-        .filter(|&&idx| {
-            matches!(
-                loaded.graph[idx].file_type.as_str(),
-                "document" | "reference" | "paper"
-            )
-        })
+        .filter(|&&idx| is_doc_type(&loaded.graph[idx].file_type))
         .count();
     for &(_, idx) in scored.iter() {
         if seed_nodes.len() == seed_limit {
@@ -1221,12 +1251,8 @@ fn query_graph_loaded(
         if seed_nodes.contains(&idx) {
             continue;
         }
-        let is_doc = matches!(
-            loaded.graph[idx].file_type.as_str(),
-            "document" | "reference" | "paper"
-        );
-        if is_doc {
-            if doc_seeds >= 2 && !wants_docs(&terms) {
+        if is_doc_type(&loaded.graph[idx].file_type) {
+            if doc_seeds >= doc_seed_quota && !wants_docs(&terms) {
                 continue;
             }
             doc_seeds += 1;
@@ -2112,6 +2138,62 @@ mod tests {
             .map(|l| l.matches("validation notes").count())
             .unwrap_or(0);
         assert!(doc_seeds <= 2, "doc seeds exceeded the quota: {doc_seeds}");
+    }
+
+    #[test]
+    fn doc_only_graph_seeds_up_to_the_limit() {
+        // On a transcript-style graph (no code at all) the two-seed prose
+        // quota would leave the other seed slots empty; the quota opens up
+        // when the graph is effectively doc-only.
+        let db = open_db_in_memory().unwrap();
+        let mut inserts = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
+                ('d0', 'sunrise session', 'document', 't/s0.md', 'Melanie painted a sunrise at the lake')",
+        );
+        for i in 1..6 {
+            inserts.push_str(&format!(
+                ", ('d{i}', 'session {i}', 'document', 't/s{i}.md', 'another sunrise story {i}')"
+            ));
+        }
+        inserts.push(';');
+        db.execute_batch(&inserts).unwrap();
+
+        let (text, _, _, _) = query_graph(
+            &db,
+            "doc-only-quota",
+            "sunrise",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        let doc_seeds = text
+            .lines()
+            .next()
+            .map(|l| l.matches("session").count() + l.matches("sunrise").count())
+            .unwrap_or(0);
+        assert!(
+            doc_seeds >= 4,
+            "doc-only graph seeded only {doc_seeds} nodes, quota did not open up"
+        );
+    }
+
+    #[test]
+    fn embed_optout_env_values() {
+        assert!(!semantic_seeds_disabled_value(None));
+        assert!(!semantic_seeds_disabled_value(Some("on")));
+        assert!(!semantic_seeds_disabled_value(Some("1")));
+        assert!(!semantic_seeds_disabled_value(Some("")));
+        assert!(!semantic_seeds_disabled_value(Some("auto")));
+        assert!(semantic_seeds_disabled_value(Some("off")));
+        assert!(semantic_seeds_disabled_value(Some("OFF")));
+        assert!(semantic_seeds_disabled_value(Some(" false ")));
+        assert!(semantic_seeds_disabled_value(Some("no")));
+        assert!(semantic_seeds_disabled_value(Some("0")));
     }
 
     #[test]

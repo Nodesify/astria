@@ -91,6 +91,7 @@ program
   .option('--directed', 'Follow edges only in their stored direction (caller -> callee)')
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
   .option('--cursor <n>', 'Continuation token from a previous truncated query', '0')
+  .option('--no-embed', 'Skip auto-merged embedding seeds even when the graph has vectors')
   .action(queryCommand);
 
 program
