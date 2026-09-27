@@ -498,6 +498,22 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         .node_indices()
         .map(|idx| tokenize(&loaded.graph[idx].label))
         .collect();
+    // Chunk and document bodies feed the IDF pre-pass too: scoring matches
+    // those terms against docstrings, so a term that is common in bodies
+    // but rare in first lines ("group", "friends" in transcripts) would
+    // otherwise get near-max weight and let any node that merely mentions
+    // it outrank the node whose text actually answers.
+    let doc_components: Vec<Vec<String>> = loaded
+        .graph
+        .node_indices()
+        .map(|idx| {
+            loaded.graph[idx]
+                .docstring
+                .as_deref()
+                .map(|d| tokenize(d).into_iter().take(400).collect())
+                .unwrap_or_default()
+        })
+        .collect();
     let mut idf: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
     let mut effective: Vec<&String> = Vec::new();
     for term in terms {
@@ -511,7 +527,11 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         let parts = tokenize(term);
         let hits = label_components
             .iter()
-            .filter(|parts_in_label| component_coverage(&parts, parts_in_label) == 1.0)
+            .zip(doc_components.iter())
+            .filter(|(label, doc)| {
+                component_coverage(&parts, label) == 1.0
+                    || component_coverage(&parts, doc) == 1.0
+            })
             .count();
         let w = if hits == 0 {
             1.0
@@ -640,7 +660,14 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             let normalized = normalized_identifier(term);
             let label_normalized = normalized_identifier(&node.label);
             let coverage = component_coverage(&term_tokens, label_tokens);
-            let label_score = if normalized == label_normalized {
+            // Chunk labels are a truncated first line of the chunk's own
+            // body, which the docstring below scores in full. Amplifying
+            // that prefix at label weight double-counts body text, so a
+            // lucky opening line (a later session re-mentioning a topic)
+            // outranks the chunk whose body actually answers the question.
+            let label_score = if is_chunk {
+                0.0
+            } else if normalized == label_normalized {
                 4.0
             } else if coverage == 1.0 {
                 2.0
@@ -695,9 +722,9 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         {
             entry_candidates.insert(idx);
         }
-        if score > 0.0 || entry_candidates.contains(&idx) {
-            scored.push(((score + phrase_bonus) * prior, idx));
-        }
+if score > 0.0 || entry_candidates.contains(&idx) {
+                scored.push(((score + phrase_bonus) * prior, idx));
+            }
     }
     // Explicit entry intent gives import roots precedence over lexical
     // mentions of "entry point". The tier is derived from this candidate
@@ -2308,6 +2335,39 @@ at the lake house');",
         assert!(
             text.contains("notes turn"),
             "the chunk must still surface, just ranked under code"
+        );
+    }
+
+    #[test]
+    fn label_lucky_chunk_does_not_outrank_body_evidence() {
+        // The chunk whose body text actually answers all four terms (the
+        // evidence, like the session where an event happened) must rank
+        // above a later chunk whose truncated first line happens to repeat
+        // the question's phrasing but whose body is unrelated.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
+                ('e0', 'trip recap', 'chunk', 't/s0.md', 'Melanie painted a sunrise at the lake with friends around'),
+                ('d0', 'Melanie painted a sunrise at the lake', 'chunk', 't/s1.md', 'we talked about our trip and what happened on the beach');",
+        )
+        .unwrap();
+        let (text, _, _, _) = query_graph(
+            &db,
+            "chunk-label-luck",
+            "Melanie painted a sunrise at the lake",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        let first_node = text.lines().find(|l| l.starts_with("NODE ")).unwrap();
+        assert!(
+            first_node.contains("t/s0.md"),
+            "body evidence must outrank label luck: {first_node}"
         );
     }
 

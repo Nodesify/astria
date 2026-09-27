@@ -19,6 +19,11 @@ this file is the per-version summary.
 - The shipped skills (`packages/astria-cli/skills/skill*.md`, full + per-assistant variants) now teach agents the new capabilities: the interactive bubble-viewer export (`export --format html`, `--mode standard|large`, the `tree` view, and `--neo4j-push`/`--redis-push`), the full `update` flag set (`--no-dedup`, `--embed`, `--label-communities`, `--deep`, `--quiet`, `--if-stale`), and the git hooks (`astria hook install|uninstall|status`, `hook-guard`) with their automatic post-commit refresh. Existing installs refresh by re-running `astria install`.
 - The MCP server's client instructions now point agents at the hooks (`astria hook install`) for automatic post-edit freshness, and the skill's MCP tool list is corrected to include `health`.
 
+### Retrieval ranking tightened for prose corpora
+- Chunk labels are a truncated first line of the chunk's own body; scoring no longer amplifies that prefix at label weight for `chunk` nodes, so a later session whose opening line re-mentions a topic cannot outrank the chunk whose body actually answers the question.
+- The IDF pre-pass now counts document bodies as well as labels, so terms that are common in bodies but rare in first lines ("group", "friends" in transcripts) stop acting as near-max discriminators, and rare proper nouns carry the ranking.
+- Measured on the full LoCoMo set (1,977 questions, structural, no embeddings): recall@1 63.5% → 66.1%, recall@3 79.3% → 80.7%, MRR 0.717 → 0.736, with recall@5/10 at 85.0%. The 35-question code self-check holds recall@5 at 82.9% with MRR 0.636 → 0.659.
+
 ## [1.0.6] — 2026-09-27
 
 ### Chunked document retrieval
