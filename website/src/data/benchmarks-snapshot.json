@@ -2,12 +2,12 @@
   "schema_version": 2,
   "provenance": {
     "mode": "published-npm",
-    "harness_commit": "33e9987b0419b83af119c99e6eb5e3d26e41d72e",
+    "harness_commit": "65ec55e57f0c8cc60e75b99e6a7baa7110a8a327",
     "source_build_commit": null,
     "node": "v22.23.2",
     "platform": "linux"
   },
-  "generated_at": "2026-09-27T09:52:37.638Z",
+  "generated_at": "2026-09-27T11:55:48.851Z",
   "runner": "ubuntu-latest (GitHub Actions)",
   "corpus": {
     "repo": "https://github.com/safishamsi/graphify",
@@ -15,12 +15,12 @@
     "files_detected": 920
   },
   "versions": {
-    "astria": "1.0.4",
+    "astria": "1.0.5",
     "original": "graphify @ 4139885a1212956cf69a76946fbde0d181ab85e9",
     "python": "Python 3.12.3"
   },
   "original_tool": {
-    "build_seconds": 25.96,
+    "build_seconds": 23,
     "nodes": 14602,
     "edges": 31367,
     "communities": 718,
@@ -31,14 +31,14 @@
     }
   },
   "astria_structural": {
-    "build_seconds": 12.43,
-    "nodes": 16888,
-    "edges": 72503,
-    "communities": 508,
+    "build_seconds": 13.85,
+    "nodes": 18563,
+    "edges": 72739,
+    "communities": 677,
     "benchmark": {
-      "corpus_tokens": 4945110,
-      "avg_query_tokens": 3049,
-      "reduction": 1621.9
+      "corpus_tokens": 4945735,
+      "avg_query_tokens": 3601,
+      "reduction": 1373.4
     }
   },
   "token_parity": {
@@ -51,8 +51,8 @@
     "astria": {
       "answered": 5,
       "failed": 0,
-      "avg_query_tokens": 3164,
-      "reduction": 1445.7
+      "avg_query_tokens": 3986,
+      "reduction": 1147.6
     },
     "original": {
       "answered": 5,
