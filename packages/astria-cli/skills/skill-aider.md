@@ -37,4 +37,4 @@ astria path "Config" "Database"        # trace dependencies
 astria affected "UserService"          # blast radius of a change
 ```
 
-After editing, run `astria update .` to keep the graph current.
+After editing, run `astria update .` to keep the graph current (git hooks installed via `astria hook install` do this automatically after every commit). To share the graph, `astria export --format html --out graph.html` writes a self-contained interactive bubble viewer — click to expand, search to jump, click a node to focus its relation-labeled neighbors.

@@ -15,6 +15,10 @@ this file is the per-version summary.
 - **Accessibility floor** — the canvas exposes a `role="img"` label with node/community/edge counts plus a visually hidden summary of the controls, so screen readers get a usable description of the export.
 - **Quiet, throttled git hooks** — `astria hook install` now writes v4 hooks that invoke `update . --quiet --if-stale 10`: hook-driven rebuilds print nothing (no progress lines, no token benchmark), and skip entirely when the graph was published less than 10 minutes ago, so a burst of commits rebuilds once instead of per commit. `astria update` gained matching `--quiet` / `--if-stale <minutes>` flags; hooks retry plain `update .` against any CLI version that predates the flags, and still never break a commit.
 
+### Skills and MCP updated for the new features
+- The shipped skills (`packages/astria-cli/skills/skill*.md`, full + per-assistant variants) now teach agents the new capabilities: the interactive bubble-viewer export (`export --format html`, `--mode standard|large`, the `tree` view, and `--neo4j-push`/`--redis-push`), the full `update` flag set (`--no-dedup`, `--embed`, `--label-communities`, `--deep`, `--quiet`, `--if-stale`), and the git hooks (`astria hook install|uninstall|status`, `hook-guard`) with their automatic post-commit refresh. Existing installs refresh by re-running `astria install`.
+- The MCP server's client instructions now point agents at the hooks (`astria hook install`) for automatic post-edit freshness, and the skill's MCP tool list is corrected to include `health`.
+
 ## [1.0.6] — 2026-09-27
 
 ### Chunked document retrieval
