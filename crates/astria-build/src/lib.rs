@@ -370,11 +370,10 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_call_targets_resolve_to_same_file_symbol() {
-        // A stub named validate_url already exists from an unrelated file
-        // (here: a markdown identifier). The ingest extraction defines its
-        // own validate_url — its bare-target call edge must land on the
-        // qualified definition, not on the foreign stub.
+    fn resolved_call_targets_do_not_bind_to_foreign_symbol() {
+        // The extraction reference pass resolves names before publication.
+        // Preserve its qualified target even when an unrelated file already
+        // contains a bare identifier with the same spelling.
         let db = open_db_in_memory().unwrap();
         let wiki = make_extraction_at(
             "worked/wiki_index.md",
@@ -389,7 +388,7 @@ mod tests {
                 ("src_lib::ingest_url", "ingest_url()"),
                 ("src_lib::validate_url", "validate_url()"),
             ],
-            vec![("src_lib::ingest_url", "validate_url", "calls")],
+            vec![("src_lib::ingest_url", "src_lib::validate_url", "calls")],
         );
         build(&[ingest], &db).unwrap();
 
