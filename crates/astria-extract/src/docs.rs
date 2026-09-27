@@ -186,8 +186,19 @@ pub(crate) fn extract_markdown_from_string(
     }
     flush_pending(&mut pending, &mut nodes, &mut edges);
     if !pre_body.trim().is_empty() {
-        let mut ctx = ChunkContext { nodes: &mut nodes, edges: &mut edges, path };
-        push_chunk_nodes(&mut ctx, &file_id, &[&fid], 0, &pre_body, pre_body_start.max(1));
+        let mut ctx = ChunkContext {
+            nodes: &mut nodes,
+            edges: &mut edges,
+            path,
+        };
+        push_chunk_nodes(
+            &mut ctx,
+            &file_id,
+            &[&fid],
+            0,
+            &pre_body,
+            pre_body_start.max(1),
+        );
     }
 
     Extraction {
@@ -668,8 +679,19 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
     }
     flush_pending(&mut pending, &mut nodes, &mut edges);
     if !pre_body.trim().is_empty() {
-        let mut ctx = ChunkContext { nodes: &mut nodes, edges: &mut edges, path };
-        push_chunk_nodes(&mut ctx, &file_id, &[&fid], 0, &pre_body, pre_body_start.max(1));
+        let mut ctx = ChunkContext {
+            nodes: &mut nodes,
+            edges: &mut edges,
+            path,
+        };
+        push_chunk_nodes(
+            &mut ctx,
+            &file_id,
+            &[&fid],
+            0,
+            &pre_body,
+            pre_body_start.max(1),
+        );
     }
 
     Ok(Extraction {
