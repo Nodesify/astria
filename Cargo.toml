@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/astria-bolt",
     "crates/astria-core",
     "crates/astria-paths",
     "crates/astria-detect",
@@ -19,6 +20,7 @@ members = [
 ]
 
 [workspace.dependencies]
+astria-bolt = { path = "crates/astria-bolt" }
 astria-core = { path = "crates/astria-core" }
 astria-paths = { path = "crates/astria-paths" }
 astria-detect = { path = "crates/astria-detect" }

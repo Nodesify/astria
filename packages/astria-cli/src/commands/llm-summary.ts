@@ -8,6 +8,7 @@ interface PipelineResultSummary {
   llmApiCalls: number;
   communitiesLabeled: number;
   communitiesReused: number;
+  communitiesFailed: number;
   deepLinks: number;
 }
 
@@ -20,7 +21,8 @@ export function printLlmSummary(result: PipelineResultSummary): void {
   }
   if (result.communitiesLabeled >= 0) {
     const reused = result.communitiesReused > 0 ? `, ${result.communitiesReused} unchanged` : '';
-    console.log(`Communities labeled: ${result.communitiesLabeled}${reused} (--label-communities)`);
+    const failed = result.communitiesFailed > 0 ? `, ${result.communitiesFailed} failed (kept hub names)` : '';
+    console.log(`Communities labeled: ${result.communitiesLabeled}${reused}${failed} (--label-communities)`);
   }
   if (result.deepLinks >= 0) {
     console.log(`Deep concept links: ${result.deepLinks} (--deep)`);

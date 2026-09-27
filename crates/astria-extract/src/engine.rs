@@ -406,6 +406,70 @@ mod tests {
     }
 
     #[test]
+    fn extract_new_config_languages() {
+        // Terraform/HCL, PowerShell, SystemVerilog, Metal — validate the
+        // node-kind mappings against real parses; a language that yields
+        // zero nodes means its config's kind names drifted from the grammar.
+        let cases: &[(&str, &str)] = &[
+            (
+                "infra.tf",
+                "resource \"aws_s3_bucket\" \"b\" {
+  bucket = \"demo\"
+}
+
+variable \"region\" {
+  default = \"us-east-1\"
+}
+
+module \"network\" {
+  source = \"./net\"
+}",
+            ),
+            (
+                "tasks.ps1",
+                "function Deploy-Stack {
+  Write-Output \"deploying\"
+}
+
+class Stack {
+  [string]$Name
+}
+
+Deploy-Stack",
+            ),
+            (
+                "counter.sv",
+                "import mypkg::*;
+module counter(input clk, output reg [7:0] count);
+  function automatic [7:0] next(input [7:0] v);
+    next = v + 1;
+  endfunction
+endmodule",
+            ),
+            (
+                "render.metal",
+                "#include <metal_stdlib>
+vertex float4 render_vertex(uint vid [[vertex_id]]) {
+  return float4(1.0);
+}
+kernel void tintkernel() {}
+",
+            ),
+        ];
+        for (name, content) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let f = dir.path().join(name);
+            fs::write(&f, content).unwrap();
+            let db = open_db_in_memory().unwrap();
+            let results = extract(std::slice::from_ref(&f), dir.path(), &db).unwrap();
+            assert!(
+                !results.is_empty() && !results[0].nodes.is_empty(),
+                "{name}: extraction produced no nodes"
+            );
+        }
+    }
+
+    #[test]
     fn ids_stable_across_relocated_roots() {
         // The id prefix must come from the root-relative path, not the
         // CWD-joined one: identical content under differently-named roots

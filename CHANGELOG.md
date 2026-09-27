@@ -21,6 +21,16 @@ this file is the per-version summary.
   its first run.
 - Blind LLM judging (promptfoo) is wired as a workflow job, gated on the
   `PROMPTFOO_JUDGE_KEY` secret.
+- **Four new languages**: Terraform/HCL, PowerShell, Verilog/SystemVerilog,
+  and Metal shaders (via the C++ grammar) — 21 -> 25.
+- **`astria callflow <node>`**: Mermaid `flowchart` of the calls around a
+  node (`--depth`, `--direction in|out|both`), rendered natively by GitHub
+  and Obsidian.
+- **FalkorDB export**: `export --format falkordb` writes openCypher with
+  load instructions; `--redis-push host:port` loads it live via redis-cli
+  (alongside the maintainer-added SVG export and live Neo4j push).
+- Video/audio ingestion via Whisper transcription is scoped and tracked
+  in issue #82 (external-binary mode recommended).
 - Query seed selection caps documentation-type seeds at 2 of 5 and scores
   directory/crate-name path matches above bare substrings; the self-corpus
   ignores `worked/` via `.astriaignore`. Measured on the golden set:
@@ -83,6 +93,23 @@ this file is the per-version summary.
 - **`.github/copilot-instructions.md` injection** for `install copilot`:
   the managed section now lands in Copilot's native custom-instructions
   file in addition to AGENTS.md (parity with upstream's installer).
+- **`astria health`** (and MCP `health` tool): a scored code-health report —
+  unreachable-symbol candidates (call-graph heuristic; entry points, test
+  files, and file-shaped nodes excluded), circular file dependencies
+  (SCC over calls/imports), hub concentration, and graph staleness, with
+  the deduction schedule printed inline.
+- **`astria risk`**: maps the current `git diff` (or `--staged`) onto the
+  graph via reverse reachability and renders a PR-ready report — impacted
+  symbols by depth, communities touched (labels included), review focus,
+  and a documented heuristic score for CI triage.
+- **`export --format svg`**: deterministic community-arc SVG (dark theme,
+  hub labels, XML-escaped) — byte-identical across runs, graceful caps at
+  2k nodes / 6k edges.
+- **`export --format cypher --neo4j-push <url>`**: live Neo4j push over a
+  hand-rolled Bolt client (new `astria-bolt` crate: PackStream + chunked
+  framing + HELLO/RUN/PULL, mock-server tested, zero driver dependencies).
+  Parameterized UNWIND batches; idempotent MERGEs; communities pushed as
+  first-class nodes.
 
 ### Fixed
 - Build validation rejected the pipeline's own `SEMANTIC` edge confidence

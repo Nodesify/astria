@@ -1,15 +1,15 @@
 ---
 sidebar_position: 4
 title: Language support
-description: The 21 languages astria extracts via tree-sitter, and how to add a new one with a LanguageConfig module.
+description: The 25 languages astria extracts via tree-sitter, and how to add a new one with a LanguageConfig module.
 keywords: [languages, tree-sitter, python, rust, typescript, go, java]
 ---
 
 # Language support
 
-Extraction covers **21 languages** via tree-sitter grammars:
+Extraction covers **25 languages** via tree-sitter grammars:
 
-Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, CSS.
+Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, CSS, Terraform/HCL, PowerShell, Verilog/SystemVerilog, Metal.
 
 Each language has its own config module in `crates/astria-extract/src/langs/`. Every module provides a `LanguageConfig` specifying which AST nodes represent classes, functions, and relationships, plus docstring capture rules.
 

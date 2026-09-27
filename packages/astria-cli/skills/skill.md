@@ -149,6 +149,18 @@ Incremental rebuild — only re-extracts files that changed (SHA-256 detection).
 
 Much faster than `run` for existing projects.
 
+### `astria health [options]`
+
+Code-health report (heuristic 0-100 score): unreachable-symbol candidates,
+circular file dependencies, hub concentration, graph staleness. `--json` for
+machines. Read-only.
+
+### `astria risk [options]`
+
+Maps the current git diff (or `--staged`) onto the graph and renders the
+blast radius — impacted symbols by depth, communities touched, review
+focus — as a PR-ready report with a heuristic risk score. `--json` for CI.
+
 ### `astria query <question> [options]`
 
 BFS (default) or DFS graph traversal from nodes matching your question.

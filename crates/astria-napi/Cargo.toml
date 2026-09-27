@@ -14,6 +14,7 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 napi = { version = "3", features = ["tokio_rt"] }
 napi-derive = "3"
+astria-bolt = { workspace = true }
 astria-core = { workspace = true }
 astria-detect = { workspace = true }
 astria-extract = { workspace = true }

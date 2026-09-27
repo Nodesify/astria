@@ -2,9 +2,12 @@
 
 import { Command } from 'commander';
 import { runCommand } from './commands/run';
+import { healthCommand } from './commands/health';
+import { riskCommand } from './commands/risk';
 import { statsCommand } from './commands/stats';
 import { explainCommand } from './commands/explain';
 import { exportCommand } from './commands/export';
+import { callflowCommand } from './commands/callflow';
 import { queryCommand } from './commands/query';
 import { pathCommand } from './commands/path';
 import { mapCommand } from './commands/map';
@@ -124,13 +127,43 @@ program
   .action(statsCommand);
 
 program
+  .command('health')
+  .description('Code-health report: unreachable-symbol candidates, file cycles, hub concentration, staleness (heuristic score)')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--json', 'Emit machine-readable JSON')
+  .action(healthCommand);
+
+program
+  .command('risk')
+  .description('Blast radius of the current git diff: impacted symbols and communities, with a heuristic risk score for PRs')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--staged', 'Only staged changes (git diff --cached) instead of the whole working tree')
+  .option('--json', 'Emit machine-readable JSON')
+  .action(riskCommand);
+
+program
   .command('export')
-  .description('Export graph to JSON, HTML, GraphML, or Cypher (Neo4j)')
+  .description('Export graph to JSON, HTML, GraphML, SVG, Cypher (Neo4j), or FalkorDB Cypher')
   .option('--graph <path>', 'Path to project root', '.')
   .option('--out <file>', 'Output file', 'graph.json')
-  .option('--format <type>', 'Export format: json, html, graphml, cypher', 'json')
+  .option('--format <type>', 'Export format: json, html, graphml, cypher, svg, falkordb', 'json')
   .option('--mode <mode>', 'HTML visualization mode: standard or large', 'standard')
+  .option('--neo4j-push <url>', 'Push to a live Neo4j (bolt://host:port) instead of writing a file — pairs with --format cypher')
+  .option('--neo4j-user <user>', 'Neo4j username (default: neo4j or NEO4J_USERNAME)')
+  .option('--neo4j-pass <pass>', 'Neo4j password (default: NEO4J_PASSWORD)')
+  .option('--redis-push <host:port>', 'Push FalkorDB Cypher to a live FalkorDB/Redis (host:port) — pairs with --format falkordb; requires redis-cli')
+  .option('--graph-name <name>', 'FalkorDB graph name', 'astria')
   .action(exportCommand);
+
+program
+  .command('callflow')
+  .description('Mermaid call-flow diagram: what a node calls (or what calls it)')
+  .argument('<node>', 'Node id, exact label, or bare name')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--depth <n>', 'Traversal depth', '2')
+  .option('--direction <dir>', 'out (what it calls), in (what calls it), both', 'out')
+  .option('--out <file>', 'Write the mermaid block to a file instead of stdout')
+  .action(callflowCommand);
 
 program
   .command('cluster-only')
