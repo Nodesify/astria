@@ -1,36 +1,36 @@
 {
-  "generated_at": "2026-09-26T15:07:51.119Z",
-  "runner": "ubuntu-latest (GitHub Actions)",
+  "generated_at": "2026-09-27T06:27:09.778Z",
+  "runner": "local machine",
   "corpus": {
     "repo": "https://github.com/safishamsi/graphify",
-    "commit": "91f4d12",
-    "files_detected": 90
+    "commit": "4139885a1212956cf69a76946fbde0d181ab85e9",
+    "files_detected": 920
   },
   "versions": {
     "astria": "1.0.4",
-    "original": "graphify @ 91f4d12",
-    "python": "Python 3.12.3"
+    "original": "graphify @ 4139885a1212956cf69a76946fbde0d181ab85e9",
+    "python": "Python 3.12.12"
   },
   "original_tool": {
-    "build_seconds": 18.52,
-    "nodes": 719,
-    "edges": 1196,
-    "communities": 45,
+    "build_seconds": 110.13,
+    "nodes": 14603,
+    "edges": 31368,
+    "communities": 712,
     "benchmark": {
-      "corpus_tokens": 87005,
-      "avg_query_tokens": 1824,
-      "reduction": 47.7
+      "corpus_tokens": 2481185,
+      "avg_query_tokens": 35608,
+      "reduction": 69.7
     }
   },
   "astria_structural": {
-    "build_seconds": 1.15,
-    "nodes": 1494,
-    "edges": 5744,
-    "communities": 108,
+    "build_seconds": 65.32,
+    "nodes": 18083,
+    "edges": 72775,
+    "communities": 650,
     "benchmark": {
-      "corpus_tokens": 153768,
-      "avg_query_tokens": 3042,
-      "reduction": 50.5
+      "corpus_tokens": 5005701,
+      "avg_query_tokens": 3049,
+      "reduction": 1641.8
     }
   },
   "token_parity": {
@@ -38,15 +38,15 @@
       "name": "o200k_base",
       "implementation": "js-tiktoken"
     },
-    "corpus_tokens": 229538,
-    "corpus_bytes": 895750,
+    "corpus_tokens": 4591769,
+    "corpus_bytes": 17228028,
     "astria": {
-      "avg_query_tokens": 3374,
-      "reduction": 68
+      "avg_query_tokens": 1332,
+      "reduction": 3447.3
     },
     "original": {
-      "avg_query_tokens": null,
-      "reduction": null
+      "avg_query_tokens": 1783,
+      "reduction": 2575.3
     },
     "questions": 5,
     "note": "Both sides counted with the SAME tokenizer on the same corpus — the absolute numbers here are directly comparable (the ~87k vs ~158k divergence in the self-estimated blocks below is estimator, not bytes)."
