@@ -32,6 +32,7 @@ interface DataNode {
 interface DataEdge {
   from: string;
   to: string;
+  relation: string;
 }
 
 interface DataCommunity {
@@ -107,6 +108,7 @@ let clickTimer: number | null = null;
 
 const nodeById = new Map<string, DataNode>();
 const adjacency = new Map<string, string[]>();
+const relOf = new Map<string, { id: string; relation: string }[]>();
 const memberEdges: DataEdge[] = [];
 
 function keyOf(community: number | null): string {
@@ -117,13 +119,22 @@ function initData(): void {
   for (const n of DATA.nodes) {
     nodeById.set(n.id, n);
     adjacency.set(n.id, []);
+    relOf.set(n.id, []);
   }
   for (const e of DATA.edges) {
     const a = adjacency.get(e.from);
     const b = adjacency.get(e.to);
     if (a) a.push(e.to);
     if (b) b.push(e.from);
-    if (nodeById.has(e.from) && nodeById.has(e.to)) memberEdges.push(e);
+    // Relation-aware neighbor lists (deduped, first relation kept) for the
+    // focus panel; edges to unknown ids are ignored.
+    if (nodeById.has(e.from) && nodeById.has(e.to)) {
+      memberEdges.push(e);
+      const ra = relOf.get(e.from);
+      const rb = relOf.get(e.to);
+      if (ra && !ra.some((x) => x.id === e.to)) ra.push({ id: e.to, relation: e.relation });
+      if (rb && !rb.some((x) => x.id === e.from)) rb.push({ id: e.from, relation: e.relation });
+    }
   }
   const byKey = new Map<string, DataNode[]>();
   for (const n of DATA.nodes) {
@@ -316,11 +327,30 @@ function drawMemberEdges(): void {
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 1.4;
     ctx.beginPath();
+    const heads: [number, number, number, number][] = [];
     for (const [ax, ay, bx, by] of highlight) {
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
+      // Small directed arrowhead at the target end — direction only where it
+      // matters (the focused node's own edges).
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = Math.hypot(dx, dy) || 1;
+      heads.push([bx, by, dx / len, dy / len]);
     }
     ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    const size = 5;
+    for (const [bx, by, ux, uy] of heads) {
+      const px = -uy;
+      const py = ux;
+      ctx.moveTo(bx + ux * size, by + uy * size);
+      ctx.lineTo(bx - ux * size + px * size * 0.6, by - uy * size + py * size * 0.6);
+      ctx.lineTo(bx - ux * size - px * size * 0.6, by - uy * size - py * size * 0.6);
+      ctx.closePath();
+    }
+    ctx.fill();
     ctx.restore();
   }
 }
@@ -661,6 +691,18 @@ function showInfoForNode(n: DataNode): void {
     n.degree +
     ' connections';
   info.appendChild(meta);
+  const rels = (relOf.get(n.id) || []).slice(0, 6);
+  if (rels.length) {
+    const list = document.createElement('div');
+    list.className = 'info-links';
+    for (const r of rels) {
+      const row = document.createElement('div');
+      const t = nodeById.get(r.id);
+      row.textContent = r.relation + ' \u2192 ' + (t ? t.label : r.id);
+      list.appendChild(row);
+    }
+    info.appendChild(list);
+  }
   const hint = document.createElement('div');
   hint.className = 'info-hint';
   hint.textContent = state.neighbors.size + ' direct neighbors · Esc or click empty space to clear';
@@ -676,8 +718,16 @@ function hideInfo(): void {
 
 const searchInput = document.createElement('input');
 const searchResults = document.createElement('div');
-let searchEntries: { haystack: string; node: DataNode }[] = [];
-let firstMatch: DataNode | null = null;
+
+interface SearchEntry {
+  haystack: string;
+  kind: 'node' | 'community';
+  node?: DataNode;
+  bubble?: Bubble;
+}
+
+let searchEntries: SearchEntry[] = [];
+let firstMatch: SearchEntry | null = null;
 
 function onSearchInput(): void {
   state.query = searchInput.value.trim().toLowerCase();
@@ -687,10 +737,10 @@ function onSearchInput(): void {
     searchResults.style.display = 'none';
     return;
   }
-  const matches: DataNode[] = [];
+  const matches: SearchEntry[] = [];
   for (const e of searchEntries) {
     if (e.haystack.indexOf(state.query) !== -1) {
-      matches.push(e.node);
+      matches.push(e);
       if (matches.length >= 24) break;
     }
   }
@@ -700,21 +750,31 @@ function onSearchInput(): void {
     empty.textContent = 'No matches';
     searchResults.appendChild(empty);
   }
-  for (const node of matches) {
+  for (const entry of matches) {
     const row = document.createElement('div');
     row.className = 'search-row';
-    row.textContent = node.label + ' — ' + (node.sourceFile || '?');
-    if (!firstMatch) firstMatch = node;
-    row.addEventListener('click', () => focusSearchMatch(node));
+    row.textContent =
+      entry.kind === 'community' && entry.bubble
+        ? 'Community: ' + entry.bubble.data.label + ' — ' + entry.bubble.members.length + ' nodes'
+        : entry.node
+          ? entry.node.label + ' — ' + (entry.node.sourceFile || '?')
+          : '';
+    if (!firstMatch) firstMatch = entry;
+    row.addEventListener('click', () => focusSearchMatch(entry));
     searchResults.appendChild(row);
   }
   searchResults.style.display = 'block';
 }
 
-function focusSearchMatch(n: DataNode): void {
+function focusSearchMatch(entry: SearchEntry): void {
   searchInput.blur();
   searchResults.style.display = 'none';
-  centerOnNode(n);
+  if (entry.kind === 'community' && entry.bubble) {
+    state.expanded.add(entry.bubble.key);
+    centerOnBubble(entry.bubble);
+  } else if (entry.node) {
+    centerOnNode(entry.node);
+  }
 }
 
 function onSearchKeydown(e: KeyboardEvent): void {
@@ -844,6 +904,12 @@ function buildControls(): void {
       position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 90;
       color: #777; font: 12px system-ui, sans-serif; pointer-events: none;
     }
+    #astria-info .info-links { margin-top: 6px; color: #9aa4b2; }
+    #astria-info .info-links div { padding: 1px 0; }
+    .astria-sr-only {
+      position: absolute; width: 1px; height: 1px; margin: -1px;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+    }
   `;
   document.head.appendChild(style);
 
@@ -898,7 +964,28 @@ function buildControls(): void {
   hint.id = 'astria-hint';
   hint.textContent = 'click a community to expand it · click a node for its neighbors · scroll to zoom · drag to pan';
 
-  document.body.append(canvas, searchBox, tooltip, info, zoomBar, status, hint);
+  // Screen-reader floor: the canvas itself carries no text, so summarize the
+  // graph and its controls in a visually hidden block.
+  canvas.setAttribute('role', 'img');
+  canvas.tabIndex = 0;
+  canvas.setAttribute(
+    'aria-label',
+    'Interactive knowledge graph: ' +
+      DATA.meta.nodeCount +
+      ' nodes in ' +
+      DATA.meta.communityCount +
+      ' communities connected by ' +
+      DATA.meta.edgeCount +
+      ' edges'
+  );
+  const sr = document.createElement('div');
+  sr.id = 'astria-sr-text';
+  sr.className = 'astria-sr-only';
+  sr.textContent =
+    'Community overview of the code graph. Click a community bubble to expand it into its member nodes, click a node to highlight its direct neighbors, and use the search box to jump to any symbol or community. Click empty space or press Escape to clear the current focus.';
+  canvas.setAttribute('aria-describedby', 'astria-sr-text');
+
+  document.body.append(canvas, searchBox, tooltip, info, zoomBar, status, hint, sr);
 }
 
 function onResize(): void {
@@ -942,10 +1029,23 @@ function main(): void {
   }
   buildControls();
   initData();
-  searchEntries = DATA.nodes.map((n) => ({
-    haystack: (n.label + ' ' + (n.sourceFile || '')).toLowerCase(),
-    node: n,
-  }));
+  // Community names first: a bubble-name match is more precise than a
+  // substring hit inside some file path, so it must rank above them.
+  searchEntries = [];
+  for (const b of bubbles) {
+    searchEntries.push({
+      haystack: b.data.label.toLowerCase(),
+      kind: 'community',
+      bubble: b,
+    });
+  }
+  for (const n of DATA.nodes) {
+    searchEntries.push({
+      haystack: (n.label + ' ' + (n.sourceFile || '')).toLowerCase(),
+      kind: 'node',
+      node: n,
+    });
+  }
   searchInput.addEventListener('input', onSearchInput);
   searchInput.addEventListener('keydown', onSearchKeydown);
   canvas.addEventListener('pointerdown', onPointerDown);
