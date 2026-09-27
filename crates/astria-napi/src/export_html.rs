@@ -78,6 +78,9 @@ struct NodeOut {
 struct EdgeOut {
     from: String,
     to: String,
+    /// Edge kind (calls / imports / references / ...) so the viewer can show
+    /// what connects a focused node's neighbors.
+    relation: String,
 }
 
 /// One community bubble: centroid from the precomputed layout, label from the
@@ -163,14 +166,19 @@ fn build_payload(db: &Connection) -> astria_core::Result<Payload> {
     let mut degrees: HashMap<String, i64> = HashMap::new();
     let mut edges: Vec<EdgeOut> = Vec::new();
     {
-        let mut stmt = db.prepare("SELECT source, target FROM edges")?;
+        let mut stmt = db.prepare("SELECT source, target, COALESCE(relation, '') FROM edges")?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             let src: String = row.get(0)?;
             let tgt: String = row.get(1)?;
+            let relation: String = row.get(2)?;
             *degrees.entry(src.clone()).or_insert(0) += 1;
             *degrees.entry(tgt.clone()).or_insert(0) += 1;
-            edges.push(EdgeOut { from: src, to: tgt });
+            edges.push(EdgeOut {
+                from: src,
+                to: tgt,
+                relation,
+            });
         }
     }
     let edge_count = edges.len();
@@ -389,6 +397,8 @@ mod tests {
         // Nodes and bubbles carry coordinates and colors from Rust.
         assert!(html.contains(r#""x":"#));
         assert!(html.contains(r#""color":"#));
+        // Edges carry their relation so the focus panel can name the links.
+        assert!(html.contains(r#""relation":"calls""#));
         // Community bubbles are precomputed, with fallback labels.
         assert!(html.contains(r#""label":"Community 1""#));
         assert!(html.contains(r#""communityCount":2"#));

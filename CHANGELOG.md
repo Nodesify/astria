@@ -10,6 +10,9 @@ this file is the per-version summary.
 - `astria export --format html` now ships a self-contained canvas viewer (no vis-network, no network access required) that opens as community bubbles — one per community, sized by membership, with edge-weighted links between bubbles. Click a bubble to expand it into member nodes, click a member to focus its 1-hop neighborhood, and search to jump straight to any symbol; "All nodes" expands everything with level-of-detail labels.
 - The exported layout stays fully precomputed (physics-free), and the viewer draws only what is on screen, so large graphs open and zoom instantly even in sandboxed HTML previewers.
 - Viewer source lives in `packages/viewer` (TypeScript, `npm run build`); the minified bundle is embedded at `crates/astria-napi/src/assets/viewer.js`. Community bubbles use themed labels from the `communities` table when `--label-communities` produced them.
+- **Relation-aware focus** — the exported edge payload now carries the edge kind (`calls`, `imports`, …): the focus panel lists a selected node's neighbors with their relation, and the highlighted 1-hop edges gain direction arrowheads (direction shown where it matters, not on the hairball).
+- **Community search** — search matches community names as well as symbols and files; picking a community expands and centers its bubble.
+- **Accessibility floor** — the canvas exposes a `role="img"` label with node/community/edge counts plus a visually hidden summary of the controls, so screen readers get a usable description of the export.
 
 ## [1.0.6] — 2026-09-27
 
