@@ -4,10 +4,26 @@ export async function affectedCommand(node: string, opts: {
   graph: string;
   depth: string;
   relation?: string;
+  json?: boolean;
 }) {
   try {
     const depth = parseInt(opts.depth, 10) || 2;
     const result = affectedNode(opts.graph, node, depth, opts.relation);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            seed: result.seed,
+            seedLabel: result.seedLabel,
+            total: result.total,
+            hits: result.hits,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     if (result.total === 0) {
       console.log(`Nothing references "${result.seedLabel}" — no blast radius.`);
       return;

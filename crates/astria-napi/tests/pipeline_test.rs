@@ -116,3 +116,60 @@ fn mcp_server_refuses_missing_graph_without_creating_it() {
         "MCP server must not create the .astria directory"
     );
 }
+
+#[test]
+fn build_info_reports_stamped_versions() {
+    let tmp = copy_fixture_to_temp("python");
+    let root = tmp.path();
+    astria_napi::pipeline::run_pipeline_with(
+        root,
+        true,
+        false,
+        false,
+        false,
+        Some("test-cli-1.0.6"),
+    )
+    .unwrap();
+
+    let root_str = root.to_string_lossy().to_string();
+    let info = astria_napi::graph_build_info(root_str.clone()).unwrap();
+    assert_eq!(info.astria_version.as_deref(), Some("test-cli-1.0.6"));
+    assert_eq!(
+        info.extraction_hash_version.as_deref(),
+        Some(astria_core::EXTRACTION_HASH_VERSION),
+        "publish must stamp the extraction rules version it used"
+    );
+    assert_eq!(
+        info.current_extraction_hash_version,
+        astria_core::EXTRACTION_HASH_VERSION
+    );
+    assert!(info.graph_published_at.is_some());
+
+    // A versionless (internal) run must not clobber the stamped CLI version.
+    astria_napi::pipeline::run_pipeline_with(root, true, false, false, false, None).unwrap();
+    let info = astria_napi::graph_build_info(root_str).unwrap();
+    assert_eq!(info.astria_version.as_deref(), Some("test-cli-1.0.6"));
+}
+
+#[test]
+fn god_nodes_and_communities_read_from_built_graph() {
+    let tmp = copy_fixture_to_temp("python");
+    let root = tmp.path();
+    astria_napi::pipeline::run_pipeline(root).unwrap();
+
+    let root_str = root.to_string_lossy().to_string();
+    let hubs = astria_napi::god_nodes(root_str.clone()).unwrap();
+    assert!(!hubs.is_empty(), "python fixture should have hub nodes");
+    assert!(hubs.iter().all(|n| n.degree > 0));
+    assert!(hubs.iter().all(|n| !n.label.is_empty()));
+
+    let communities = astria_napi::list_communities(root_str).unwrap();
+    assert!(
+        !communities.communities.is_empty(),
+        "python fixture should have communities"
+    );
+    assert!(communities
+        .communities
+        .iter()
+        .all(|c| c.size > 0 && !c.label.is_empty()));
+}

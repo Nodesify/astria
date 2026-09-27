@@ -74,6 +74,7 @@ pub(super) fn publish(
     detected: &DetectResult,
     extractions: &[astria_extract::Extraction],
     build_configuration: &str,
+    cli_version: Option<&str>,
 ) -> Result<astria_build::BuildResult> {
     let tx = db.unchecked_transaction()?;
     let mut replacements = extractions.to_vec();
@@ -110,6 +111,21 @@ pub(super) fn publish(
     tx.execute(
         "INSERT OR REPLACE INTO _meta (key, value) VALUES ('pipeline_version', ?1)",
         [env!("CARGO_PKG_VERSION")],
+    )?;
+    // The npm CLI version is the one users upgrade; it is passed in by the
+    // driver because only the TS package knows it. Absent means an internal
+    // caller (tests, global merge) ran the pipeline without one.
+    if let Some(version) = cli_version {
+        tx.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('astria_version', ?1)",
+            [version],
+        )?;
+    }
+    // Which extraction rules produced this graph; a mismatch with the
+    // running binary's constant means the graph predates current rules.
+    tx.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('extraction_hash_version', ?1)",
+        [astria_core::EXTRACTION_HASH_VERSION],
     )?;
     tx.commit()?;
     Ok(result)

@@ -17,6 +17,9 @@ const cliEntry = resolve(__dirname, '..', '..', 'dist', 'index.js');
 const nativeBin = resolve(__dirname, '..', '..', 'dist', 'astria.node');
 const fixtureDir = resolve(__dirname, '..', '..', '..', '..', 'crates', 'astria-napi', 'tests', 'fixtures', 'python');
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const pkg = require('../../package.json');
+
 let passed = 0;
 let failed = 0;
 
@@ -72,6 +75,46 @@ if (!existsSync(cliEntry) || !existsSync(nativeBin)) {
   const status = runCli(['status', '--graph', '.'], project);
   assert(status.status === 0, `status should exit 0, got ${status.status}`);
   assert(/healthy|ok/i.test(status.stdout) || status.stdout.length > 0, 'status should print a report');
+
+  // 5a. status --json carries build provenance: which CLI and extraction
+  // rules built the graph, plus the mismatch flag a freshness probe reads
+  const statusJson = runCli(['status', '--graph', '.', '--json'], project);
+  assert(statusJson.status === 0, `status --json should exit 0, got ${statusJson.status}`);
+  const provenance = JSON.parse(statusJson.stdout);
+  assert(provenance.nodes > 0, 'status --json should report nodes');
+  assert(provenance.astriaVersion === pkg.version,
+    `status --json should report the building CLI version (${pkg.version}), got ${provenance.astriaVersion}`);
+  assert(provenance.extractionHashVersion === provenance.currentExtractionHashVersion,
+    'a freshly built graph must not be extraction-outdated');
+  assert(provenance.extractionOutdated === false, 'extractionOutdated must be false on a fresh graph');
+
+  // 5b. MCP-parity commands answer from the CLI
+  const gods = runCli(['god-nodes', '--graph', '.', '--json'], project);
+  assert(gods.status === 0, `god-nodes should exit 0, got ${gods.status}`);
+  const godList = JSON.parse(gods.stdout);
+  assert(Array.isArray(godList) && godList.length > 0, 'god-nodes --json should list hubs');
+  assert(godList[0].degree > 0 && godList[0].label.length > 0, 'each hub needs a label and degree');
+
+  const comms = runCli(['communities', '--graph', '.', '--json'], project);
+  assert(comms.status === 0, `communities should exit 0, got ${comms.status}`);
+  const communityList = JSON.parse(comms.stdout);
+  assert(Array.isArray(communityList.communities) && communityList.communities.length > 0,
+    'communities --json should list communities');
+
+  const neighborNode = godList[0].id;
+  const nbrs = runCli(['neighbors', neighborNode, '--graph', '.', '--json'], project);
+  assert(nbrs.status === 0, `neighbors should exit 0, got ${nbrs.status}`);
+  const neighborObj = JSON.parse(nbrs.stdout);
+  assert(neighborObj.id === neighborNode, 'neighbors should answer for the requested node');
+  assert(Array.isArray(neighborObj.neighbors), 'neighbors --json should return a neighbor array');
+
+  // 5c. query --json is a machine-readable envelope (counts, cursor, text)
+  const queryJson = runCli(['query', 'sensor record', '--graph', '.', '--budget', '1000', '--json'], project);
+  assert(queryJson.status === 0, `query --json should exit 0, got ${queryJson.status}`);
+  const envelope = JSON.parse(queryJson.stdout);
+  assert(envelope.nodeCount > 0, 'query --json should report nodeCount');
+  assert(typeof envelope.text === 'string' && envelope.text.length > 0, 'query --json should carry the answer text');
+  assert('nextCursor' in envelope && 'graphBuiltAt' in envelope, 'query --json should carry cursor and build facts');
 
   // 6. export produces valid JSON through the binary
   const outPath = join(tmp, 'export.json');

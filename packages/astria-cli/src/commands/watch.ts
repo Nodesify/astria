@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { runPipeline } from '../native';
+import { VERSION } from '../version';
 
 const CODE_EXTENSIONS = new Set([
   '.py', '.js', '.jsx', '.mjs', '.ts', '.tsx',
@@ -42,7 +43,7 @@ export async function watchCommand(watchPath: string, opts: { debounce: string }
         changedFiles.clear();
         console.log(`\n[astria] ${batch.length} file(s) changed, rebuilding...`);
         try {
-          const result = runPipeline(resolved);
+          const result = runPipeline(resolved, false, false, false, false, VERSION);
           console.log(`[astria] Rebuilt: ${result.nodesAdded} nodes, ${result.edgesAdded} edges, ${result.communities} communities`);
         } catch (e: any) {
           console.error(`[astria] Rebuild failed:`, e.message || e);

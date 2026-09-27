@@ -1,16 +1,20 @@
 import { existsSync, statSync } from 'fs';
-import { graphStats } from '../native';
+import { graphStats, graphBuildInfo } from '../native';
 
 const STALE_THRESHOLD = 30;
 const VERY_STALE_THRESHOLD = 120;
 
-export async function statusCommand(opts: { graph: string }) {
+export async function statusCommand(opts: { graph: string; json?: boolean }) {
   const dbPath = `${opts.graph}/.astria/db.sqlite`;
   const graphJsonPath = `${opts.graph}/.astria/graph.json`;
 
   if (!existsSync(dbPath)) {
-    console.log('Status: no graph found');
-    console.log('Run `astria run .` to build the graph');
+    if (opts.json) {
+      console.log(JSON.stringify({ status: 'missing' }, null, 2));
+    } else {
+      console.log('Status: no graph found');
+      console.log('Run `astria run .` to build the graph');
+    }
     return;
   }
 
@@ -25,14 +29,33 @@ export async function statusCommand(opts: { graph: string }) {
   }
 
   if (stats.nodeCount === 0) {
-    console.log('Status: empty graph (0 nodes)');
-    console.log('Run `astria run .` to populate the graph');
+    if (opts.json) {
+      console.log(JSON.stringify({ status: 'empty', nodes: 0 }, null, 2));
+    } else {
+      console.log('Status: empty graph (0 nodes)');
+      console.log('Run `astria run .` to populate the graph');
+    }
     return;
   }
 
+  // Build provenance (which astria and extraction rules built the graph);
+  // graphs from before stamping simply report nulls.
+  let build;
+  try {
+    build = graphBuildInfo(opts.graph);
+  } catch {
+    build = undefined;
+  }
+
   if (!existsSync(graphJsonPath)) {
-    console.log(`Status: incomplete (db has ${stats.nodeCount} nodes but no graph.json)`);
-    console.log('Run `astria run .` to complete the build');
+    if (opts.json) {
+      console.log(
+        JSON.stringify({ status: 'incomplete', nodes: stats.nodeCount, edges: stats.edgeCount }, null, 2),
+      );
+    } else {
+      console.log(`Status: incomplete (db has ${stats.nodeCount} nodes but no graph.json)`);
+      console.log('Run `astria run .` to complete the build');
+    }
     return;
   }
 
@@ -48,12 +71,54 @@ export async function statusCommand(opts: { graph: string }) {
     staleness = 'very_stale';
   }
 
+  // A graph extracted by older rules needs re-extraction even when the file
+  // manifest is unchanged; the mismatch is the true freshness signal.
+  const extractionOutdated =
+    build?.extractionHashVersion != null &&
+    build.extractionHashVersion !== build.currentExtractionHashVersion;
+
+  if (opts.json) {
+    console.log(
+      JSON.stringify(
+        {
+          status: staleness,
+          ageMinutes,
+          nodes: stats.nodeCount,
+          edges: stats.edgeCount,
+          communities: stats.communityCount,
+          files: stats.fileCount,
+          builtAt: build?.graphPublishedAt ?? null,
+          astriaVersion: build?.astriaVersion ?? null,
+          extractionHashVersion: build?.extractionHashVersion ?? null,
+          currentExtractionHashVersion: build?.currentExtractionHashVersion ?? null,
+          extractionOutdated,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
   console.log(`Status: ${staleness} (${ageMinutes} min ago)`);
   console.log(`Nodes: ${stats.nodeCount}`);
   console.log(`Edges: ${stats.edgeCount}`);
   console.log(`Communities: ${stats.communityCount}`);
   console.log(`Files tracked: ${stats.fileCount}`);
-
+  if (build?.graphPublishedAt) {
+    // Stored as unix seconds; render ISO so humans can read it.
+    const when = new Date(Number(build.graphPublishedAt) * 1000);
+    const builtAt = Number.isFinite(when.getTime()) ? when.toISOString() : build.graphPublishedAt;
+    const by = build.astriaVersion ? ` by astria ${build.astriaVersion}` : '';
+    const extraction = build.extractionHashVersion ? ` (extraction ${build.extractionHashVersion})` : '';
+    console.log(`Built: ${builtAt}${by}${extraction}`);
+  }
+  if (extractionOutdated) {
+    console.log(
+      `Warning: graph was built with extraction ${build?.extractionHashVersion}; this astria uses ${build?.currentExtractionHashVersion} — re-extract with \`astria update .\``,
+    );
+    return;
+  }
   if (staleness === 'stale' || staleness === 'very_stale') {
     console.log(`Recommendation: run \`astria update .\` to refresh`);
   }

@@ -1,6 +1,7 @@
 import * as pathMod from 'path';
 import { runPipeline, exportWiki, tokenBenchmark, globalAdd } from '../native';
 import { printLlmSummary } from './llm-summary';
+import { VERSION } from '../version';
 
 export async function runCommand(
   path: string,
@@ -10,7 +11,7 @@ export async function runCommand(
   if (opts.model) process.env.ASTRIA_LLM_MODEL = opts.model;
   try {
     console.log(`Running astria pipeline on: ${path}`);
-    const result = runPipeline(path, opts.dedup === false, opts.embed === true, opts.labelCommunities === true, opts.deep === true);
+    const result = runPipeline(path, opts.dedup === false, opts.embed === true, opts.labelCommunities === true, opts.deep === true, VERSION);
     console.log(`Nodes added: ${result.nodesAdded}`);
     console.log(`Edges added: ${result.edgesAdded}`);
     console.log(`Communities: ${result.communities}`);

@@ -1,10 +1,14 @@
 import { explainNode } from '../native';
 
-export async function explainCommand(node: string, opts: { graph: string }) {
+export async function explainCommand(node: string, opts: { graph: string; json?: boolean }) {
   try {
     const result = explainNode(opts.graph, node);
     if (!result) {
       console.log(`Node "${node}" not found`);
+      return;
+    }
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
       return;
     }
     console.log(`Node: ${result.label}`);

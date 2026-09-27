@@ -239,8 +239,15 @@ pub fn dedup_nodes(db: &Connection) -> Result<usize> {
             // concepts are merged by id at build time instead.
             if matches!(
                 r.file_type.as_str(),
-                "code" | "test" | "stub" | "package" | "rationale" | "document" | "reference"
-                    | "paper" | "chunk"
+                "code"
+                    | "test"
+                    | "stub"
+                    | "package"
+                    | "rationale"
+                    | "document"
+                    | "reference"
+                    | "paper"
+                    | "chunk"
             ) || r.label.is_empty()
                 || label_shape(&r.label) == Shape::File
             {

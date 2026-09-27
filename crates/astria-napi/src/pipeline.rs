@@ -62,7 +62,7 @@ mod graph_update;
 mod semantic_pass;
 
 pub fn run_pipeline(root: &Path) -> astria_core::Result<PipelineResult> {
-    run_pipeline_with(root, true, false, false, false)
+    run_pipeline_with(root, true, false, false, false, None)
 }
 
 /// Run the pipeline with explicit dedup control (`--no-dedup`).
@@ -70,12 +70,15 @@ pub fn run_pipeline(root: &Path) -> astria_core::Result<PipelineResult> {
 /// `label_communities` (`--label-communities`) names communities thematically
 /// with one LLM call per changed community; `deep` (`--deep`) adds the
 /// cached cross-file concept-linking pass. Both require a semantic backend.
+/// `cli_version` is the npm package version of the calling driver, stamped
+/// into the graph so `astria status` can report which release built it.
 pub fn run_pipeline_with(
     root: &Path,
     dedup: bool,
     embed: bool,
     label_communities: bool,
     deep: bool,
+    cli_version: Option<&str>,
 ) -> astria_core::Result<PipelineResult> {
     let root = if root.exists() {
         root.canonicalize().map_err(astria_core::AstriaError::Io)?
@@ -110,6 +113,24 @@ pub fn run_pipeline_with(
         }
         _ => {}
     }
+    // The npm CLI version is the one users actually upgrade; warn when the
+    // graph came from a different release so staleness is visible here too.
+    if let Some(running) = cli_version {
+        let stored_cli: Option<String> = db
+            .query_row(
+                "SELECT value FROM _meta WHERE key = 'astria_version'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        if let Some(prev) = stored_cli {
+            if prev != running {
+                eprintln!(
+                    "[astria] graph was last built by astria {prev}, this binary is astria {running}"
+                );
+            }
+        }
+    }
 
     // Record pipeline start (root is now canonicalized)
     let run_id: i64 = db.query_row(
@@ -126,6 +147,7 @@ pub fn run_pipeline_with(
         embed,
         label_communities,
         deep,
+        cli_version,
     );
 
     // Record pipeline completion, including this run's measured LLM spend.
@@ -576,6 +598,7 @@ fn run_pipeline_inner(
     embed: bool,
     label_communities: bool,
     deep: bool,
+    cli_version: Option<&str>,
 ) -> astria_core::Result<PipelineResult> {
     if (label_communities || deep) && !astria_semantic::enrichment_enabled() {
         return Err(astria_core::AstriaError::Graph(
@@ -604,8 +627,14 @@ fn run_pipeline_inner(
         let mut extractions = astria_extract::extract(&files, root, db)?;
         let semantic_stats =
             semantic_pass::enrich_with_semantics(&files, &mut extractions, db, &configuration)?;
-        let build_result =
-            graph_update::publish(root, db, &detected, &extractions, &build_configuration)?;
+        let build_result = graph_update::publish(
+            root,
+            db,
+            &detected,
+            &extractions,
+            &build_configuration,
+            cli_version,
+        )?;
         (build_result, semantic_stats)
     } else {
         (
