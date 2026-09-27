@@ -4,7 +4,7 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## [Unreleased]
+## [1.0.5] — 2026-09-27
 
 ### Retrieval correctness and response budgets
 - Preserve scoped code/test definitions during semantic deduplication. Extraction cache invalidation lets `astria update .` restore previously lost definitions.
@@ -298,6 +298,7 @@ installed skill files. `astria migrate` moves pre-1.0 layouts.
 
 See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
+[1.0.5]: https://github.com/Nodesify/astria/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Nodesify/astria/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Nodesify/astria/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Nodesify/astria/compare/v1.0.1...v1.0.2
