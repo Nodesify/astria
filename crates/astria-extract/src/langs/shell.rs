@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Shell",
-        extensions: &[".sh", ".bash"],
+        name: astria_core::languages::LanguageId::Shell
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Shell
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_bash::LANGUAGE.into(),
         class_types: &[], // Shell has no class system
         function_types: &["function_definition"],
@@ -11,6 +15,7 @@ pub fn config() -> &'static LanguageConfig {
         // source/. is handled at the string level in extract_import_module if needed.
         import_types: &[],
         call_type: "command",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["compound_statement", "do_group"],

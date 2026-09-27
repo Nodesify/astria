@@ -8,12 +8,18 @@ rust-version.workspace = true
 # workspace-internal: distributed via npm (@nodesify/astria), not crates.io
 publish = false
 
+[features]
+default = []
+embed = ["dep:astria-embed"]
+
 [dependencies]
+astria-embed = { workspace = true, optional = true }
 astria-core = { workspace = true }
 astria-paths = { workspace = true }
 rusqlite = { workspace = true }
 petgraph = { workspace = true }
 strsim = { workspace = true }
+tiktoken-rs = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

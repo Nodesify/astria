@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 // Retrieval-quality benchmark for astria: runs a golden QA set through the
-// real query engine and measures recall@k and MRR of the files and symbols
-// the answers surface. Token cost is measured separately (benchmark.rs and
+// real query engine and measures exact-file hit@k, recall@k and MRR.
+// Symbol matches are diagnostics only. Token cost is measured separately (benchmark.rs and
 // the snapshot runner); this measures whether the graph answers WELL.
 //
-// Zero runtime dependencies.
+// Exact token counts and the optional lexical baseline require js-tiktoken.
 //
 // Usage:
 //   node scripts/bench/quality/run-quality.mjs [--root <dir>] [--golden <jsonl>]
-//        [--astria "<cmd prefix>"] [--budget 4000] [--depth 3] [--k 1,3,5,10]
+//        [--astria <executable-or-js-entrypoint>] [--budget 4000] [--depth 3] [--k 1,3,5,10]
 //        [--out <path>] [--check]
 //
 //   --check  validate the golden set only: schema, and that every
 //            expected_files entry matches a real file under --root.
 
+import { createHash } from 'node:crypto';
+import { loadTokenizer } from '../tokenize.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,6 +34,8 @@ function parseArgs(argv) {
     out: path.join(scriptDir, 'out', 'quality-results.json'),
     check: false,
     astria: process.env.ASTRIA_BIN || 'astria',
+    baseline: false,
+    min_recall5: 0,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -42,13 +46,15 @@ function parseArgs(argv) {
     else if (a === '--depth') opts.depth = argv[++i];
     else if (a === '--k') opts.k = argv[++i].split(',').map(Number);
     else if (a === '--out') opts.out = path.resolve(argv[++i]);
+    else if (a === '--min-recall5') opts.min_recall5 = Number(argv[++i]);
+    else if (a === '--baseline') opts.baseline = true;
     else if (a === '--check') opts.check = true;
     else { console.error(`unknown arg: ${a}`); process.exit(2); }
   }
   return opts;
 }
 
-const norm = (p) => String(p).replace(/\\/g, '/').toLowerCase();
+const norm = (p) => path.posix.normalize(String(p).replace(/\\/g, '/')).replace(/^\.\//, '');
 
 function walkFiles(root) {
   const skip = new Set(['.git', '.astria', '.graphify', 'node_modules', 'target', 'bench-work', 'dist']);
@@ -81,7 +87,7 @@ function loadGolden(file) {
     items.push({
       id: o.id,
       question: o.question,
-      expected_files: o.expected_files.map(norm),
+      expected_files: [...new Set(o.expected_files.map(norm))],
       expected_symbols: (o.expected_symbols ?? []).map((s) => String(s).toLowerCase()),
     });
   }
@@ -116,7 +122,7 @@ function parseAnswer(text) {
 function bestRank(expected, ranked) {
   let best = Infinity;
   for (const e of expected) {
-    const idx = ranked.findIndex((r) => r.includes(e));
+    const idx = ranked.findIndex((r) => r === e);
     if (idx !== -1) best = Math.min(best, idx + 1);
   }
   return best;
@@ -131,7 +137,7 @@ async function main() {
   const bad = [];
   for (const item of items) {
     for (const e of item.expected_files) {
-      if (!treeFiles.some((f) => f.includes(e))) bad.push(`${item.id}: no file matches "${e}"`);
+      if (!treeFiles.includes(e)) bad.push(`${item.id}: no file matches "${e}"`);
     }
   }
   if (bad.length) {
@@ -142,26 +148,72 @@ async function main() {
   console.log(`golden set ok: ${items.length} questions, all expectations grounded`);
   if (opts.check) return;
 
+  if (!items.length || !opts.k.includes(5) || opts.k.some(k => !Number.isInteger(k) || k < 1) || !(Number(opts.budget) > 0)) throw new Error('nonempty golden set, positive budget and k including 5 required');
+  const tok = await loadTokenizer();
+  if (!tok) throw new Error('quality measurements require js-tiktoken (o200k_base)');
   const cli = opts.astria;
+  const invoke = (args, cwd = opts.root) => cli.endsWith('.js')
+    ? spawnSync(process.execPath, [path.resolve(cli), ...args], { cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 32 * 1024 * 1024 })
+    : spawnSync(cli, args, { cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 32 * 1024 * 1024 });
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' }).stdout?.trim() || null;
+  const localEntry = path.join(repoRoot, 'packages/astria-cli/dist/index.js');
+  const nativeArtifact = path.join(repoRoot, 'packages/astria-cli/dist/astria.node');
+  const localBuild = path.resolve(cli) === localEntry;
+  if (localBuild && (existsSync(path.join(repoRoot, 'packages/astria-cli/astria.node')) || !existsSync(nativeArtifact))) throw new Error('Local benchmark requires dist/astria.node and no package-root astria.node; rebuild the intended native artifact');
+  const versionResult = invoke(['--version']);
+  if (versionResult.error || versionResult.status !== 0) throw new Error('CLI/native binding failed to load');
+  const version = versionResult.stdout.trim();
+  const bounded = (text) => {
+    if (tok.count(text) <= Number(opts.budget)) return text;
+    let lo = 0, hi = text.length;
+    while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (tok.count(text.slice(0, mid)) <= Number(opts.budget)) lo = mid; else hi = mid - 1; }
+    // Drop an incomplete final record so a clipped path cannot become a hit.
+    const prefix = text.slice(0, lo);
+    let complete = prefix.slice(0, prefix.lastIndexOf('\n') + 1);
+    // Token counts of string prefixes are not strictly monotonic under BPE.
+    while (tok.count(complete) > Number(opts.budget)) complete = complete.slice(0, complete.lastIndexOf('\n', complete.length - 2) + 1);
+    return complete;
+  };
+  // Deterministic question-only lexical baseline. No golden paths or symbols enter search.
+  const baseline = (question) => {
+    const words = [...new Set(question.toLowerCase().match(/[a-z_]{3,}/g) || [])].filter(w => !['the','how','does','where','what','and','for','are','with','which'].includes(w));
+    const search = spawnSync('rg', ['--json', '-i', '-m', '3', ...words.flatMap(w => ['-e', w]), '--', '.'], { cwd: opts.root, encoding: 'utf8', timeout: 120000, maxBuffer: 32 * 1024 * 1024 });
+    if (search.error || ![0,1].includes(search.status)) return { ...search, stdout: '' };
+    const matches = search.stdout.split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.type === 'match');
+    const ranked = new Map();
+    for (const {data} of matches) { const f = norm(data.path.text); const old = ranked.get(f) || {file:f, line:data.line_number, score:0}; old.score += words.filter(w => data.lines.text.toLowerCase().includes(w)).length; ranked.set(f, old); }
+    let context = '';
+    for (const m of [...ranked.values()].sort((a,b) => b.score-a.score || a.file.localeCompare(b.file))) {
+      const lines = readFileSync(path.join(opts.root,m.file),'utf8').split('\n');
+      context += `FILE ${m.file}\n` + lines.slice(Math.max(0,m.line-11),m.line+30).join('\n') + '\n';
+      if (tok.count(context) >= Number(opts.budget)) break;
+    }
+    return {status:0, stdout:context, stderr:''};
+  };
   const results = [];
   for (const item of items) {
-    const cmd = `${cli} query "${item.question}" --budget ${opts.budget} --depth ${opts.depth}`;
     const t0 = Date.now();
-    const r = spawnSync(cmd, { cwd: opts.root, encoding: 'utf8', shell: true, timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
+    const r = opts.baseline ? baseline(item.question) : invoke(['query', item.question, '--budget', opts.budget, '--depth', opts.depth]);
     const seconds = (Date.now() - t0) / 1000;
-    if (!r.stdout) {
-      results.push({ ...item, error: (r.stderr || String(r.error)).slice(0, 300), seconds: Number(seconds.toFixed(2)) });
+    if (r.error || r.status !== 0 || !r.stdout) {
+      results.push({ ...item, recall: Object.fromEntries(opts.k.map(k => [k, 0])), hit_rank: null, tokens: 0, error: (r.stderr || String(r.error || `exit ${r.status}: empty output`)).slice(0, 300), seconds: Number(seconds.toFixed(2)) });
       console.error(`  ${item.id} ERROR ${seconds.toFixed(1)}s`);
       continue;
     }
-    const { files: rankedFiles, names: rankedNames } = parseAnswer(r.stdout);
+    const delivered = bounded(r.stdout);
+    const { files, names: rankedNames } = parseAnswer(delivered);
+    const rankedFiles = (opts.baseline ? [...delivered.matchAll(/^FILE (.+)$/gm)].map(m => m[1]) : files).map(f => norm(path.isAbsolute(f) ? path.relative(opts.root, f) : f));
     const fileRank = bestRank(item.expected_files, rankedFiles);
     const symRank = item.expected_symbols.length ? bestRank(item.expected_symbols, rankedNames) : Infinity;
-    const hit = Math.min(fileRank, symRank);
+    const hit = fileRank;
     results.push({
       id: item.id,
       question: item.question,
       seconds: Number(seconds.toFixed(2)),
+      tokens: tok.count(delivered),
+      raw_tokens: tok.count(r.stdout),
+      clipped: delivered.length !== r.stdout.length,
+      recall: Object.fromEntries(opts.k.map(k => [k, item.expected_files.filter(f => rankedFiles.slice(0,k).includes(f)).length / item.expected_files.length])),
       hit_rank: Number.isFinite(hit) ? hit : null,
       matched_file: Number.isFinite(fileRank) ? rankedFiles[fileRank - 1] : null,
       matched_symbol: Number.isFinite(symRank) ? rankedNames[symRank - 1] : null,
@@ -169,19 +221,23 @@ async function main() {
     console.log(`  ${item.id} rank=${Number.isFinite(hit) ? hit : 'miss'} ${seconds.toFixed(1)}s`);
   }
 
-  const ok = results.filter((r) => !r.error);
-  const summary = { questions: results.length, answered: ok.length, mrr: 0 };
-  for (const k of opts.k) summary[`recall@${k}`] = 0;
-  for (const r of ok) {
-    for (const k of opts.k) if (r.hit_rank !== null && r.hit_rank <= k) summary[`recall@${k}`] += 1;
-    summary.mrr += r.hit_rank !== null ? 1 / r.hit_rank : 0;
+  const ok = results.filter(r => !r.error);
+  const n = results.length;
+  const summary = { questions:n, answered:ok.length, failed:n-ok.length,
+    mrr: results.reduce((s,r) => s + (r.hit_rank ? 1/r.hit_rank : 0),0)/n,
+    avg_query_seconds: results.reduce((s,r) => s+r.seconds,0)/n,
+    avg_tokens: tok ? results.reduce((s,r) => s+r.tokens,0)/n : null };
+  for (const k of opts.k) {
+    summary[`hit@${k}`] = results.filter(r => r.hit_rank && r.hit_rank <= k).length/n;
+    summary[`recall@${k}`] = results.reduce((s,r) => s+r.recall[k],0)/n;
   }
-  const n = ok.length || 1;
-  for (const k of opts.k) summary[`recall@${k}`] = Number((summary[`recall@${k}`] / n).toFixed(4));
-  summary.mrr = Number((summary.mrr / n).toFixed(4));
-  summary.avg_query_seconds = Number((ok.reduce((s, r) => s + r.seconds, 0) / n).toFixed(2));
 
   const payload = {
+    schema_version: 2,
+    method: opts.baseline ? 'question-rg-plus-source-windows' : 'astria',
+    tokenizer: tok.name,
+    context_policy: 'both methods clipped to the same exact token budget, keeping only complete lines',
+    provenance: { cli_version:version, harness_commit:git(repoRoot,'rev-parse','HEAD'), source_build_commit: localBuild ? git(repoRoot,'rev-parse','HEAD') : null, native_artifact_sha256: localBuild ? createHash('sha256').update(readFileSync(nativeArtifact)).digest('hex') : null, cli_entrypoint_sha256: existsSync(cli) ? createHash('sha256').update(readFileSync(cli)).digest('hex') : null, source_dirty: Boolean(git(repoRoot,'status','--porcelain')), corpus_commit:git(opts.root,'rev-parse','HEAD'), corpus_files:treeFiles.length, golden_sha256:createHash('sha256').update(readFileSync(opts.golden)).digest('hex'), node:process.version, platform:process.platform },
     generated_at: new Date().toISOString(),
     corpus_root: norm(opts.root),
     golden_set: path.basename(opts.golden),
@@ -195,6 +251,18 @@ async function main() {
   writeFileSync(opts.out, JSON.stringify(payload, null, 2) + '\n');
   console.log(`\nsummary: ${JSON.stringify(summary)}`);
   console.log(`results: ${opts.out}`);
+
+  // Blocking gate: a recall@5 floor lets CI fail on ranking regressions
+  // without hard-coding a ceiling on quality.
+  if (opts.min_recall5 > 0) {
+    const r5 = summary['recall@5'] ?? 0;
+    if (r5 < opts.min_recall5 / 100) {
+      console.error(`recall@5 ${r5} is below the required ${(opts.min_recall5 / 100).toFixed(2)}`);
+      process.exitCode = 1;
+    } else {
+      console.log(`recall@5 gate passed (${opts.min_recall5}%)`);
+    }
+  }
 }
 
 main().catch((e) => { console.error(e.message); process.exit(1); });

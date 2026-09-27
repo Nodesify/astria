@@ -29,7 +29,12 @@ pub fn extract(
     let mut results = Vec::new();
 
     for file_path in files {
-        let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let extension = file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let ext = extension.as_str();
 
         // Node-id prefixes must come from the path relative to the scanned
         // root, never from the caller's CWD-joined path: identical content
@@ -69,15 +74,10 @@ pub fn extract(
                 results.push(cached);
                 continue;
             }
-            match astria_pdf::extract_to_markdown(file_path) {
-                Ok(md_text) if !md_text.trim().is_empty() => {
-                    let extraction =
-                        extract_markdown_from_string(file_path, "pdf", &md_text, naming);
-                    save_cache(db, file_path, &hash, &extraction);
-                    results.push(extraction);
-                }
-                _ => {}
-            }
+            let md_text = astria_pdf::extract_to_markdown(file_path)?;
+            let extraction = extract_markdown_from_string(file_path, "pdf", &md_text, naming);
+            save_cache(db, file_path, &hash, &extraction);
+            results.push(extraction);
             continue;
         }
 
@@ -87,10 +87,9 @@ pub fn extract(
                 results.push(cached);
                 continue;
             }
-            if let Ok(extraction) = extract_text_file(file_path, "text", naming) {
-                save_cache(db, file_path, &hash, &extraction);
-                results.push(extraction);
-            }
+            let extraction = extract_text_file(file_path, "text", naming)?;
+            save_cache(db, file_path, &hash, &extraction);
+            results.push(extraction);
             continue;
         }
 
@@ -100,16 +99,26 @@ pub fn extract(
                 results.push(cached);
                 continue;
             }
-            if let Ok(extraction) = extract_rst(file_path, naming) {
-                save_cache(db, file_path, &hash, &extraction);
-                results.push(extraction);
-            }
+            let extraction = extract_rst(file_path, naming)?;
+            save_cache(db, file_path, &hash, &extraction);
+            results.push(extraction);
             continue;
         }
 
         let cfg = match langs::get_language_for_extension(ext) {
             Some(c) => c,
-            None => continue,
+            None => {
+                // Media can receive semantic facts, but has no structural
+                // extractor. An empty extraction also removes obsolete facts
+                // when semantic enrichment is explicitly disabled.
+                results.push(Extraction {
+                    file_path: file_path.clone(),
+                    language: "media".into(),
+                    nodes: Vec::new(),
+                    edges: Vec::new(),
+                });
+                continue;
+            }
         };
 
         // Check cache
@@ -403,6 +412,93 @@ mod tests {
         let r1 = extract(std::slice::from_ref(&py), dir.path(), &db).unwrap();
         let r2 = extract(&[py], dir.path(), &db).unwrap();
         assert_eq!(r1[0].nodes.len(), r2[0].nodes.len());
+    }
+
+    #[test]
+    fn extract_new_config_languages() {
+        // Terraform/HCL, PowerShell, SystemVerilog, Metal — validate the
+        // node-kind mappings against real parses; a language that yields
+        // zero nodes means its config's kind names drifted from the grammar.
+        let cases: &[(&str, &str)] = &[
+            (
+                "infra.tf",
+                "resource \"aws_s3_bucket\" \"b\" {
+  bucket = \"demo\"
+}
+
+variable \"region\" {
+  default = \"us-east-1\"
+}
+
+module \"network\" {
+  source = \"./net\"
+}",
+            ),
+            (
+                "tasks.ps1",
+                "function Deploy-Stack {
+  Write-Output \"deploying\"
+}
+
+class Stack {
+  [string]$Name
+}
+
+Deploy-Stack",
+            ),
+            (
+                "counter.sv",
+                "import mypkg::*;
+module counter(input clk, output reg [7:0] count);
+  function automatic [7:0] next(input [7:0] v);
+    next = v + 1;
+  endfunction
+endmodule",
+            ),
+            (
+                "render.metal",
+                "#include <metal_stdlib>
+vertex float4 render_vertex(uint vid [[vertex_id]]) {
+  return float4(1.0);
+}
+kernel void tintkernel() {}
+",
+            ),
+        ];
+        for (name, content) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let f = dir.path().join(name);
+            fs::write(&f, content).unwrap();
+            let db = open_db_in_memory().unwrap();
+            let results = extract(std::slice::from_ref(&f), dir.path(), &db).unwrap();
+            assert!(
+                !results.is_empty() && !results[0].nodes.is_empty(),
+                "{name}: extraction produced no nodes"
+            );
+            // Label-level assertions: the extraction must identify the actual
+            // declared symbols, not just emit a bare file node.
+            let labels: Vec<String> = results[0].nodes.iter().map(|n| n.label.clone()).collect();
+            match *name {
+                "infra.tf" => assert!(
+                    labels.iter().any(|l| l.contains("aws_s3_bucket"))
+                        && labels.iter().any(|l| l.contains("network")),
+                    "terraform resources missing from labels: {labels:?}"
+                ),
+                "tasks.ps1" => assert!(
+                    labels.iter().any(|l| l.contains("Deploy-Stack")),
+                    "powershell function missing from labels: {labels:?}"
+                ),
+                "counter.sv" => assert!(
+                    labels.iter().any(|l| l.contains("counter")),
+                    "systemverilog module missing from labels: {labels:?}"
+                ),
+                "render.metal" => assert!(
+                    labels.iter().any(|l| l.contains("render_vertex")),
+                    "metal vertex function missing from labels: {labels:?}"
+                ),
+                _ => {}
+            }
+        }
     }
 
     #[test]

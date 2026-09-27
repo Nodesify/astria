@@ -53,6 +53,200 @@ pub fn diagnose_graph(root: String) -> napi::Result<DiagnoseReportJs> {
 }
 
 #[napi(object)]
+pub struct RiskReportJs {
+    pub score: i64,
+    pub level: String,
+    pub changed_files: Vec<String>,
+    pub files_with_symbols: i64,
+    pub impacted: i64,
+    pub by_depth: Vec<String>,
+    pub communities: Vec<String>,
+    pub entries: Vec<String>,
+    pub text: String,
+}
+
+#[napi]
+pub fn risk_report(root: String, staged: Option<bool>) -> napi::Result<RiskReportJs> {
+    let root_pb = PathBuf::from(&root);
+    let root_canon = root_pb
+        .canonicalize()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let (db, _) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let changed = risk::git_changed_files(&root_canon, staged.unwrap_or(false))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let outcome =
+        risk::compute_risk(&db, &changed).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let project_root = Some(
+        root_canon
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/"),
+    );
+    let entries = outcome
+        .entries
+        .iter()
+        .map(|e| {
+            format!(
+                "{} (depth {}) via {} from {}",
+                e.label, e.depth, e.relation, e.via_file
+            )
+        })
+        .collect();
+    let by_depth = outcome
+        .by_depth
+        .iter()
+        .map(|(d, c)| format!("depth {d}: {c}"))
+        .collect();
+    let text = risk::render(&outcome, project_root.as_deref());
+    Ok(RiskReportJs {
+        score: outcome.score as i64,
+        level: risk::level_of(outcome.score).to_string(),
+        changed_files: outcome.changed_files.clone(),
+        files_with_symbols: outcome.files_with_symbols as i64,
+        impacted: outcome.impacted as i64,
+        by_depth,
+        communities: outcome.communities.clone(),
+        entries,
+        text,
+    })
+}
+
+#[napi(object)]
+pub struct SvgCountsJs {
+    pub nodes: i64,
+    pub edges: i64,
+    pub communities: i64,
+    pub truncated: bool,
+}
+
+#[napi]
+pub fn export_svg_cmd(root: String, out_path: String) -> napi::Result<SvgCountsJs> {
+    let root_pb = PathBuf::from(&root);
+    let (db, _) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let counts = export_svg::export_svg(&db, &PathBuf::from(&out_path))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(SvgCountsJs {
+        nodes: counts.nodes as i64,
+        edges: counts.edges as i64,
+        communities: counts.communities as i64,
+        truncated: counts.truncated,
+    })
+}
+
+#[napi(object)]
+pub struct Neo4jPushCountsJs {
+    pub nodes: i64,
+    pub edges: i64,
+    pub communities: i64,
+    pub statements: i64,
+}
+
+#[napi(js_name = "neo4jPushCmd")]
+pub fn neo4j_push_cmd(
+    root: String,
+    url: String,
+    user: Option<String>,
+    pass: Option<String>,
+) -> napi::Result<Neo4jPushCountsJs> {
+    let root_pb = PathBuf::from(&root);
+    let (db, _) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let user = user
+        .or_else(|| std::env::var("NEO4J_USERNAME").ok())
+        .unwrap_or_else(|| "neo4j".into());
+    let pass = pass
+        .or_else(|| std::env::var("NEO4J_PASSWORD").ok())
+        .unwrap_or_default();
+    let counts = neo4j_push::neo4j_push(&db, &url, &user, &pass)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(Neo4jPushCountsJs {
+        nodes: counts.nodes as i64,
+        edges: counts.edges as i64,
+        communities: counts.communities as i64,
+        statements: counts.statements as i64,
+    })
+}
+
+fn health_grade(score: i64) -> String {
+    match score {
+        85..=100 => "good".into(),
+        70..=84 => "fair".into(),
+        _ => "needs attention".into(),
+    }
+}
+
+#[napi(object)]
+pub struct HealthReportJs {
+    pub score: i64,
+    pub grade: String,
+    /// Formatted "label (file) — N outgoing, 0 incoming" lines.
+    pub dead_code: Vec<String>,
+    /// Formatted "N files: a -> b -> a" lines.
+    pub cycles: Vec<String>,
+    /// Formatted "label (degree N, community X)" lines.
+    pub hubs: Vec<String>,
+    pub age_days: Option<i64>,
+    pub node_count: i64,
+    pub edge_count: i64,
+    pub text: String,
+}
+
+#[napi]
+pub fn health_report(root: String) -> napi::Result<HealthReportJs> {
+    let root_pb = PathBuf::from(&root);
+    let (db, _) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let project_root = std::path::Path::new(&root)
+        .canonicalize()
+        .ok()
+        .map(|p| p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"));
+    let report =
+        astria_analyze::health::health(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let dead_code = report
+        .dead_code_candidates
+        .iter()
+        .map(|c| {
+            format!(
+                "{} ({}) — {} outgoing, 0 incoming",
+                c.label, c.source_file, c.outgoing
+            )
+        })
+        .collect();
+    let cycles = report
+        .cycles
+        .iter()
+        .map(|c| format!("{} files: {}", c.files.len(), c.files.join(" -> ")))
+        .collect();
+    let hubs = report
+        .hub_churn
+        .iter()
+        .map(|h| {
+            format!(
+                "{} (degree {}, community {})",
+                h.label,
+                h.degree,
+                h.community.as_deref().unwrap_or("-")
+            )
+        })
+        .collect();
+    let score = report.score as i64;
+    let grade = health_grade(score);
+    let text = astria_analyze::health::render(&report, project_root.as_deref());
+    Ok(HealthReportJs {
+        score,
+        grade,
+        dead_code,
+        cycles,
+        hubs,
+        age_days: report.age_days.map(|d| d as i64),
+        node_count: report.node_count as i64,
+        edge_count: report.edge_count as i64,
+        text,
+    })
+}
+
+#[napi(object)]
 pub struct SavedResultJs {
     pub memory_path: String,
     pub node_id: String,
@@ -213,11 +407,14 @@ pub fn ingest_postgres(root: String, dsn: String) -> napi::Result<IngestCountsJs
     })
 }
 
+mod export_svg;
 pub mod feedback;
 pub mod global;
 pub mod merge;
+mod neo4j_push;
 pub mod pipeline;
 pub mod query;
+mod risk;
 
 use napi_derive::napi;
 use std::collections::HashMap;
@@ -231,6 +428,20 @@ pub struct PipelineResultJs {
     pub edges_added: i64,
     pub communities: i64,
     pub report: String,
+    /// Files whose semantic extraction came from the content-hash cache.
+    pub semantic_cached: i64,
+    /// Measured LLM spend of this run's semantic passes.
+    pub llm_input_tokens: i64,
+    pub llm_output_tokens: i64,
+    pub llm_api_calls: i64,
+    /// Communities (re)named by the LLM (`--label-communities`), or -1 when
+    /// the stage did not run.
+    pub communities_labeled: i64,
+    pub communities_reused: i64,
+    /// Naming calls that failed this run (those communities keep hub names).
+    pub communities_failed: i64,
+    /// INFERRED concept edges written by `--deep`, or -1 when it did not run.
+    pub deep_links: i64,
 }
 
 #[napi(object)]
@@ -340,23 +551,19 @@ pub fn run_pipeline(
     root: String,
     no_dedup: Option<bool>,
     embed: Option<bool>,
+    label_communities: Option<bool>,
+    deep: Option<bool>,
 ) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
-    let db_path_str = astria_paths::normalize(&astria_paths::db_path(
-        &root_pb
-            .canonicalize()
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?,
-    )?);
-    let result =
-        pipeline::run_pipeline_with(&root_pb, !no_dedup.unwrap_or(false), embed.unwrap_or(false))
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    query::invalidate_graph_cache(&db_path_str);
-    Ok(PipelineResultJs {
-        nodes_added: result.build_result.nodes_added as i64,
-        edges_added: result.build_result.edges_added as i64,
-        communities: result.cluster_result.communities.len() as i64,
-        report: result.report,
-    })
+    let result = pipeline::run_pipeline_with(
+        &root_pb,
+        !no_dedup.unwrap_or(false),
+        embed.unwrap_or(false),
+        label_communities.unwrap_or(false),
+        deep.unwrap_or(false),
+    )
+    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(pipeline_result_js(&result))
 }
 
 /// Incremental rebuild — intentionally reuses run_pipeline because the pipeline
@@ -366,23 +573,50 @@ pub fn update_pipeline(
     root: String,
     no_dedup: Option<bool>,
     embed: Option<bool>,
+    label_communities: Option<bool>,
+    deep: Option<bool>,
 ) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
-    let db_path_str = astria_paths::normalize(&astria_paths::db_path(
-        &root_pb
-            .canonicalize()
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?,
-    )?);
-    let result =
-        pipeline::run_pipeline_with(&root_pb, !no_dedup.unwrap_or(false), embed.unwrap_or(false))
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    query::invalidate_graph_cache(&db_path_str);
-    Ok(PipelineResultJs {
+    let result = pipeline::run_pipeline_with(
+        &root_pb,
+        !no_dedup.unwrap_or(false),
+        embed.unwrap_or(false),
+        label_communities.unwrap_or(false),
+        deep.unwrap_or(false),
+    )
+    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(pipeline_result_js(&result))
+}
+
+/// Flatten a pipeline result for JS. Stats that did not run report -1 so
+/// "ran and produced zero" stays distinguishable from "not requested".
+fn pipeline_result_js(result: &pipeline::PipelineResult) -> PipelineResultJs {
+    PipelineResultJs {
         nodes_added: result.build_result.nodes_added as i64,
         edges_added: result.build_result.edges_added as i64,
         communities: result.cluster_result.communities.len() as i64,
-        report: result.report,
-    })
+        report: result.report.clone(),
+        semantic_cached: result.semantic_cached as i64,
+        llm_input_tokens: result.llm_usage.input as i64,
+        llm_output_tokens: result.llm_usage.output as i64,
+        llm_api_calls: result.llm_usage.calls as i64,
+        communities_labeled: result
+            .community_labels
+            .map(|s| s.labeled as i64)
+            .unwrap_or(-1),
+        communities_reused: result
+            .community_labels
+            .map(|s| s.reused as i64)
+            .unwrap_or(-1),
+        communities_failed: result
+            .community_labels
+            .map(|s| s.failed as i64)
+            .unwrap_or(-1),
+        deep_links: result
+            .deep_links
+            .map(|s| s.links_added as i64)
+            .unwrap_or(-1),
+    }
 }
 
 #[napi]
@@ -471,6 +705,27 @@ pub fn token_benchmark(root: String) -> napi::Result<String> {
 }
 
 #[napi]
+pub fn callflow_mermaid(
+    root: String,
+    node: String,
+    depth: i64,
+    direction: String,
+) -> napi::Result<String> {
+    let root_pb = PathBuf::from(&root);
+    let root_pb = root_pb
+        .canonicalize()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let (db, astria_dir) = pipeline::load_graph_db_flexible(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let db_path_str = astria_dir
+        .as_ref()
+        .map(|d| astria_paths::normalize(&d.join("db.sqlite")))
+        .unwrap_or_else(|| root.clone());
+    query::callflow_mermaid(&db, &db_path_str, &node, depth.max(1) as usize, &direction)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+#[napi]
 #[allow(clippy::too_many_arguments)]
 pub fn query_graph(
     root: String,
@@ -496,44 +751,22 @@ pub fn query_graph(
         .unwrap_or_else(|| root.clone());
     let started = std::time::Instant::now();
 
-    // Hybrid recall: when node embeddings exist and the model is cached,
-    // semantic candidates rescue questions with zero string overlap.
-    // Both gates are required so a query never downloads a model.
-    #[cfg(feature = "embed")]
-    let semantic: Vec<(String, f64)> =
-        if astria_embed::has_embeddings(&db) && astria_embed::model_cached() {
-            astria_embed::load_embedder()
-                .ok()
-                .and_then(|mut embedder| {
-                    astria_embed::semantic_scores(&db, &mut embedder, &question).ok()
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-    #[cfg(not(feature = "embed"))]
-    let semantic: Vec<(String, f64)> = Vec::new();
-
-    let (text, node_count, edge_count, next_cursor) = query::query_graph_with_semantic(
-        &db,
-        &db_path_str,
-        &question,
-        &mode,
-        depth as usize,
-        budget,
-        directed.unwrap_or(false),
-        min_strength_for(&detail),
-        cursor.unwrap_or(0).max(0) as usize,
-        &semantic,
-    )
-    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let graph_built_at = db
-        .query_row(
-            "SELECT finished_at FROM pipeline_runs WHERE status = 'completed' ORDER BY id DESC LIMIT 1",
-            [],
-            |row| row.get::<_, String>(0),
+    // `--detail high` also prefers file-level nodes when rendering answers.
+    let prefer_files = min_strength_for(&detail) >= 0.9;
+    let ((text, node_count, edge_count, next_cursor), graph_built_at) =
+        query::query_graph_with_metadata(
+            &db,
+            &db_path_str,
+            &question,
+            &mode,
+            depth as usize,
+            budget,
+            directed.unwrap_or(false),
+            min_strength_for(&detail),
+            cursor.unwrap_or(0).max(0) as usize,
+            prefer_files,
         )
-        .ok();
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     pipeline::record_query_feedback(
         astria_dir.as_deref(),
         "query",
@@ -813,11 +1046,6 @@ pub fn ingest_url(
             root_pb.display()
         )));
     }
-    let db_path_str = astria_paths::normalize(&astria_paths::db_path(
-        &root_pb
-            .canonicalize()
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?,
-    )?);
 
     let opts = astria_ingest::IngestOptions {
         author,
@@ -828,9 +1056,8 @@ pub fn ingest_url(
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     // Incremental update picks the new file up (hash manifest sees it as new)
-    pipeline::run_pipeline_with(&root_pb, true, false)
+    pipeline::run_pipeline_with(&root_pb, true, false, false, false)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    query::invalidate_graph_cache(&db_path_str);
 
     Ok(IngestResultJs {
         saved_path: astria_paths::normalize(&saved),
@@ -871,7 +1098,6 @@ pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let db =
         pipeline::load_graph_db(&root_pb).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let db_path_str = astria_paths::normalize(&root_pb.join(".astria").join("db.sqlite"));
 
     let cluster_result =
         astria_cluster::cluster(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
@@ -883,13 +1109,19 @@ pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
     let astria_dir = root_pb.join(".astria");
     let _ = std::fs::write(astria_dir.join("graph_report.md"), &report);
 
-    query::invalidate_graph_cache(&db_path_str);
-
     Ok(PipelineResultJs {
         nodes_added: 0,
         edges_added: 0,
         communities: cluster_result.communities.len() as i64,
         report,
+        semantic_cached: 0,
+        llm_input_tokens: 0,
+        llm_output_tokens: 0,
+        llm_api_calls: 0,
+        communities_labeled: -1,
+        communities_reused: -1,
+        communities_failed: -1,
+        deep_links: -1,
     })
 }
 
@@ -910,6 +1142,14 @@ pub fn merge_graphs(
         edges_added: result.edges_added,
         communities: result.communities as i64,
         report: result.report,
+        semantic_cached: 0,
+        llm_input_tokens: 0,
+        llm_output_tokens: 0,
+        llm_api_calls: 0,
+        communities_labeled: -1,
+        communities_reused: -1,
+        communities_failed: -1,
+        deep_links: -1,
     })
 }
 
@@ -981,8 +1221,9 @@ mod tests {
         let db = open_db_in_memory().unwrap();
         let key = format!(":memory:empty_{}", std::process::id());
         let (text, nodes, edges, _) =
-            query::query_graph(&db, &key, "anything", "bfs", 3, 2000, false, 0.0, 0).unwrap();
-        assert_eq!(text, "No nodes in graph.");
+            query::query_graph(&db, &key, "anything", "bfs", 3, 2000, false, 0.0, 0, false)
+                .unwrap();
+        assert_eq!(text, "No nodes in graph.\n");
         assert_eq!(nodes, 0);
         assert_eq!(edges, 0);
     }
@@ -992,9 +1233,20 @@ mod tests {
         let db = open_db_in_memory().unwrap();
         seed_graph(&db, &[("n1", "Alpha", "f.py", None)], &[]);
         let key = format!(":memory:nomatch_{}", std::process::id());
-        let (text, nodes, _, _) =
-            query::query_graph(&db, &key, "xyznonexistent", "bfs", 3, 2000, false, 0.0, 0).unwrap();
-        assert_eq!(text, "No matching nodes found.");
+        let (text, nodes, _, _) = query::query_graph(
+            &db,
+            &key,
+            "xyznonexistent",
+            "bfs",
+            3,
+            2000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        assert_eq!(text, "No matching nodes found.\n");
         assert_eq!(nodes, 0);
     }
 
@@ -1012,7 +1264,7 @@ mod tests {
         );
         let key = format!(":memory:bfs_{}", std::process::id());
         let (text, nodes, _edges, _) =
-            query::query_graph(&db, &key, "Alpha", "bfs", 2, 2000, false, 0.0, 0).unwrap();
+            query::query_graph(&db, &key, "Alpha", "bfs", 2, 2000, false, 0.0, 0, false).unwrap();
         assert!(nodes > 0);
         assert!(text.contains("Alpha"));
     }
@@ -1027,7 +1279,7 @@ mod tests {
         );
         let key = format!(":memory:dfs_{}", std::process::id());
         let (text, nodes, _, _) =
-            query::query_graph(&db, &key, "Alpha", "dfs", 2, 2000, false, 0.0, 0).unwrap();
+            query::query_graph(&db, &key, "Alpha", "dfs", 2, 2000, false, 0.0, 0, false).unwrap();
         assert!(nodes > 0);
         assert!(text.contains("Alpha"));
     }

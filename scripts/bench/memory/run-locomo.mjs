@@ -7,7 +7,7 @@
 //   node scripts/bench/memory/run-locomo.mjs \
 //     [--corpus bench-work/locomo-corpus] [--qa bench-work/locomo-qa.jsonl] \
 //     [--out bench-work/locomo-results.json] [--limit N] [--k 1,3,5,10]
-//     [--no-build] [--judge]
+//     [--no-build] [--judge] [--embed]
 //
 // --judge needs ANTHROPIC_API_KEY (claude-haiku grading) and adds
 // "judged_correct" per row; without it the run is recall-only.
@@ -29,6 +29,7 @@ function parseArgs(argv) {
     limit: 0,
     build: true,
     judge: false,
+    embed: false,
   };
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === '--corpus') o.corpus = path.resolve(argv[++i]);
@@ -37,6 +38,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--limit') o.limit = Number(argv[++i]);
     else if (argv[i] === '--k') o.k = argv[++i].split(',').map(Number);
     else if (argv[i] === '--no-build') o.build = false;
+    else if (argv[i] === '--embed') o.embed = true;
     else if (argv[i] === '--judge') o.judge = true;
     else { console.error(`unknown arg: ${argv[i]}`); process.exit(2); }
   }
@@ -103,7 +105,8 @@ async function main() {
 
   if (o.build) {
     console.log('building graph ...');
-    const r = spawnSync('astria run .', { cwd: o.corpus, encoding: 'utf8', shell: true, timeout: 600_000 });
+    const embedFlag = o.embed ? ' --embed' : '';
+    const r = spawnSync(`astria run .${embedFlag}`, { cwd: o.corpus, encoding: 'utf8', shell: true, timeout: 600_000 });
     if (r.status !== 0) { console.error(r.stderr || r.stdout); process.exit(1); }
   }
 

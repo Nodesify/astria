@@ -107,15 +107,20 @@ pub fn generate_report(db: &Connection, analysis: &AnalysisResult) -> astria_cor
 
     report.push_str("## Communities\n\n");
     {
-        let communities_stmt =
-            db.prepare("SELECT label, size, cohesion FROM communities ORDER BY size DESC LIMIT 10");
+        let communities_stmt = db.prepare(
+            "SELECT label, size, cohesion, summary, label_source
+             FROM communities ORDER BY size DESC LIMIT 10",
+        );
         if let Ok(mut stmt) = communities_stmt {
-            let rows: Vec<(String, i64, Option<f64>)> = stmt
+            #[allow(clippy::type_complexity)]
+            let rows: Vec<(String, i64, Option<f64>, Option<String>, String)> = stmt
                 .query_map([], |r| {
                     Ok((
                         r.get::<_, String>(0)?,
                         r.get::<_, i64>(1)?,
                         r.get::<_, Option<f64>>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, String>(4)?,
                     ))
                 })?
                 .filter_map(|r| r.ok())
@@ -123,11 +128,25 @@ pub fn generate_report(db: &Connection, analysis: &AnalysisResult) -> astria_cor
             if rows.is_empty() {
                 report.push_str("No communities detected.\n\n");
             } else {
-                for (label, size, cohesion) in &rows {
+                for (label, size, cohesion, summary, source) in &rows {
                     let coh = cohesion
                         .map(|c| format!("{c:.2}"))
                         .unwrap_or_else(|| "-".into());
-                    report.push_str(&format!("- **{label}** ({size} nodes, cohesion {coh})\n"));
+                    // An LLM label is a summary of the code; a hub/thematic
+                    // label is a fact about it — the report says which.
+                    let source_tag = if source == "llm" {
+                        String::new()
+                    } else {
+                        " `[hub]`".to_string()
+                    };
+                    report.push_str(&format!(
+                        "- **{label}**{source_tag} ({size} nodes, cohesion {coh})\n"
+                    ));
+                    if let Some(summary) = summary {
+                        if !summary.is_empty() {
+                            report.push_str(&format!("  {summary}\n"));
+                        }
+                    }
                 }
                 if community_count > rows.len() as i64 {
                     report.push_str(&format!(

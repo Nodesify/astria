@@ -1,6 +1,7 @@
 // refs: cross-file reference resolution — matches call/import targets
 // against all known node ids once every file has been extracted.
 
+use crate::naming::make_target_id;
 use crate::schema::Extraction;
 use std::collections::HashMap;
 
@@ -16,12 +17,16 @@ use std::collections::HashMap;
 pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
     // Collect all known node IDs and their labels
     let mut known_ids: HashMap<String, String> = HashMap::new();
+    let mut label_counts: HashMap<String, usize> = HashMap::new();
     let mut bare_counts: HashMap<String, usize> = HashMap::new();
     let mut bare_ids: HashMap<String, String> = HashMap::new();
     for ext in results.iter() {
         for node in &ext.nodes {
-            // Map: lowercase label -> actual node ID
-            known_ids.insert(node.label.to_lowercase(), node.id.clone());
+            // Use the same canonical spelling as call targets, including
+            // qualified JS bindings such as `response.sendFile()`.
+            let label = make_target_id(node.label.trim_end_matches("()"));
+            known_ids.insert(label.clone(), node.id.clone());
+            *label_counts.entry(label).or_insert(0) += 1;
             // Also map by the last segment of the ID (e.g. "greet" from "main::Greeter::greet")
             let parts: Vec<&str> = node.id.split("::").collect();
             if let Some(last) = parts.last() {
@@ -34,6 +39,26 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
 
     // Resolve edges
     for ext in results.iter_mut() {
+        // A unique definition in the caller's own file takes precedence over
+        // names in unrelated modules. Multiple methods with the same name in
+        // one file remain ambiguous; this is still name inference.
+        let mut local_ids: HashMap<String, Option<String>> = HashMap::new();
+        for node in &ext.nodes {
+            let name = if matches!(ext.language.as_str(), "JavaScript" | "TypeScript") {
+                make_target_id(node.label.trim_end_matches("()"))
+            } else {
+                node.id
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or(&node.id)
+                    .trim_end_matches("()")
+                    .to_lowercase()
+            };
+            local_ids
+                .entry(name)
+                .and_modify(|id| *id = None)
+                .or_insert_with(|| Some(node.id.clone()));
+        }
         for edge in ext.edges.iter_mut() {
             if edge.relation == "calls" || edge.relation == "imports" {
                 // Try the full target, then just its last segment — a call
@@ -46,21 +71,34 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
                     .next()
                     .unwrap_or(&edge.target)
                     .to_lowercase();
-                let real_id = known_ids.get(&target_lower).or_else(|| {
-                    // Bare-name resolution only when unambiguous.
-                    if bare_counts.get(&last_segment) == Some(&1) {
-                        bare_ids.get(&last_segment)
-                    } else {
-                        None
-                    }
-                });
+                let local_id = if !target_lower.contains("::") {
+                    local_ids
+                        .get(target_lower.trim_end_matches("()"))
+                        .and_then(Option::as_ref)
+                } else {
+                    None
+                };
+                let real_id = local_id
+                    .or_else(|| {
+                        known_ids
+                            .get(&target_lower)
+                            .filter(|_| label_counts.get(&target_lower) == Some(&1))
+                    })
+                    .or_else(|| {
+                        // Bare-name resolution only when unambiguous.
+                        if !label_counts.contains_key(&target_lower)
+                            && bare_counts.get(&last_segment) == Some(&1)
+                        {
+                            bare_ids.get(&last_segment)
+                        } else {
+                            None
+                        }
+                    });
                 if let Some(real_id) = real_id {
                     if real_id != &edge.target {
                         edge.target = real_id.clone();
-                        if edge.confidence == "INFERRED" {
-                            edge.confidence = "EXTRACTED".to_string();
-                            edge.confidence_score = Some(0.9);
-                        }
+                        // A unique name match is still a heuristic, not
+                        // compiler-proven binding. Preserve its evidence tier.
                     }
                 }
             }
@@ -115,8 +153,9 @@ mod tests {
         ];
         resolve_cross_file_references(&mut results);
         assert_eq!(results[1].edges[0].target, "src_x::run");
-        assert_eq!(results[1].edges[0].confidence, "EXTRACTED");
-        assert_eq!(results[1].edges[0].confidence_score, Some(0.9));
+        // Resolving a unique name does not make the binding compiler-proven.
+        assert_eq!(results[1].edges[0].confidence, "INFERRED");
+        assert_eq!(results[1].edges[0].confidence_score, Some(0.7));
     }
 
     #[test]

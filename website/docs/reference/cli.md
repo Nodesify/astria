@@ -17,14 +17,16 @@ astria run <path> --wiki          # ...also export a markdown wiki to .astria/wi
 astria run <path> --embed         # ...also compute local embeddings (similar_to edges + semantic query recall)
 astria run <path> --backend openai --model gpt-4o-mini  # ...with LLM semantic enrichment (see Semantic enrichment)
 astria run <path> --global --as <tag>  # ...also merge this repo into the cross-repo global graph (see Global graph)
-astria update <path>              # Incremental rebuild (only changed files; regenerates an existing wiki)
+astria update <path>              # Reuse cached ASTs, reconcile current corpus; regenerate an existing wiki
 astria watch <path> [--debounce 3000]  # Watch for file changes, auto-rebuild
 astria cluster-only <path>        # Re-cluster + analyze + report without re-extracting
 astria merge <pathA> <pathB> <outPath>  # Merge two graphs
 astria diff <pathA> <pathB>       # Compare two graphs
 ```
 
-`run` and `update` accept `--backend <claude|openai|gemini>` and `--model <name>` (per-run LLM enrichment without env vars) and `--no-dedup` (skip near-duplicate node merging).
+`run` and `update` accept `--backend <claude|openai|gemini|none>` and `--model <name>` (per-run LLM enrichment without env vars) and `--no-dedup` (skip near-duplicate semantic entity merging). Code definitions retain their identities even when labels match across classes or files.
+
+Backend selection must be explicit through `--backend` or `ASTRIA_LLM_BACKEND`; credentials alone do not activate it. `none` disables enrichment. Cached ASTs avoid reparsing unchanged files, while references are reconciled across the current corpus. Graph facts and the manifest commit together after successful extraction; derived passes rerun after that commit and can be retried on the next update.
 
 Builds also pick up, automatically:
 
@@ -49,12 +51,16 @@ astria history [--limit 20] [--graph .]        # Show recent query history
 
 - `--dfs` — depth-first instead of breadth-first traversal
 - `--depth N` — maximum traversal depth
-- `--budget N` — output token budget (default 2000)
+- `--budget N` — maximum query text tokens using `o200k_base`, including headers and continuation metadata (default 2000)
 - `--directed` — follow edge direction instead of treating the graph as undirected
-- `--detail high` — fidelity tier: only declared (`EXTRACTED`) facts
-- `--cursor N` — continuation cursor for truncated traversals
+- `--detail high` — fidelity tier: only declared (`EXTRACTED`) facts, regardless of usage-adjusted confidence scores
+- `--cursor N` — continuation cursor for truncated traversals; use the returned value, which advances through node and edge records
 
-Query output reports when the graph was last built, so agents can judge freshness. Repeated queries promote recurring node pairs into `learned` edges — see [learning from usage](#learning-from-usage).
+CLI and MCP share hybrid retrieval and load a fresh SQLite graph snapshot for each request. Query output reports when the graph was last built, so agents can judge freshness. Repeated queries promote recurring node pairs into `learned` edges — see [learning from usage](#learning-from-usage).
+
+Query ranking favors complete identifier matches and implementing definitions. Explicit requests for tests, examples, or documentation retain those results; inline Rust test functions are classified from their test attributes and modules. JavaScript and TypeScript extraction includes functions assigned to variables, object properties, members, and CommonJS exports. Static receiver names can resolve calls, but runtime receiver types and aliases are not inferred. Python overload declarations yield to a concrete implementation in the same scope, preserving its body and documentation.
+
+Query budgets must be positive and large enough for metadata and the next complete record; otherwise the query returns an error. Continuation cursors address the current result's node and edge records. Start a new query after rebuilding the graph, and do not reuse cursors from older versions that counted only nodes.
 
 ### Query log (for tooling)
 

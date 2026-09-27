@@ -1,29 +1,14 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock, RwLock};
 
-use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use rusqlite::Connection;
 
 use astria_paths::relative_display;
 
-/// Fraction of the output budget reserved for EDGE lines. Nodes alone are
-/// capped at this share so a traversal never returns a bag of labels with
-/// the relationships truncated away.
-const NODE_BUDGET_SHARE: f64 = 0.6;
 /// How many near-miss labels to suggest when a query matches nothing.
 const SUGGESTION_COUNT: usize = 3;
-
-/// Global cache of loaded graphs, keyed by normalized DB path.
-static GRAPH_CACHE: LazyLock<RwLock<HashMap<String, Arc<LoadedGraph>>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-
-/// Invalidate the cached graph for a given DB path. Called after pipeline runs.
-pub fn invalidate_graph_cache(db_path: &str) {
-    let mut cache = GRAPH_CACHE.write().unwrap();
-    cache.remove(db_path);
-}
 
 fn log_query(db: &Connection, question: &str, answer: &str) {
     let ts = std::time::SystemTime::now()
@@ -59,6 +44,17 @@ struct EdgeData {
 }
 
 impl EdgeData {
+    fn meets_detail(&self, min_strength: f64) -> bool {
+        if min_strength >= 0.9 {
+            matches!(
+                self.confidence.to_ascii_uppercase().as_str(),
+                "EXTRACTED" | "DECLARED"
+            )
+        } else {
+            self.strength() >= min_strength
+        }
+    }
+
     /// Effective strength of this edge: the stored numeric score when
     /// present, otherwise a rank derived from the confidence label.
     fn strength(&self) -> f64 {
@@ -210,18 +206,21 @@ fn load_graph(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph
     })
 }
 
-fn load_graph_cached(db: &Connection, db_path: &str) -> astria_core::Result<Arc<LoadedGraph>> {
-    {
-        let cache = GRAPH_CACHE.read().unwrap();
-        if let Some(entry) = cache.get(db_path) {
-            return Ok(Arc::clone(entry));
-        }
-    }
+// Read both tables in one SQLite snapshot. Reloading avoids stale state after
+// external commits, local writes, and rollbacks.
+fn read_snapshot(db: &Connection) -> astria_core::Result<Option<rusqlite::Transaction<'_>>> {
+    Ok(if db.is_autocommit() {
+        Some(db.unchecked_transaction()?)
+    } else {
+        None
+    })
+}
 
-    let loaded = Arc::new(load_graph(db, db_path)?);
-    {
-        let mut cache = GRAPH_CACHE.write().unwrap();
-        cache.insert(db_path.to_string(), Arc::clone(&loaded));
+fn load_graph_snapshot(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph> {
+    let transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
     }
     Ok(loaded)
 }
@@ -250,20 +249,17 @@ fn iter_neighbors_filtered<'a>(
     idx: NodeIndex,
     directed: bool,
     min_strength: f64,
-) -> impl Iterator<Item = NodeIndex> + 'a {
-    let outgoing = graph
+) -> impl Iterator<Item = (NodeIndex, EdgeIndex)> + 'a {
+    graph
         .edges_directed(idx, Direction::Outgoing)
-        .filter(move |e| e.weight().strength() >= min_strength)
-        .map(|e| e.target());
-    if directed {
-        Box::new(outgoing) as Box<dyn Iterator<Item = NodeIndex> + 'a>
-    } else {
-        let incoming = graph
-            .edges_directed(idx, Direction::Incoming)
-            .filter(move |e| e.weight().strength() >= min_strength)
-            .map(|e| e.source());
-        Box::new(outgoing.chain(incoming)) as Box<dyn Iterator<Item = NodeIndex> + 'a>
-    }
+        .filter(move |e| e.weight().meets_detail(min_strength))
+        .map(|e| (e.target(), e.id()))
+        .chain(
+            graph
+                .edges_directed(idx, Direction::Incoming)
+                .filter(move |e| !directed && e.weight().meets_detail(min_strength))
+                .map(|e| (e.source(), e.id())),
+        )
 }
 
 /// The strongest edge connecting `a` and `b`, in either direction.
@@ -366,24 +362,228 @@ const STOPWORDS: &[&str] = &[
     "each", "other", "more", "most",
 ];
 
-/// Hybrid seed scoring, layered from cheap/exact to expensive/fuzzy so a
-/// paraphrased or slightly-misspelled question still finds its entry nodes:
-/// 1. label/path substring, exact & prefix token match (deterministic, free)
-/// 2. docstring token matches (where prose descriptions of symbols live)
-/// 3. fuzzy token match (Jaro-Winkler) for typos and word variants
+/// Import-graph degree per node: how many `imports` edges leave and enter
+/// each node. Entry-point questions ("what is the CLI entry point") ask for
+/// a structural fact — the file execution starts from — that the import DAG
+/// encodes (imports many modules, imported by none) and no file name spells
+/// out; lexical scoring can never see it.
+fn import_degrees(
+    loaded: &LoadedGraph,
+) -> (
+    std::collections::HashMap<NodeIndex, u32>,
+    std::collections::HashMap<NodeIndex, u32>,
+) {
+    let (mut out, mut inc) = (
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+    );
+    for e in loaded.graph.edge_references() {
+        if loaded.graph[e.id()].relation == "imports" {
+            *out.entry(e.source()).or_insert(0u32) += 1;
+            *inc.entry(e.target()).or_insert(0u32) += 1;
+        }
+    }
+    (out, inc)
+}
+
+/// Test/spec/example files import many modules and are imported by none —
+/// structurally indistinguishable from an entry file — but they are never
+/// the program's front door, so they are excluded from entry candidacy.
+fn is_testish_path(path: &str) -> bool {
+    let p = path.to_lowercase().replace('\\', "/");
+    p.split('/').any(|segment| {
+        let words = tokenize(segment);
+        words.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "test"
+                    | "tests"
+                    | "spec"
+                    | "specs"
+                    | "example"
+                    | "examples"
+                    | "fixture"
+                    | "fixtures"
+                    | "benchmark"
+                    | "benchmarks"
+            )
+        })
+    })
+}
+
+/// Phrases whose presence marks a question as asking for the program's
+/// starting file rather than a concept.
+const ENTRY_INTENT_PHRASES: &[&str] = &[
+    "entry point",
+    "entrypoint",
+    "main file",
+    "starting point",
+    "bootstrap",
+];
+
+/// Minimum outgoing imports for a file to count as an entry candidate —
+/// below this it is a leaf module, not a front door.
+const ENTRY_MIN_IMPORTS: u32 = 3;
+
+/// IDF floor/floor-cap: even a term in every label keeps a quarter of its
+/// label weight, so ubiquitous terms still break ties, just never dominate.
+const IDF_FLOOR: f64 = 0.25;
+
+/// Score complete normalized identifiers above partial component matches.
+fn normalized_identifier(text: &str) -> String {
+    tokenize(text).concat()
+}
+
+/// Reservation applies to written identifiers, not ordinary prose terms.
+fn is_explicit_identifier(term: &str) -> bool {
+    let quoted = term.starts_with(['`', '\"', '\'']);
+    let text = term.trim_matches(|c: char| matches!(c, '`' | '\"' | '\'' | ',' | '?' | '!' | ';'));
+    quoted
+        || text.contains(['_', '-', '.', '/', '\\', ':', '('])
+        || text
+            .chars()
+            .zip(text.chars().skip(1))
+            .any(|(a, b)| a.is_lowercase() && b.is_uppercase())
+}
+
+fn component_coverage(needle: &[String], haystack: &[String]) -> f64 {
+    if needle.is_empty() {
+        return 0.0;
+    }
+    needle
+        .iter()
+        .filter(|part| {
+            haystack
+                .iter()
+                .any(|word| word == *part || stem(word) == stem(part))
+        })
+        .count() as f64
+        / needle.len() as f64
+}
+
+fn wants_docs(terms: &[String]) -> bool {
+    terms.iter().flat_map(|t| tokenize(t)).any(|t| {
+        matches!(
+            t.as_str(),
+            "docs" | "documentation" | "readme" | "guide" | "tutorial"
+        )
+    })
+}
+
 fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> {
+    // IDF weights + per-node lowercase labels, one shared pre-pass.
+    let n_nodes = loaded.graph.node_count().max(1) as f64;
+    let ln_nodes = n_nodes.ln().max(1.0);
+    let labels_lower: Vec<String> = loaded
+        .graph
+        .node_indices()
+        .map(|idx| loaded.graph[idx].label.to_lowercase())
+        .collect();
+    let label_components: Vec<Vec<String>> = loaded
+        .graph
+        .node_indices()
+        .map(|idx| tokenize(&loaded.graph[idx].label))
+        .collect();
+    let mut idf: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
+    let mut effective: Vec<&String> = Vec::new();
+    for term in terms {
+        let t = term.trim();
+        if t.len() <= 2 || STOPWORDS.contains(&t.to_lowercase().as_str()) {
+            continue;
+        }
+        effective.push(term);
+    }
+    for term in &effective {
+        let parts = tokenize(term);
+        let hits = label_components
+            .iter()
+            .filter(|parts_in_label| component_coverage(&parts, parts_in_label) == 1.0)
+            .count();
+        let w = if hits == 0 {
+            1.0
+        } else {
+            ((n_nodes / hits as f64).ln() / ln_nodes).clamp(IDF_FLOOR, 1.0)
+        };
+        idf.insert(term.as_str(), w);
+    }
+    let idf_weight = |term: &str| -> f64 { idf.get(term).copied().unwrap_or(1.0) };
+
+    // Entry-point intent: detect once, pay for the degree maps only then.
+    let joined = terms.join(" ").to_lowercase();
+    let wants_tests = terms.iter().flat_map(|t| tokenize(t)).any(|t| {
+        matches!(
+            t.as_str(),
+            "test"
+                | "tests"
+                | "testing"
+                | "spec"
+                | "specs"
+                | "benchmark"
+                | "benchmarks"
+                | "example"
+                | "examples"
+        )
+    });
+    let wants_docs = wants_docs(terms);
+    let wants_entry = ENTRY_INTENT_PHRASES.iter().any(|p| joined.contains(p));
+    let (imports_out, imports_in) = if wants_entry {
+        import_degrees(loaded)
+    } else {
+        (
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        )
+    };
+
     let mut scored: Vec<(f64, NodeIndex)> = Vec::new();
-    for idx in loaded.graph.node_indices() {
+    let mut entry_candidates = HashSet::new();
+    for (i, idx) in loaded.graph.node_indices().enumerate() {
         let node = &loaded.graph[idx];
         // Code answers rank above documentation and speculative stubs on
         // equal term evidence: without the prior, prose-heavy doc nodes and
         // std-call stubs crowd code symbols out of the seed set.
-        let prior = match node.file_type.as_str() {
-            "code" | "rationale" | "package" => 1.0,
-            "stub" | "document" | "reference" | "paper" | "image" | "video" => 0.85,
-            _ => 1.0,
+        let is_doc = matches!(node.file_type.as_str(), "document" | "reference" | "paper");
+        let symbol_parts = &label_components[i];
+        let is_test = node.file_type == "test"
+            || is_testish_path(&node.source_file)
+            || symbol_parts
+                .first()
+                .is_some_and(|p| matches!(p.as_str(), "test" | "tests" | "spec" | "bench"))
+            || node.id.contains("::tests::");
+        let prior = if is_test {
+            if wants_tests {
+                1.25
+            } else {
+                0.4
+            }
+        } else if is_doc {
+            if wants_docs {
+                1.25
+            } else {
+                0.55
+            }
+        } else if node.file_type == "stub" {
+            0.4
+        } else {
+            1.0
         };
-        let label_tokens = tokenize(&node.label);
+        // Consecutive question tokens that appear verbatim in a node's label
+        // or docstring ("blast radius") mark the node as the concept's home;
+        // token-level scoring alone treats the words as unrelated and loses
+        // to weaker-but-lexically-luckier matches.
+        let doc_lower = node.docstring.as_deref().map(|d| d.to_lowercase());
+        let label_lower_full = labels_lower[i].clone();
+        let mut phrase_bonus = 0.0f64;
+        for w in terms.windows(2) {
+            let phrase = format!("{} {}", w[0].to_lowercase(), w[1].to_lowercase());
+            let hit = label_lower_full.contains(&phrase)
+                || doc_lower.as_deref().is_some_and(|d| d.contains(&phrase));
+            if hit {
+                phrase_bonus += 0.5;
+            }
+        }
+        let phrase_bonus = phrase_bonus.min(1.0);
+        let label_tokens = &label_components[i];
         let file_tokens = tokenize(&node.source_file);
         let doc_tokens: Vec<String> = node
             .docstring
@@ -405,79 +605,60 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
                 continue;
             }
             let term_tokens = tokenize(term);
-            let label_lower = node.label.to_lowercase();
-            let sf_lower = node.source_file.to_lowercase();
-
-            // Layer 1: label + path
-            let label_score = if label_lower.contains(&term_lower) {
-                1.0
+            let normalized = normalized_identifier(term);
+            let label_normalized = normalized_identifier(&node.label);
+            let coverage = component_coverage(&term_tokens, label_tokens);
+            let label_score = if normalized == label_normalized {
+                4.0
+            } else if coverage == 1.0 {
+                2.0
             } else {
-                term_tokens
-                    .iter()
-                    .map(|tt| {
-                        let st = stem(tt);
-                        if label_tokens
-                            .iter()
-                            .any(|lt| lt == tt || stem(lt) == st || stem(lt).starts_with(st))
-                        {
-                            0.9
-                        } else if label_tokens.iter().any(|lt| lt.starts_with(tt.as_str())) {
-                            0.7
-                        } else if label_tokens.iter().any(|lt| lt.contains(tt.as_str())) {
-                            0.5
-                        } else {
-                            0.0
-                        }
-                    })
-                    .fold(0.0_f64, f64::max)
+                0.5 * coverage * coverage
             };
-
-            // Layer 2: docstring prose
-            let doc_score = if !doc_tokens.is_empty() {
-                let exact = doc_tokens.iter().any(|dt| {
-                    term_tokens
-                        .iter()
-                        .any(|tt| dt == tt || stem(dt) == stem(tt))
-                });
-                let contains = node
-                    .docstring
-                    .as_deref()
-                    .map(|d| d.to_lowercase().contains(&term_lower))
-                    .unwrap_or(false);
-                if exact {
-                    0.4
-                } else if contains {
-                    0.35
-                } else {
-                    0.0
-                }
-            } else {
-                0.0
-            };
-
-            // Layer 3: path + fuzzy fallback (typo / word-variant rescue)
-            let path_score = if sf_lower.contains(&term_lower)
-                || file_tokens.iter().any(|ft| term_tokens.contains(ft))
-            {
-                0.5
-            } else {
-                0.0
-            };
+            let doc_coverage = component_coverage(&term_tokens, &doc_tokens);
+            let path_coverage = component_coverage(&term_tokens, &file_tokens);
+            let doc_score = 0.35 * doc_coverage * doc_coverage;
+            let path_score = 0.55 * path_coverage * path_coverage;
             let fuzzy_score = if label_score + doc_score + path_score == 0.0
-                && term_tokens.iter().any(|tt| {
-                    label_tokens
-                        .iter()
-                        .any(|lt| strsim::jaro_winkler(lt, tt) > 0.85)
-                }) {
-                0.4
+                && term_tokens.len() == 1
+                && label_tokens
+                    .iter()
+                    .any(|lt| strsim::jaro_winkler(lt, &term_tokens[0]) > 0.9)
+            {
+                0.15
             } else {
                 0.0
             };
-
-            score += label_score.max(doc_score) + path_score + fuzzy_score;
+            score += (label_score.max(doc_score) + path_score + fuzzy_score) * idf_weight(term);
         }
-        if score > 0.0 {
-            scored.push((score * prior, idx));
+        // Entry-point intent: a file that imports many modules and is
+        // imported by none is the program's front door, whatever it is
+        // named ("index.ts", "main.rs", "cli.py").
+        if wants_entry
+            && label_is_file(&node.label)
+            && node.file_type == "code"
+            && !is_test
+            && imports_in.get(&idx).copied().unwrap_or(0) == 0
+            && imports_out.get(&idx).copied().unwrap_or(0) >= ENTRY_MIN_IMPORTS
+        {
+            entry_candidates.insert(idx);
+        }
+        if score > 0.0 || entry_candidates.contains(&idx) {
+            scored.push(((score + phrase_bonus) * prior, idx));
+        }
+    }
+    // Explicit entry intent gives import roots precedence over lexical
+    // mentions of "entry point". The tier is derived from this candidate
+    // set, so changing lexical weights cannot drown out structural evidence.
+    if !entry_candidates.is_empty() {
+        let lexical_ceiling = scored
+            .iter()
+            .map(|(score, _)| *score)
+            .fold(0.0_f64, f64::max);
+        for (score, idx) in &mut scored {
+            if entry_candidates.contains(idx) {
+                *score += lexical_ceiling + 1.0;
+            }
         }
     }
     // Deterministic order: score desc, then label, then id.
@@ -491,11 +672,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
 }
 
 /// `(visited nodes, observed edges, hop distance from the seeds)`.
-type TraversalResult = (
-    HashSet<NodeIndex>,
-    Vec<(NodeIndex, NodeIndex)>,
-    HashMap<NodeIndex, u32>,
-);
+type TraversalResult = (HashSet<NodeIndex>, Vec<EdgeIndex>, HashMap<NodeIndex, u32>);
 
 fn bfs_subgraph(
     loaded: &LoadedGraph,
@@ -506,18 +683,20 @@ fn bfs_subgraph(
 ) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = start_nodes.iter().copied().collect();
     let mut frontier: Vec<NodeIndex> = start_nodes.to_vec();
-    let mut edges_seen: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+    let mut edges_seen: Vec<EdgeIndex> = Vec::new();
     let mut distance: HashMap<NodeIndex, u32> = start_nodes.iter().map(|&n| (n, 0)).collect();
 
     for depth in 0..max_depth {
         let mut next_frontier = Vec::new();
         for &node in &frontier {
-            for neighbor in iter_neighbors_filtered(&loaded.graph, node, directed, min_strength) {
+            for (neighbor, edge_id) in
+                iter_neighbors_filtered(&loaded.graph, node, directed, min_strength)
+            {
                 if !visited.contains(&neighbor) {
                     visited.insert(neighbor);
                     distance.insert(neighbor, depth as u32 + 1);
                     next_frontier.push(neighbor);
-                    edges_seen.push((node, neighbor));
+                    edges_seen.push(edge_id);
                 }
             }
         }
@@ -537,7 +716,7 @@ fn dfs_subgraph(
     min_strength: f64,
 ) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut edges_seen: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+    let mut edges_seen: Vec<EdgeIndex> = Vec::new();
     let mut stack: Vec<(NodeIndex, usize)> = start_nodes.iter().rev().map(|&n| (n, 0)).collect();
 
     while let Some((node, depth)) = stack.pop() {
@@ -545,31 +724,44 @@ fn dfs_subgraph(
             continue;
         }
         visited.insert(node);
-        for neighbor in iter_neighbors_filtered(&loaded.graph, node, directed, min_strength) {
+        if depth == max_depth {
+            continue;
+        }
+        for (neighbor, edge_id) in
+            iter_neighbors_filtered(&loaded.graph, node, directed, min_strength)
+        {
             if !visited.contains(&neighbor) {
                 stack.push((neighbor, depth + 1));
-                edges_seen.push((node, neighbor));
+                edges_seen.push(edge_id);
             }
         }
     }
     (visited, edges_seen, HashMap::new())
 }
 
+/// A label that names a file ("lib.rs", "benchmark.md") rather than a symbol.
+fn label_is_file(label: &str) -> bool {
+    match label.rfind('.') {
+        Some(dot) if dot > 0 => {
+            let ext = &label[dot + 1..];
+            !ext.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        }
+        _ => false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn subgraph_to_text(
     loaded: &LoadedGraph,
     visited: &HashSet<NodeIndex>,
-    edges_seen: &[(NodeIndex, NodeIndex)],
+    edges_seen: &[EdgeIndex],
     relevance: &HashMap<NodeIndex, f64>,
     distance: &HashMap<NodeIndex, u32>,
+    prefer_files: bool,
     token_budget: i64,
-    mut skip_nodes: usize,
-) -> (String, Option<usize>) {
-    let char_budget = (token_budget as usize) * 3;
-    // Nodes alone may not consume more than their share — the relationships
-    // are the point of a graph traversal, so edges always keep budget.
-    let node_budget = (char_budget as f64 * NODE_BUDGET_SHARE) as usize;
-    let mut out = String::new();
-
+    skip_records: usize,
+    header: &str,
+) -> astria_core::Result<(String, Option<usize>)> {
     // Relevance-ranked, not hub-ranked: question-matched seeds surface
     // first, then nodes by traversal distance to those seeds, and only
     // then by degree. Pure degree ordering buried the files the question
@@ -596,16 +788,21 @@ fn subgraph_to_text(
                     .count()
                     .cmp(&loaded.graph.neighbors(a).count())
             })
+            .then_with(|| {
+                if prefer_files {
+                    let fa = label_is_file(&na.label);
+                    let fb = label_is_file(&nb.label);
+                    fb.cmp(&fa) // file nodes before symbols at equal relevance
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
             .then_with(|| na.label.cmp(&nb.label))
             .then_with(|| na.id.cmp(&nb.id))
     });
-    if skip_nodes >= node_list.len() {
-        skip_nodes = 0; // stale/overshot cursor: restart from the top
-    }
 
-    let mut shown_nodes = 0usize;
-    #[allow(clippy::explicit_counter_loop)]
-    for (_pos, idx) in node_list.iter().enumerate().skip(skip_nodes) {
+    let mut records = Vec::new();
+    for idx in &node_list {
         let idx = *idx;
         let node = &loaded.graph[idx];
         let comm = node.community.map_or("?".to_string(), |c| c.to_string());
@@ -626,60 +823,38 @@ fn subgraph_to_text(
                 line.push_str(&format!("  summary: {}\n", summary));
             }
         }
-        if out.len() + line.len() > node_budget && shown_nodes > 0 {
-            out.push_str(&format!(
-                "... (showing nodes {}-{} of {}; edges follow)\n",
-                skip_nodes + 1,
-                skip_nodes + shown_nodes,
-                node_list.len()
-            ));
-            let next = skip_nodes + shown_nodes;
-            let cursor = (next < node_list.len()).then_some(next);
-            return (
-                finish_edges(
-                    loaded,
-                    out,
-                    edges_seen,
-                    token_budget,
-                    char_budget,
-                    node_budget,
-                ),
-                cursor,
-            );
-        }
-        out.push_str(&line);
-        shown_nodes += 1;
+        records.push(line);
     }
-
-    (
-        finish_edges(
-            loaded,
-            out,
-            edges_seen,
-            token_budget,
-            char_budget,
-            node_budget,
-        ),
-        None,
-    )
-}
-
-/// Edge section shared by both node-loop exits: remaining budget with a
-/// floor so even a tiny budget still yields some relationships.
-fn finish_edges(
-    loaded: &LoadedGraph,
-    mut out: String,
-    edges_seen: &[(NodeIndex, NodeIndex)],
-    token_budget: i64,
-    char_budget: usize,
-    node_budget: usize,
-) -> String {
-    let edge_budget = char_budget.saturating_sub(node_budget).max(200);
-    let mut edge_spent = 0usize;
-    for (src_idx, tgt_idx) in edges_seen {
-        let src = &loaded.graph[*src_idx];
-        let tgt = &loaded.graph[*tgt_idx];
-        if let Some(edge) = edge_between(&loaded.graph, *src_idx, *tgt_idx) {
+    let mut edge_records = Vec::new();
+    let mut edge_list = edges_seen.to_vec();
+    edge_list.sort_by(|&a, &b| {
+        let key = |edge| {
+            let (source, target) = loaded.graph.edge_endpoints(edge).unwrap();
+            let score = relevance
+                .get(&source)
+                .copied()
+                .unwrap_or(0.0)
+                .max(relevance.get(&target).copied().unwrap_or(0.0));
+            (
+                score,
+                &loaded.graph[source].id,
+                &loaded.graph[target].id,
+                &loaded.graph[edge].relation,
+            )
+        };
+        let ka = key(a);
+        let kb = key(b);
+        kb.0.total_cmp(&ka.0)
+            .then_with(|| ka.1.cmp(kb.1))
+            .then_with(|| ka.2.cmp(kb.2))
+            .then_with(|| ka.3.cmp(kb.3))
+            .then_with(|| a.index().cmp(&b.index()))
+    });
+    for &edge_id in &edge_list {
+        if let Some((src_idx, tgt_idx)) = loaded.graph.edge_endpoints(edge_id) {
+            let src = &loaded.graph[src_idx];
+            let tgt = &loaded.graph[tgt_idx];
+            let edge = &loaded.graph[edge_id];
             let loc = match edge.source_line {
                 Some(l) => format!(" @{}:{}", loaded.display_path(&edge.source_file), l),
                 None => String::new(),
@@ -688,18 +863,85 @@ fn finish_edges(
                 "EDGE {} --{} [{}]--> {}{}\n",
                 src.label, edge.relation, edge.confidence, tgt.label, loc
             );
-            if edge_spent > 0 && edge_spent + line.len() > edge_budget {
-                out.push_str(&format!(
-                    "... (truncated to ~{} token budget)\n",
-                    token_budget
-                ));
-                return out;
-            }
-            out.push_str(&line);
-            edge_spent += line.len();
+            edge_records.push(line);
         }
     }
-    out
+    // Fixed interleaving keeps relationships on the first page while the
+    // cursor still addresses every complete node and edge exactly once.
+    let mut interleaved = Vec::with_capacity(records.len() + edge_records.len());
+    let mut nodes = records.into_iter();
+    let mut edges = edge_records.into_iter();
+    loop {
+        let before = interleaved.len();
+        interleaved.extend(nodes.by_ref().take(2));
+        interleaved.extend(edges.by_ref().take(1));
+        if interleaved.len() == before {
+            break;
+        }
+    }
+    render_page(header, &interleaved, skip_records, token_budget)
+}
+
+/// Public output contract: o200k_base, ordinary text (special-looking strings
+/// are encoded literally). All headers, timestamps and pagination count.
+pub fn count_response_tokens(text: &str) -> usize {
+    tiktoken_rs::o200k_base_singleton()
+        .encode_ordinary(text)
+        .len()
+}
+
+fn render_page(
+    header: &str,
+    records: &[String],
+    cursor: usize,
+    budget: i64,
+) -> astria_core::Result<(String, Option<usize>)> {
+    let limit = usize::try_from(budget)
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| {
+            astria_core::AstriaError::Graph(
+                "budget must be a positive o200k_base token count".into(),
+            )
+        })?;
+    if cursor > records.len() {
+        return Err(astria_core::AstriaError::Graph(format!(
+            "cursor {cursor} exceeds {} records",
+            records.len()
+        )));
+    }
+    let mut body = String::new();
+    let mut best = None;
+    for end in cursor..=records.len() {
+        let next = (end < records.len()).then_some(end);
+        let footer = next
+            .map(|n| format!("\n(continuation: re-run with cursor {n} for the next records)\n"))
+            .unwrap_or_default();
+        let text = format!("{header}{body}{footer}");
+        if count_response_tokens(&text) > limit {
+            break;
+        }
+        if end > cursor || end == records.len() {
+            best = Some((text, next));
+        }
+        if let Some(record) = records.get(end) {
+            body.push_str(record);
+        }
+    }
+    // A final page has no continuation footer. Even if the footer alone
+    // does not fit, the remaining complete response may still fit.
+    if best.is_none() {
+        let final_page = format!("{header}{}", records[cursor..].concat());
+        if count_response_tokens(&final_page) <= limit {
+            return Ok((final_page, None));
+        }
+    }
+    best.ok_or_else(|| {
+        astria_core::AstriaError::Graph(
+            "budget too small for the response metadata and next complete record; increase budget"
+                .into(),
+        )
+    })
 }
 
 fn shortest_path_bfs(
@@ -708,27 +950,29 @@ fn shortest_path_bfs(
     end: NodeIndex,
     directed: bool,
     min_strength: f64,
-) -> Option<Vec<NodeIndex>> {
+) -> Option<Vec<EdgeIndex>> {
     if start == end {
-        return Some(vec![start]);
+        return Some(Vec::new());
     }
     let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+    let mut parent: HashMap<NodeIndex, (NodeIndex, EdgeIndex)> = HashMap::new();
     let mut queue = std::collections::VecDeque::new();
     queue.push_back(start);
     visited.insert(start);
 
     while let Some(current) = queue.pop_front() {
-        for neighbor in iter_neighbors_filtered(&loaded.graph, current, directed, min_strength) {
+        for (neighbor, edge_id) in
+            iter_neighbors_filtered(&loaded.graph, current, directed, min_strength)
+        {
             if visited.contains(&neighbor) {
                 continue;
             }
-            parent.insert(neighbor, current);
+            parent.insert(neighbor, (current, edge_id));
             if neighbor == end {
-                let mut path = vec![end];
+                let mut path = Vec::new();
                 let mut cur = end;
-                while let Some(&p) = parent.get(&cur) {
-                    path.push(p);
+                while let Some(&(p, edge_id)) = parent.get(&cur) {
+                    path.push(edge_id);
                     cur = p;
                 }
                 path.reverse();
@@ -740,6 +984,9 @@ fn shortest_path_bfs(
     }
     None
 }
+
+/// Rendered text, node count, edge count, and pagination cursor.
+pub type QueryOutput = (String, usize, usize, Option<usize>);
 
 /// Traversal query. `min_strength` is the fidelity tier (0.0 = all facts;
 /// 0.9 = EXTRACTED/DECLARED only); `cursor` continues a previously
@@ -756,8 +1003,9 @@ pub fn query_graph(
     directed: bool,
     min_strength: f64,
     cursor: usize,
+    prefer_files: bool,
 ) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
-    query_graph_with_semantic(
+    query_graph_with_metadata(
         db,
         db_path,
         question,
@@ -767,8 +1015,64 @@ pub fn query_graph(
         directed,
         min_strength,
         cursor,
-        &[],
+        prefer_files,
     )
+    .map(|(result, _)| result)
+}
+
+/// Query output and build timestamp read from the same SQLite generation.
+#[allow(clippy::too_many_arguments)]
+pub fn query_graph_with_metadata(
+    db: &Connection,
+    db_path: &str,
+    question: &str,
+    mode: &str,
+    depth: usize,
+    budget: i64,
+    directed: bool,
+    min_strength: f64,
+    cursor: usize,
+    prefer_files: bool,
+) -> astria_core::Result<(QueryOutput, Option<String>)> {
+    let transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
+    let graph_built_at = db
+        .query_row(
+            "SELECT value FROM _meta WHERE key = 'graph_published_at'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+    // Only use an already cached model: queries never initiate a download.
+    #[cfg(feature = "embed")]
+    let semantic = if astria_embed::has_embeddings(db) && astria_embed::model_cached() {
+        astria_embed::load_embedder()
+            .ok()
+            .and_then(|mut model| astria_embed::semantic_scores(db, &mut model, question).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    #[cfg(not(feature = "embed"))]
+    let semantic: Vec<(String, f64)> = Vec::new();
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
+    }
+    query_graph_loaded(
+        db,
+        loaded,
+        question,
+        mode,
+        depth,
+        budget,
+        directed,
+        min_strength,
+        cursor,
+        &semantic,
+        prefer_files,
+        graph_built_at.as_deref(),
+    )
+    .map(|result| (result, graph_built_at))
 }
 
 /// Rescale a cosine in [0.55, 1.0] into the seed-score scale: a perfect
@@ -795,10 +1099,43 @@ pub fn query_graph_with_semantic(
     min_strength: f64,
     cursor: usize,
     semantic: &[(String, f64)],
+    prefer_files: bool,
 ) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
-    let loaded = load_graph_cached(db, db_path)?;
+    let loaded = load_graph_snapshot(db, db_path)?;
+    query_graph_loaded(
+        db,
+        loaded,
+        question,
+        mode,
+        depth,
+        budget,
+        directed,
+        min_strength,
+        cursor,
+        semantic,
+        prefer_files,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn query_graph_loaded(
+    db: &Connection,
+    loaded: LoadedGraph,
+    question: &str,
+    mode: &str,
+    depth: usize,
+    budget: i64,
+    directed: bool,
+    min_strength: f64,
+    cursor: usize,
+    semantic: &[(String, f64)],
+    prefer_files: bool,
+    graph_built_at: Option<&str>,
+) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
     if loaded.graph.node_count() == 0 {
-        return Ok(("No nodes in graph.".to_string(), 0, 0, None));
+        let (text, _) = render_page("", &["No nodes in graph.\n".into()], 0, budget)?;
+        return Ok((text, 0, 0, None));
     }
 
     let terms: Vec<String> = question.split_whitespace().map(|s| s.to_string()).collect();
@@ -833,10 +1170,69 @@ pub fn query_graph_with_semantic(
                 suggestions.join(", ")
             )
         };
-        return Ok((msg, 0, 0, None));
+        let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
+        return Ok((text, 0, 0, None));
     }
 
-    let seed_nodes: Vec<NodeIndex> = scored.iter().take(5).map(|(_, idx)| *idx).collect();
+    // Seed quota: at most 2 of 5 seeds may be documentation-type nodes.
+    // Doc headings keyword-match almost as strongly as code, and when they
+    // dominate the seed set the traversal starts in prose and never reaches
+    // the implementing crate file. Code/pattern/package seeds are unbounded.
+    let mut seed_nodes: Vec<NodeIndex> = Vec::new();
+    // Reserve one candidate per explicitly named identifier or scope when a
+    // full match exists. Weak partial words cannot claim coverage.
+    for term in &terms {
+        if !is_explicit_identifier(term) || term.len() <= 2 {
+            continue;
+        }
+        let parts = tokenize(term);
+        if let Some(&(_, idx)) = scored.iter().find(|(_, idx)| {
+            let node = &loaded.graph[*idx];
+            if node.file_type == "stub" {
+                return false;
+            }
+            normalized_identifier(term) == normalized_identifier(&node.label)
+                || (parts.len() > 1 && component_coverage(&parts, &tokenize(&node.label)) == 1.0)
+                || node
+                    .source_file
+                    .replace('\\', "/")
+                    .split('/')
+                    .any(|segment| normalized_identifier(segment) == normalized_identifier(term))
+        }) {
+            if !seed_nodes.contains(&idx) {
+                seed_nodes.push(idx);
+            }
+        }
+    }
+    let seed_limit = 5.max(seed_nodes.len());
+    let mut doc_seeds = seed_nodes
+        .iter()
+        .filter(|&&idx| {
+            matches!(
+                loaded.graph[idx].file_type.as_str(),
+                "document" | "reference" | "paper"
+            )
+        })
+        .count();
+    for &(_, idx) in scored.iter() {
+        if seed_nodes.len() == seed_limit {
+            break;
+        }
+        if seed_nodes.contains(&idx) {
+            continue;
+        }
+        let is_doc = matches!(
+            loaded.graph[idx].file_type.as_str(),
+            "document" | "reference" | "paper"
+        );
+        if is_doc {
+            if doc_seeds >= 2 && !wants_docs(&terms) {
+                continue;
+            }
+            doc_seeds += 1;
+        }
+        seed_nodes.push(idx);
+    }
     let (visited, edges_seen, distance) = if mode == "dfs" {
         dfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength)
     } else {
@@ -848,7 +1244,7 @@ pub fn query_graph_with_semantic(
         .map(|&idx| loaded.graph[idx].label.clone())
         .collect();
 
-    let header = format!(
+    let mut header = format!(
         "Traversal: {} depth={}{} | Start: {:?} | {} nodes found\n\n",
         mode.to_uppercase(),
         depth,
@@ -856,22 +1252,21 @@ pub fn query_graph_with_semantic(
         seed_labels,
         visited.len()
     );
+    if let Some(timestamp) = graph_built_at {
+        header.push_str(&format!("# graph built at {timestamp}\n"));
+    }
     let relevance: HashMap<NodeIndex, f64> = scored.iter().map(|(s, i)| (*i, *s)).collect();
-    let (body, next_cursor) = subgraph_to_text(
+    let (result_text, next_cursor) = subgraph_to_text(
         &loaded,
         &visited,
         &edges_seen,
         &relevance,
         &distance,
+        prefer_files,
         budget,
         cursor,
-    );
-    let mut result_text = header + &body;
-    if let Some(next) = next_cursor {
-        result_text.push_str(&format!(
-            "\n(continuation: re-run with cursor {next} for the next nodes)\n"
-        ));
-    }
+        &header,
+    )?;
 
     log_query(db, question, &result_text);
     record_query_pairs(db, &loaded, &seed_nodes, &visited, question);
@@ -975,10 +1370,11 @@ pub fn promote_learned_edges(
         rows.flatten().collect()
     };
 
-    db.execute(
-        "DELETE FROM edges WHERE relation = 'learned' AND source_file = 'query_history'",
-        [],
-    )?;
+    // Promotion is the only writer of `learned` edges and regenerates them
+    // from query_pairs, so drop every learned edge regardless of the
+    // source_file stamp — a stale row from an older convention would
+    // otherwise survive next to its regenerated twin.
+    db.execute("DELETE FROM edges WHERE relation = 'learned'", [])?;
 
     let tx = db.unchecked_transaction()?;
     {
@@ -1005,7 +1401,8 @@ pub fn find_shortest_path(
     directed: bool,
     min_strength: f64,
 ) -> astria_core::Result<(bool, usize, String)> {
-    let loaded = load_graph_cached(db, db_path)?;
+    let transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
     if loaded.graph.node_count() == 0 {
         return Ok((false, 0, "No nodes in graph.".to_string()));
     }
@@ -1087,21 +1484,24 @@ pub fn find_shortest_path(
         None => return Ok((false, 0, "No path found.".to_string())),
     };
 
-    let hops = path.len().saturating_sub(1);
+    let hops = path.len();
     let mut text = format!("Shortest path ({} hops):\n", hops);
 
-    for i in 0..path.len().saturating_sub(1) {
-        let src = &loaded.graph[path[i]];
-        let tgt = &loaded.graph[path[i + 1]];
-        let edge_info = edge_between(&loaded.graph, path[i], path[i + 1]);
-        let rel = edge_info.map_or("?".to_string(), |e| e.relation.clone());
-        let conf = edge_info.map_or("?".to_string(), |e| e.confidence.clone());
+    for edge_id in path {
+        let (source, target) = loaded
+            .graph
+            .edge_endpoints(edge_id)
+            .expect("traversed edge exists");
+        let edge = &loaded.graph[edge_id];
         text.push_str(&format!(
             "  {} --{} [{}]--> {}\n",
-            src.label, rel, conf, tgt.label
+            loaded.graph[source].label, edge.relation, edge.confidence, loaded.graph[target].label
         ));
     }
 
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
+    }
     let answer = format!("path found: {} hops", hops);
     log_query(
         db,
@@ -1122,7 +1522,7 @@ pub fn repo_map(
     budget: i64,
     min_strength: f64,
 ) -> astria_core::Result<(String, usize)> {
-    let loaded = load_graph_cached(db, db_path)?;
+    let loaded = load_graph_snapshot(db, db_path)?;
     if loaded.graph.node_count() == 0 {
         return Ok(("No nodes in graph.".to_string(), 0));
     }
@@ -1147,7 +1547,7 @@ pub fn repo_map(
     let mut adj: Vec<HashMap<usize, f64>> = vec![HashMap::new(); n];
     let mut out_sum: Vec<f64> = vec![0.0; n];
     for e in loaded.graph.edge_references() {
-        if e.weight().strength() < min_strength {
+        if !e.weight().meets_detail(min_strength) {
             continue;
         }
         let sf = &file_of[e.source().index()];
@@ -1233,7 +1633,8 @@ pub fn explain_with_neighbors(
     db_path: &str,
     node_id: &str,
 ) -> astria_core::Result<Option<ExplainResult>> {
-    let loaded = load_graph_cached(db, db_path)?;
+    let transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
 
     // A stub must not shadow a same-named real definition: explaining by a
     // bare name would otherwise land on a speculative node (no edges, no
@@ -1305,7 +1706,6 @@ pub fn explain_with_neighbors(
     neighbors.truncate(20);
 
     let answer = format!("explain: {} ({} neighbors)", node.label, neighbor_count);
-    log_query(db, node_id, &answer);
 
     // Hyperedge membership: which N-ary groups this node belongs to.
     let hyperedges: Vec<String> = {
@@ -1317,6 +1717,11 @@ pub fn explain_with_neighbors(
         let rows = stmt.query_map(rusqlite::params![node.id], |r| r.get::<_, String>(0))?;
         rows.filter_map(|r| r.ok()).collect()
     };
+
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
+    }
+    log_query(db, node_id, &answer);
 
     Ok(Some(ExplainResult {
         id: node.id.clone(),
@@ -1352,10 +1757,362 @@ pub struct ExplainResult {
     pub hyperedges: Vec<String>,
 }
 
+/// Mermaid call-flow diagram: breadth-first over `calls` edges from one
+/// seed node. Direction "out" renders what the node calls, "in" renders
+/// what calls it, "both" renders the union. Output is a `flowchart LR`
+/// block - GitHub, Obsidian, and mermaid.js render it natively.
+pub fn callflow_mermaid(
+    db: &Connection,
+    db_path: &str,
+    seed_query: &str,
+    depth: usize,
+    direction: &str,
+) -> astria_core::Result<String> {
+    let _transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
+    if loaded.graph.node_count() == 0 {
+        return Ok("No nodes in graph.".to_string());
+    }
+
+    // Seed resolution mirrors affected/explain: exact id wins, a stub never
+    // shadows a same-named definition, fuzzy scoring as the last resort.
+    let resolve = |q: &str| -> Option<NodeIndex> {
+        if let Some(&idx) = loaded.id_to_idx.get(q) {
+            let is_stub: bool = db
+                .query_row(
+                    "SELECT file_type = 'stub' FROM nodes WHERE id = ?1",
+                    rusqlite::params![q],
+                    |r| r.get(0),
+                )
+                .unwrap_or(false);
+            if !is_stub {
+                return Some(idx);
+            }
+            let bare = q
+                .trim_start_matches('.')
+                .trim_end_matches("()")
+                .to_lowercase();
+            if let Some(id) = astria_core::db::prefer_non_stub_id(db, &bare) {
+                if let Some(&better) = loaded.id_to_idx.get(id.as_str()) {
+                    return Some(better);
+                }
+            }
+            return Some(idx);
+        }
+        let terms: Vec<String> = q.split_whitespace().map(|s| s.to_string()).collect();
+        score_nodes(&loaded, &terms).first().map(|(_, i)| *i)
+    };
+
+    let seed = resolve(seed_query).ok_or_else(|| {
+        astria_core::AstriaError::Graph(format!("node not found: '{seed_query}'"))
+    })?;
+
+    let outgoing = direction != "in";
+    let incoming = direction != "out";
+
+    let mut seen: HashSet<NodeIndex> = HashSet::new();
+    seen.insert(seed);
+    let mut frontier: Vec<NodeIndex> = vec![seed];
+    let mut distance: HashMap<NodeIndex, u32> = [(seed, 0)].into_iter().collect();
+    let mut call_edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+
+    for level in 0..depth {
+        let mut next: Vec<NodeIndex> = Vec::new();
+        for &n in &frontier {
+            let mut consider = |other: NodeIndex| {
+                if !seen.contains(&other) {
+                    seen.insert(other);
+                    distance.insert(other, level as u32 + 1);
+                    next.push(other);
+                }
+            };
+            if outgoing {
+                for e in loaded
+                    .graph
+                    .edges_directed(n, petgraph::Direction::Outgoing)
+                {
+                    if e.weight().relation == "calls" {
+                        let t = e.target();
+                        call_edges.push((n, t));
+                        consider(t);
+                    }
+                }
+            }
+            if incoming {
+                for e in loaded
+                    .graph
+                    .edges_directed(n, petgraph::Direction::Incoming)
+                {
+                    if e.weight().relation == "calls" {
+                        let src = e.source();
+                        call_edges.push((src, n));
+                        consider(src);
+                    }
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+
+    // Stable render order: hop distance from the seed, then label, then id.
+    let mut nodes: Vec<(u32, String, String)> = seen
+        .iter()
+        .map(|idx| {
+            (
+                distance.get(idx).copied().unwrap_or(u32::MAX),
+                loaded.graph[*idx].label.clone(),
+                loaded.graph[*idx].id.clone(),
+            )
+        })
+        .collect();
+    nodes.sort();
+
+    let mermaid_id: HashMap<String, String> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, (_, _, id))| (id.clone(), format!("n{i}")))
+        .collect();
+
+    let mut out = String::from(
+        "flowchart LR
+",
+    );
+    for (_, label, id) in &nodes {
+        let short: String = label.chars().take(60).collect();
+        let escaped = short.replace('"', "'");
+        out.push_str(&format!(
+            "  {}[\"{}\"]
+",
+            mermaid_id[id], escaped
+        ));
+    }
+
+    let mut rendered: Vec<(String, String)> = call_edges
+        .iter()
+        .filter_map(|(a, b)| {
+            let sa = loaded.graph[*a].id.clone();
+            let sb = loaded.graph[*b].id.clone();
+            let ma = mermaid_id.get(&sa)?;
+            let mb = mermaid_id.get(&sb)?;
+            Some((ma.clone(), mb.clone()))
+        })
+        .collect();
+    rendered.sort();
+    rendered.dedup();
+    for (a, b) in &rendered {
+        out.push_str(&format!(
+            "  {a} --> {b}
+"
+        ));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use astria_core::db::open_db_in_memory;
+
+    #[test]
+    fn doc_seeds_do_not_displace_code() {
+        // Eight document nodes keyword-match the question; the seed quota
+        // keeps the code symbol present without hiding visited records.
+        let db = open_db_in_memory().unwrap();
+        let mut inserts = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('sym', 'validation()', 'code', 'src/v.rs')",
+        );
+        for i in 0..8 {
+            inserts.push_str(&format!(
+                ", ('d{i}', 'validation notes {i}', 'document', 'docs/n{i}.md')"
+            ));
+        }
+        inserts.push(';');
+        inserts.push_str(
+            "INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('sym', 'd0', 'references', 'EXTRACTED', 'src/v.rs');",
+        );
+        db.execute_batch(&inserts).unwrap();
+
+        let (text, _, _, _) = query_graph(
+            &db,
+            "cap-test",
+            "validation",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        let doc_lines = text
+            .lines()
+            .filter(|l| l.starts_with("NODE ") && l.contains("docs/"))
+            .count();
+        assert!(
+            doc_lines <= 2,
+            "doc seed quota exceeded: {doc_lines} doc nodes shown"
+        );
+        assert!(
+            text.contains("validation()"),
+            "code symbol must remain present"
+        );
+    }
+
+    #[test]
+    fn prefer_files_ranks_file_node_over_equal_symbol() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('anchor', 'unrelated()', 'code', 'src/anchor.rs'),
+                ('fnode', 'ingest.rs', 'code', 'src/ingest.rs'),
+                ('sym', 'helper()', 'code', 'src/other.rs');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('anchor', 'fnode', 'imports', 'EXTRACTED', 'src/anchor.rs'),
+                ('anchor', 'sym', 'imports', 'EXTRACTED', 'src/anchor.rs');",
+        )
+        .unwrap();
+
+        // the anchor node matches the question; both discovered nodes tie at
+        // zero relevance, so the file preference decides which surfaces first
+        let (text_files, _, _, _) = query_graph(
+            &db,
+            "pf-files",
+            "unrelated query words",
+            "bfs",
+            1,
+            4000,
+            false,
+            0.0,
+            0,
+            true,
+        )
+        .unwrap();
+        let first_files = text_files
+            .lines()
+            .filter_map(|l| l.strip_prefix("NODE "))
+            .find(|l| l.contains("ingest.rs") || l.contains("helper()"))
+            .unwrap();
+        assert!(
+            first_files.contains("ingest.rs"),
+            "file node must rank first with prefer_files: {first_files}"
+        );
+
+        // without the preference the symbol wins the deterministic tiebreak
+        let (plain, _, _, _) = query_graph(
+            &db,
+            "pf-plain",
+            "unrelated query words",
+            "bfs",
+            1,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        let first_plain = plain
+            .lines()
+            .filter_map(|l| l.strip_prefix("NODE "))
+            .find(|l| l.contains("ingest.rs") || l.contains("helper()"))
+            .unwrap();
+        assert!(
+            first_plain.contains("helper()"),
+            "plain ordering changed: {first_plain}"
+        );
+    }
+
+    #[test]
+    fn callflow_mermaid_renders_calls_subgraph() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('a', 'call_tool()', 'code', 'mcp/lib.rs'),
+                ('b', 'graph_stats_tool_works()', 'code', 'mcp/lib.rs'),
+                ('c', 'unrelated()', 'code', 'other/x.rs');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('a', 'b', 'calls', 'EXTRACTED', 'mcp/lib.rs'),
+                ('c', 'a', 'imports', 'EXTRACTED', 'other/x.rs');",
+        )
+        .unwrap();
+
+        let out = callflow_mermaid(&db, "cf-test", "call_tool()", 2, "out").unwrap();
+        assert!(out.contains("flowchart LR"));
+        assert!(out.contains("call_tool()"));
+        assert!(out.contains("graph_stats_tool_works()"));
+        assert!(out.contains("-->"));
+        // calls-only: an `imports` edge to an unrelated node must not render
+        assert!(!out.contains("unrelated()"));
+
+        // direction "in" renders callers, and the stub-shadowing rule holds
+        let db2 = open_db_in_memory().unwrap();
+        db2.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('validate_url', 'validate_url', 'stub', 'wiki.md'),
+                ('src_lib::validate_url', 'validate_url()', 'code', 'ing.rs'),
+                ('ing', 'ingest_url()', 'code', 'ing.rs');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('ing', 'src_lib::validate_url', 'calls', 'EXTRACTED', 'ing.rs');",
+        )
+        .unwrap();
+        let out2 = callflow_mermaid(&db2, "cf-in", "validate_url", 2, "in").unwrap();
+        assert!(out2.contains("ingest_url()"), "caller must render: {out2}");
+        assert!(
+            !out2.contains("wiki.md"),
+            "stub must not shadow the definition: {out2}"
+        );
+    }
+
+    #[test]
+    fn doc_seed_quota_lets_code_enter_the_traversal() {
+        // Eight documents keyword-match the question; without the seed quota
+        // all five seeds were documents, traversal never left prose, and the
+        // implementing code file was unreachable.
+        let db = open_db_in_memory().unwrap();
+        let mut inserts = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('sym', 'validation()', 'code', 'src/v.rs')",
+        );
+        for i in 0..8 {
+            inserts.push_str(&format!(
+                ", ('d{i}', 'validation notes {i}', 'document', 'docs/n{i}.md')"
+            ));
+        }
+        inserts.push(';');
+        db.execute_batch(&inserts).unwrap();
+
+        let (text, nodes, _, _) = query_graph(
+            &db,
+            "seed-quota-test",
+            "validation",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        assert!(nodes > 0);
+        // at least one of the top five seeds must be the code symbol
+        assert!(
+            text.contains("validation()"),
+            "code symbol must be seeded despite doc competition"
+        );
+        let doc_seeds = text
+            .lines()
+            .next()
+            .map(|l| l.matches("validation notes").count())
+            .unwrap_or(0);
+        assert!(doc_seeds <= 2, "doc seeds exceeded the quota: {doc_seeds}");
+    }
 
     #[test]
     fn stopwords_neutralized_and_code_ranks_over_document() {
@@ -1372,7 +2129,7 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = load_graph_cached(&db, "scorer-prior-test").unwrap();
+        let loaded = load_graph_snapshot(&db, "scorer-prior-test").unwrap();
         let scored = score_nodes(&loaded, &["validation".to_string()]);
         assert!(scored.len() >= 2);
         // equal term evidence (both labels contain "validation") — the code
@@ -1382,6 +2139,93 @@ mod tests {
         // question words alone match nothing
         let empty = score_nodes(&loaded, &["where".to_string(), "does".to_string()]);
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn ubiquitous_terms_downweighted_so_rare_targets_seed() {
+        // "scip index ingestion": "index" matches every index.* file in the
+        // repo while "scip" names exactly one — the rare term must win the
+        // seed race, not lose it to alphabetical tie-breaking among the
+        // generic matches.
+        let db = open_db_in_memory().unwrap();
+        let mut inserts = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('scip', 'scip.rs', 'code', 'crates/astria-ingest/src/scip.rs')",
+        );
+        for (id, label, path) in [
+            ("i1", "index.js", "website/src/pages/index.js"),
+            ("i2", "index.ts", "packages/cli/src/index.ts"),
+            ("i3", "index.module.css", "web/src/index.module.css"),
+            ("i4", "index.tsx", "app/src/index.tsx"),
+            ("i5", "index.php", "legacy/public/index.php"),
+        ] {
+            inserts.push_str(&format!(", ('{id}', '{label}', 'code', '{path}')"));
+        }
+        inserts.push(';');
+        db.execute_batch(&inserts).unwrap();
+
+        let loaded = load_graph_snapshot(&db, "idf-test").unwrap();
+        let scored = score_nodes(
+            &loaded,
+            &[
+                "scip".to_string(),
+                "index".to_string(),
+                "ingestion".to_string(),
+            ],
+        );
+        assert!(!scored.is_empty());
+        assert_eq!(
+            loaded.graph[scored[0].1].label, "scip.rs",
+            "the rare-term target must outrank ubiquitous 'index' matches"
+        );
+    }
+
+    #[test]
+    fn entry_point_intent_boosts_import_root_file() {
+        // "what is the CLI entry point": no file is named "entry", so lexical
+        // scoring ties everything on a path token ("cli"); the import DAG
+        // knows the answer — a file importing many commands and imported by
+        // none is the program's front door.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('entry', 'index.ts', 'code', 'packages/cli/src/index.ts'),
+                ('noise', 'cli.test.ts', 'code', 'packages/cli/src/__tests__/cli.test.ts'),
+                ('doc', 'CLI reference', 'reference', 'website/docs/cli.md'),
+                ('cmd1', 'run.ts', 'code', 'packages/cli/src/commands/run.ts'),
+                ('cmd2', 'query.ts', 'code', 'packages/cli/src/commands/query.ts'),
+                ('cmd3', 'map.ts', 'code', 'packages/cli/src/commands/map.ts'),
+                ('cmd4', 'export.ts', 'code', 'packages/cli/src/commands/export.ts');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('entry', 'cmd1', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts'),
+                ('entry', 'cmd2', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts'),
+                ('entry', 'cmd3', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts'),
+                ('entry', 'cmd4', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts');",
+        )
+        .unwrap();
+
+        let loaded = load_graph_snapshot(&db, "entry-intent-test").unwrap();
+        let scored = score_nodes(
+            &loaded,
+            &[
+                "what".to_string(),
+                "is".to_string(),
+                "the".to_string(),
+                "CLI".to_string(),
+                "entry".to_string(),
+                "point".to_string(),
+            ],
+        );
+        assert!(!scored.is_empty());
+        let top: Vec<&str> = scored
+            .iter()
+            .take(3)
+            .map(|(_, idx)| loaded.graph[*idx].id.as_str())
+            .collect();
+        assert!(
+            top.contains(&"entry"),
+            "the import root must seed on entry-point intent; top3 = {top:?}"
+        );
     }
 
     #[test]
@@ -1410,6 +2254,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         assert!(
@@ -1431,6 +2276,7 @@ mod tests {
             0.0,
             0,
             &semantic,
+            false,
         )
         .unwrap();
         assert!(
@@ -1477,6 +2323,7 @@ mod tests {
                 false,
                 0.0,
                 0,
+                false,
             )
             .unwrap();
         }
@@ -1501,6 +2348,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         let promoted = promote_learned_edges(&db, 2, 3).unwrap();
@@ -1576,8 +2424,8 @@ mod tests {
         "test".to_string()
     }
 
-    fn loaded(db: &Connection, key: &str) -> Arc<LoadedGraph> {
-        load_graph_cached(db, key).unwrap()
+    fn loaded(db: &Connection, key: &str) -> LoadedGraph {
+        load_graph_snapshot(db, key).unwrap()
     }
 
     #[test]
@@ -1696,24 +2544,34 @@ mod tests {
     fn no_match_suggests_nearest_labels() {
         let db = open_db_in_memory().unwrap();
         let key = seed(&db);
-        // Hybrid retrieval: a typo'd term ("Alpga") is rescued by the fuzzy
-        // layer and matches Alpha directly.
-        let (text, nodes, _, _) =
-            query_graph(&db, &key, "Alpga", "bfs", 2, 2000, false, 0.0, 0).unwrap();
+        // A typo can be rescued by fuzzy retrieval or nearest-label guidance.
+        let (text, _, _, _) =
+            query_graph(&db, &key, "Alpga", "bfs", 2, 2000, false, 0.0, 0, false).unwrap();
         assert!(
-            nodes > 0 && text.contains("Alpha"),
-            "typo should still match, got: {text}"
+            text.contains("Alpha"),
+            "typo should retain matching guidance, got: {text}"
         );
 
         // Gibberish with no near match: clean no-match, no suggestions.
-        let (text2, nodes2, _, _) =
-            query_graph(&db, &key, "zzzqqq xxxvvv", "bfs", 2, 2000, false, 0.0, 0).unwrap();
+        let (text2, nodes2, _, _) = query_graph(
+            &db,
+            &key,
+            "zzzqqq xxxvvv",
+            "bfs",
+            2,
+            2000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
         assert_eq!(nodes2, 0);
         assert!(text2.starts_with("No matching nodes found."));
 
         // A label in the narrow similarity band (matched by neither exact
         // nor the fuzzy-rescue threshold) surfaces via did-you-mean.
-        let g = load_graph_cached(&db, &key).unwrap();
+        let g = load_graph_snapshot(&db, &key).unwrap();
         let sugg = nearest_labels(&g, "Ahpah", 3);
         assert!(
             sugg.iter().any(|s| s.contains("Alpha")),
@@ -1743,6 +2601,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         assert!(
@@ -1753,7 +2612,7 @@ mod tests {
     }
 
     #[test]
-    fn tiny_budget_keeps_edges_not_just_nodes() {
+    fn tiny_budget_rejects_incomplete_records() {
         let db = open_db_in_memory().unwrap();
         db.execute_batch(
             "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
@@ -1767,7 +2626,7 @@ mod tests {
                 ('a', 'd', 'calls', 'EXTRACTED', 'f.rs');",
         )
         .unwrap();
-        let (text, _, _, next) = query_graph(
+        let result = query_graph(
             &db,
             ":memory:edgebudget",
             "Alpha",
@@ -1777,13 +2636,9 @@ mod tests {
             false,
             0.0,
             0,
-        )
-        .unwrap();
-        assert!(next.is_none() || next.is_some(), "cursor shape check");
-        assert!(
-            text.contains("EDGE"),
-            "edge lines must survive a tiny budget, got: {text}"
+            false,
         );
+        assert!(result.is_err(), "one token cannot hold a complete response");
     }
 
     #[test]
@@ -1806,6 +2661,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         assert!(
@@ -1834,6 +2690,7 @@ mod tests {
             false,
             0.0,
             0,
+            false,
         )
         .unwrap();
         assert!(nodes > 0, "docstring content should seed the node");
@@ -1849,22 +2706,38 @@ mod tests {
             }
             sql.push_str(&format!("('n{i:02}', 'Node{i:02}', 'code', 'f.rs')"));
         }
-        sql.push_str("; INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('n00','n01','calls','EXTRACTED','f.rs');");
+        sql.push(';');
+        // Make all fixture nodes reachable, with explicit confidence scores,
+        // so pagination measures a traversal larger than the five seeds.
+        for i in 1..30 {
+            sql.push_str(&format!("INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file) VALUES ('n00','n{i:02}','calls','EXTRACTED',1.0,'f.rs');"));
+        }
         db.execute_batch(&sql).unwrap();
         let key = ":memory:cursor";
 
         let (text1, _, _, next1) =
-            query_graph(&db, key, "Node", "bfs", 1, 30, false, 0.0, 0).unwrap();
-        assert!(next1.is_some(), "30 nodes cannot fit in 30 tokens: {text1}");
+            query_graph(&db, key, "Node", "bfs", 1, 120, false, 0.0, 0, false).unwrap();
+        assert!(next1.is_some(), "records cannot fit in 120 tokens: {text1}");
         assert!(text1.contains("cursor"));
 
-        let (text2, _, _, _) =
-            query_graph(&db, key, "Node", "bfs", 1, 30, false, 0.0, next1.unwrap()).unwrap();
-        // The second page must start past the first page's nodes.
+        let (text2, _, _, _) = query_graph(
+            &db,
+            key,
+            "Node",
+            "bfs",
+            1,
+            120,
+            false,
+            0.0,
+            next1.unwrap(),
+            false,
+        )
+        .unwrap();
+        // The second page must start past the first page's records.
         assert_ne!(
             text1.lines().nth(2),
             text2.lines().nth(2),
-            "cursor should advance the node window"
+            "cursor should advance the record window"
         );
     }
 
@@ -1882,10 +2755,12 @@ mod tests {
         )
         .unwrap();
         let key = ":memory:detail";
-        let (all, _, _, _) = query_graph(&db, key, "Beta", "bfs", 1, 4000, false, 0.0, 0).unwrap();
+        let (all, _, _, _) =
+            query_graph(&db, key, "Beta", "bfs", 1, 4000, false, 0.0, 0, false).unwrap();
         assert!(all.contains("Gamma"), "default tier keeps inferred edges");
 
-        let (high, _, _, _) = query_graph(&db, key, "Beta", "bfs", 1, 4000, false, 0.9, 0).unwrap();
+        let (high, _, _, _) =
+            query_graph(&db, key, "Beta", "bfs", 1, 4000, false, 0.9, 0, false).unwrap();
         assert!(
             !high.contains("NODE Gamma"),
             "high tier must not traverse inferred edges, got: {high}"

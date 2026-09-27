@@ -73,6 +73,7 @@ pub fn run_benchmark(db: &Connection, db_path: &str) -> Result<BenchmarkResult> 
             false,
             0.0,
             0,
+            false,
         )?;
         if matched > 0 {
             per_question.push((question.to_string(), estimate_tokens(&text)));

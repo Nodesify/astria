@@ -3,6 +3,7 @@
 pub mod db;
 pub mod error;
 pub mod ids;
+pub mod languages;
 pub mod security;
 pub mod types;
 
@@ -14,7 +15,9 @@ pub mod types;
 /// unique ids; empty-endpoint edges are dropped.
 /// v5: impl blocks are scope-only containers (no duplicate type node).
 /// v6: cfg-gated twin definitions dedup to the first occurrence.
-pub const EXTRACTION_HASH_VERSION: &str = "v6";
+/// v7: complete-corpus reference reconciliation and strict extraction errors.
+/// v8: preserve scoped definitions, assigned functions, test roles and Python implementations.
+pub const EXTRACTION_HASH_VERSION: &str = "v8";
 
 /// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`
 /// spelling so pre-1.0 env configs keep working. The new name wins; an empty

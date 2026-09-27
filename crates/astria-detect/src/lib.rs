@@ -25,51 +25,10 @@ pub struct DetectResult {
     pub removed: Vec<FileEntry>,
 }
 
-const CODE_EXTENSIONS: &[&str] = &[
-    ".py", ".js", ".jsx", ".mjs", ".ts", ".tsx", ".rs", ".go", ".java", ".c", ".h", ".cpp", ".cc",
-    ".cxx", ".hpp", ".rb", ".rake", ".swift", ".kt", ".kts", ".scala", ".php", ".cs", ".lua",
-    ".hs", ".ex", ".exs", ".sh", ".bash", ".dart", ".zig", ".css", ".scss",
-];
 const DOC_EXTENSIONS: &[&str] = &[".md", ".mdx", ".txt", ".rst"];
 const PAPER_EXTENSIONS: &[&str] = &[".pdf"];
 const IMAGE_EXTENSIONS: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
 const VIDEO_EXTENSIONS: &[&str] = &[".mp4", ".mov", ".webm", ".mkv", ".avi"];
-
-const EXTENSION_TO_LANGUAGE: &[(&str, &str)] = &[
-    (".py", "Python"),
-    (".js", "JavaScript"),
-    (".jsx", "JavaScript"),
-    (".mjs", "JavaScript"),
-    (".ts", "TypeScript"),
-    (".tsx", "TypeScript"),
-    (".rs", "Rust"),
-    (".go", "Go"),
-    (".java", "Java"),
-    (".c", "C"),
-    (".h", "C"),
-    (".cpp", "C++"),
-    (".cc", "C++"),
-    (".cxx", "C++"),
-    (".hpp", "C++"),
-    (".rb", "Ruby"),
-    (".rake", "Ruby"),
-    (".swift", "Swift"),
-    (".kt", "Kotlin"),
-    (".kts", "Kotlin"),
-    (".scala", "Scala"),
-    (".php", "PHP"),
-    (".cs", "C#"),
-    (".lua", "Lua"),
-    (".hs", "Haskell"),
-    (".ex", "Elixir"),
-    (".exs", "Elixir"),
-    (".sh", "Shell"),
-    (".bash", "Shell"),
-    (".dart", "Dart"),
-    (".zig", "Zig"),
-    (".css", "CSS"),
-    (".scss", "CSS"),
-];
 
 pub fn classify_file(path: &Path) -> Option<FileType> {
     // Manifests first: `go.mod` has a `.mod` extension, the rest `.toml`/
@@ -94,7 +53,7 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
     }
     let ext = path.extension()?.to_str()?.to_lowercase();
     let ext_with_dot = format!(".{}", ext);
-    if CODE_EXTENSIONS.contains(&ext_with_dot.as_str()) {
+    if astria_core::languages::for_extension(&ext).is_some() {
         return Some(FileType::Code);
     }
     if DOC_EXTENSIONS.contains(&ext_with_dot.as_str()) {
@@ -113,15 +72,7 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
 }
 
 pub fn language_for_extension(ext: &str) -> Option<&'static str> {
-    let ext_with_dot = if ext.starts_with('.') {
-        ext.to_lowercase()
-    } else {
-        format!(".{}", ext).to_lowercase()
-    };
-    EXTENSION_TO_LANGUAGE
-        .iter()
-        .find(|(e, _)| e.to_lowercase() == ext_with_dot)
-        .map(|(_, lang)| *lang)
+    astria_core::languages::for_extension(ext).map(|language| language.name)
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
@@ -151,7 +102,10 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
         let _ = ignore_builder.add_ignore(astriaignore);
     }
 
-    for entry in ignore_builder.build().filter_map(|e| e.ok()) {
+    for entry in ignore_builder.build() {
+        let entry = entry.map_err(|error| {
+            astria_core::AstriaError::Graph(format!("file discovery failed: {error}"))
+        })?;
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -176,8 +130,6 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
             continue;
         };
 
-        seen_paths.insert(rel_str.clone());
-
         let metadata = std::fs::metadata(path)?;
         let size_bytes = metadata.len();
 
@@ -186,10 +138,7 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
             continue;
         }
 
-        let bytes = match std::fs::read(path) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
+        let bytes = std::fs::read(path)?;
         // Minified/generated blobs (bundler output = few, huge lines) are
         // noise: they spawn single-letter function nodes that flood hubs
         // and query results.
@@ -199,6 +148,7 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
             continue;
         }
 
+        seen_paths.insert(rel_str.clone());
         let hash = hash_bytes(&bytes);
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
