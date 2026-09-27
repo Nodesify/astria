@@ -3,19 +3,31 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 
 const UPDATE_HELPER = `
-const ASTRIA_HOOK_VERSION = '3';
+const ASTRIA_HOOK_VERSION = '4';
 // Prefer a workspace-local CLI, then a locally-installed package, and only
 // then whatever is on PATH — a stale global install would rebuild the graph
 // with old pipeline code and silently regress the report.
+// update . accepts --quiet/--if-stale since 1.0.7; older CLIs error on the
+// unknown flags, so each invocation style retries in plain form before
+// moving to the next executable. All failures are swallowed: a hook must
+// never break a commit.
 function runAstriaUpdate() {
-  if (existsSync(path.join('packages', 'astria-cli', 'dist', 'index.js'))) {
-    execSync('node packages/astria-cli/dist/index.js update .', { stdio: 'inherit' });
-    return;
-  }
-  try {
-    execSync('npx --no-install astria update .', { stdio: 'inherit' });
-  } catch {
-    execSync('astria update .', { stdio: 'inherit' });
+  const flagged = 'update . --quiet --if-stale 10';
+  const attempts = [
+    'node packages/astria-cli/dist/index.js ' + flagged,
+    'node packages/astria-cli/dist/index.js update .',
+    'npx --no-install astria ' + flagged,
+    'npx --no-install astria update .',
+    'astria ' + flagged,
+    'astria update .',
+  ];
+  for (const cmd of attempts) {
+    try {
+      execSync(cmd, { stdio: 'inherit' });
+      return;
+    } catch {
+      // Try the next invocation style.
+    }
   }
 }
 `;
@@ -204,7 +216,7 @@ function installHook(hooksDir: string, def: HookDef): string {
       // Refresh the script body when it predates the current template
       // (sentinel: ASTRIA_HOOK_VERSION resolver). Without this, fixed
       // templates would never reach already-installed hooks.
-      if (!content.includes("ASTRIA_HOOK_VERSION = '3'")) {
+      if (!content.includes("ASTRIA_HOOK_VERSION = '4'")) {
         content = stripMarkerSection(content, def.startMarker, def.endMarker);
         const refreshed =
           content.trim() === '' || SHEBANGS.includes(content.trim())
