@@ -4,19 +4,19 @@
   "tokenizer": "o200k_base",
   "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
   "provenance": {
-    "cli_version": "1.0.4",
-    "harness_commit": "33e9987b0419b83af119c99e6eb5e3d26e41d72e",
+    "cli_version": "1.0.5",
+    "harness_commit": "65ec55e57f0c8cc60e75b99e6a7baa7110a8a327",
     "source_build_commit": null,
     "native_artifact_sha256": null,
     "cli_entrypoint_sha256": null,
     "source_dirty": false,
-    "corpus_commit": "33e9987b0419b83af119c99e6eb5e3d26e41d72e",
-    "corpus_files": 311,
+    "corpus_commit": "65ec55e57f0c8cc60e75b99e6a7baa7110a8a327",
+    "corpus_files": 333,
     "golden_sha256": "8de1b701fd23327aeb274efe73d4e18d2a7cb0a98ccf5ceef6f15ab0885d01a4",
     "node": "v22.23.2",
     "platform": "linux"
   },
-  "generated_at": "2026-09-27T09:51:39.792Z",
+  "generated_at": "2026-09-27T11:55:04.492Z",
   "corpus_root": "/home/runner/work/astria/astria",
   "golden_set": "astria-self.jsonl",
   "cli": "astria",
@@ -26,42 +26,42 @@
     "questions": 35,
     "answered": 35,
     "failed": 0,
-    "mrr": 0.6109647495361781,
-    "avg_query_seconds": 0.10085714285714281,
-    "avg_tokens": 3516.4,
-    "hit@1": 0.5142857142857142,
-    "recall@1": 0.45714285714285713,
-    "hit@3": 0.6285714285714286,
-    "recall@3": 0.5857142857142857,
-    "hit@5": 0.6857142857142857,
-    "recall@5": 0.6428571428571429,
-    "hit@10": 0.8571428571428571,
-    "recall@10": 0.8
+    "mrr": 0.6721664563261202,
+    "avg_query_seconds": 0.2777142857142857,
+    "avg_tokens": 3980.2571428571428,
+    "hit@1": 0.5714285714285714,
+    "recall@1": 0.5285714285714286,
+    "hit@3": 0.7142857142857143,
+    "recall@3": 0.6571428571428571,
+    "hit@5": 0.8285714285714286,
+    "recall@5": 0.8,
+    "hit@10": 0.9428571428571428,
+    "recall@10": 0.8857142857142857
   },
   "items": [
     {
       "id": "q01",
       "question": "how does the token reduction benchmark work",
-      "seconds": 0.07,
-      "tokens": 3410,
-      "raw_tokens": 3410,
+      "seconds": 0.29,
+      "tokens": 3974,
+      "raw_tokens": 3974,
       "clipped": false,
       "recall": {
         "1": 0,
         "3": 0,
-        "5": 0,
+        "5": 1,
         "10": 1
       },
-      "hit_rank": 6,
+      "hit_rank": 5,
       "matched_file": "crates/astria-napi/src/benchmark.rs",
       "matched_symbol": null
     },
     {
       "id": "q02",
       "question": "how does community detection work",
-      "seconds": 0.1,
-      "tokens": 3383,
-      "raw_tokens": 3383,
+      "seconds": 0.28,
+      "tokens": 3957,
+      "raw_tokens": 3957,
       "clipped": false,
       "recall": {
         "1": 0,
@@ -69,16 +69,16 @@
         "5": 0,
         "10": 1
       },
-      "hit_rank": 6,
+      "hit_rank": 8,
       "matched_file": "crates/astria-cluster/src/lib.rs",
       "matched_symbol": null
     },
     {
       "id": "q03",
       "question": "what does god node analysis rank",
-      "seconds": 0.07,
-      "tokens": 3605,
-      "raw_tokens": 3605,
+      "seconds": 0.28,
+      "tokens": 3995,
+      "raw_tokens": 3995,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -93,26 +93,60 @@
     {
       "id": "q04",
       "question": "how are duplicate entities merged",
-      "seconds": 0.09,
-      "tokens": 3598,
-      "raw_tokens": 3598,
+      "seconds": 0.27,
+      "tokens": 3985,
+      "raw_tokens": 3985,
       "clipped": false,
       "recall": {
         "1": 0,
         "3": 0,
-        "5": 0.5,
+        "5": 0,
         "10": 0.5
       },
-      "hit_rank": 5,
+      "hit_rank": 9,
       "matched_file": "crates/astria-build/src/dedup.rs",
       "matched_symbol": null
     },
     {
       "id": "q05",
       "question": "how does incremental change detection work",
-      "seconds": 0.11,
-      "tokens": 3713,
-      "raw_tokens": 3713,
+      "seconds": 0.28,
+      "tokens": 3986,
+      "raw_tokens": 3986,
+      "clipped": false,
+      "recall": {
+        "1": 0,
+        "3": 0,
+        "5": 0,
+        "10": 1
+      },
+      "hit_rank": 9,
+      "matched_file": "crates/astria-detect/src/lib.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q06",
+      "question": "which languages does tree-sitter extraction support",
+      "seconds": 0.3,
+      "tokens": 3997,
+      "raw_tokens": 3997,
+      "clipped": false,
+      "recall": {
+        "1": 0,
+        "3": 0,
+        "5": 0,
+        "10": 0
+      },
+      "hit_rank": 13,
+      "matched_file": "crates/astria-extract/src/engine.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q07",
+      "question": "how does the MCP server expose tools to agents",
+      "seconds": 0.3,
+      "tokens": 3953,
+      "raw_tokens": 3953,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -121,49 +155,15 @@
         "10": 1
       },
       "hit_rank": 1,
-      "matched_file": "crates/astria-detect/src/lib.rs",
-      "matched_symbol": null
-    },
-    {
-      "id": "q06",
-      "question": "which languages does tree-sitter extraction support",
-      "seconds": 0.23,
-      "tokens": 3294,
-      "raw_tokens": 3294,
-      "clipped": false,
-      "recall": {
-        "1": 0,
-        "3": 0,
-        "5": 0,
-        "10": 0.5
-      },
-      "hit_rank": 7,
-      "matched_file": "crates/astria-extract/src/engine.rs",
-      "matched_symbol": null
-    },
-    {
-      "id": "q07",
-      "question": "how does the MCP server expose tools to agents",
-      "seconds": 0.07,
-      "tokens": 3330,
-      "raw_tokens": 3330,
-      "clipped": false,
-      "recall": {
-        "1": 0,
-        "3": 0,
-        "5": 0,
-        "10": 0
-      },
-      "hit_rank": null,
-      "matched_file": null,
+      "matched_file": "crates/astria-mcp/src/lib.rs",
       "matched_symbol": null
     },
     {
       "id": "q08",
       "question": "how does graph traversal work bfs or dfs",
-      "seconds": 0.12,
-      "tokens": 3650,
-      "raw_tokens": 3650,
+      "seconds": 0.28,
+      "tokens": 3994,
+      "raw_tokens": 3994,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -178,9 +178,9 @@
     {
       "id": "q09",
       "question": "what breaks if I change a function blast radius",
-      "seconds": 0.24,
-      "tokens": 3878,
-      "raw_tokens": 3878,
+      "seconds": 0.28,
+      "tokens": 3960,
+      "raw_tokens": 3960,
       "clipped": false,
       "recall": {
         "1": 0,
@@ -188,67 +188,84 @@
         "5": 0,
         "10": 0
       },
-      "hit_rank": null,
-      "matched_file": null,
+      "hit_rank": 17,
+      "matched_file": "crates/astria-analyze/src/affected.rs",
       "matched_symbol": null
     },
     {
       "id": "q10",
       "question": "how do local embeddings work",
-      "seconds": 0.08,
-      "tokens": 3418,
-      "raw_tokens": 3418,
+      "seconds": 0.27,
+      "tokens": 3934,
+      "raw_tokens": 3934,
       "clipped": false,
       "recall": {
         "1": 0,
-        "3": 0,
-        "5": 0,
+        "3": 1,
+        "5": 1,
         "10": 1
       },
-      "hit_rank": 10,
+      "hit_rank": 3,
       "matched_file": "crates/astria-embed/src/lib.rs",
       "matched_symbol": null
     },
     {
       "id": "q11",
       "question": "how does LLM semantic enrichment work",
-      "seconds": 0.08,
-      "tokens": 3428,
-      "raw_tokens": 3428,
+      "seconds": 0.29,
+      "tokens": 3980,
+      "raw_tokens": 3980,
       "clipped": false,
       "recall": {
-        "1": 0.5,
+        "1": 0,
         "3": 0.5,
         "5": 1,
         "10": 1
       },
-      "hit_rank": 1,
-      "matched_file": "crates/astria-semantic/src/lib.rs",
+      "hit_rank": 2,
+      "matched_file": "crates/astria-semantic/src/enrichment.rs",
       "matched_symbol": null
     },
     {
       "id": "q12",
       "question": "how does URL ingestion protect against SSRF",
-      "seconds": 0.39,
-      "tokens": 3712,
-      "raw_tokens": 3712,
+      "seconds": 0.28,
+      "tokens": 3993,
+      "raw_tokens": 3993,
       "clipped": false,
       "recall": {
-        "1": 0.5,
+        "1": 0,
         "3": 0.5,
         "5": 0.5,
         "10": 0.5
       },
-      "hit_rank": 1,
+      "hit_rank": 3,
       "matched_file": "crates/astria-ingest/src/lib.rs",
       "matched_symbol": null
     },
     {
       "id": "q13",
       "question": "how are PDFs processed",
-      "seconds": 0.07,
-      "tokens": 3791,
-      "raw_tokens": 3791,
+      "seconds": 0.27,
+      "tokens": 3996,
+      "raw_tokens": 3996,
+      "clipped": false,
+      "recall": {
+        "1": 0,
+        "3": 0,
+        "5": 1,
+        "10": 1
+      },
+      "hit_rank": 4,
+      "matched_file": "crates/astria-pdf/src/lib.rs",
+      "matched_symbol": null
+    },
+    {
+      "id": "q14",
+      "question": "how is the markdown wiki generated",
+      "seconds": 0.28,
+      "tokens": 3978,
+      "raw_tokens": 3978,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -257,49 +274,32 @@
         "10": 1
       },
       "hit_rank": 1,
-      "matched_file": "crates/astria-pdf/src/lib.rs",
-      "matched_symbol": null
-    },
-    {
-      "id": "q14",
-      "question": "how is the markdown wiki generated",
-      "seconds": 0.12,
-      "tokens": 3647,
-      "raw_tokens": 3647,
-      "clipped": false,
-      "recall": {
-        "1": 0,
-        "3": 1,
-        "5": 1,
-        "10": 1
-      },
-      "hit_rank": 2,
       "matched_file": "crates/astria-napi/src/export_wiki.rs",
       "matched_symbol": null
     },
     {
       "id": "q15",
       "question": "what does path validation do",
-      "seconds": 0.07,
-      "tokens": 3533,
-      "raw_tokens": 3533,
+      "seconds": 0.29,
+      "tokens": 3995,
+      "raw_tokens": 3995,
       "clipped": false,
       "recall": {
         "1": 0,
-        "3": 1,
+        "3": 0.5,
         "5": 1,
         "10": 1
       },
-      "hit_rank": 2,
+      "hit_rank": 3,
       "matched_file": "crates/astria-paths/src/lib.rs",
       "matched_symbol": null
     },
     {
       "id": "q16",
       "question": "where is the sqlite schema and migrations",
-      "seconds": 0.16,
-      "tokens": 3747,
-      "raw_tokens": 3747,
+      "seconds": 0.29,
+      "tokens": 3964,
+      "raw_tokens": 3964,
       "clipped": false,
       "recall": {
         "1": 0,
@@ -314,26 +314,26 @@
     {
       "id": "q17",
       "question": "what is the CLI entry point",
-      "seconds": 0.08,
-      "tokens": 3515,
-      "raw_tokens": 3515,
+      "seconds": 0.28,
+      "tokens": 3981,
+      "raw_tokens": 3981,
       "clipped": false,
       "recall": {
-        "1": 0,
-        "3": 0,
-        "5": 0,
-        "10": 0
+        "1": 1,
+        "3": 1,
+        "5": 1,
+        "10": 1
       },
-      "hit_rank": null,
-      "matched_file": null,
+      "hit_rank": 1,
+      "matched_file": "packages/astria-cli/src/index.ts",
       "matched_symbol": null
     },
     {
       "id": "q18",
       "question": "how does the neo4j cypher export work",
-      "seconds": 0.1,
-      "tokens": 3748,
-      "raw_tokens": 3748,
+      "seconds": 0.28,
+      "tokens": 3995,
+      "raw_tokens": 3995,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -348,9 +348,9 @@
     {
       "id": "q19",
       "question": "how does shortest path query work",
-      "seconds": 0.07,
-      "tokens": 3583,
-      "raw_tokens": 3583,
+      "seconds": 0.27,
+      "tokens": 3975,
+      "raw_tokens": 3975,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -365,48 +365,48 @@
     {
       "id": "q20",
       "question": "how does the cross-repo global graph merge work",
-      "seconds": 0.07,
-      "tokens": 3494,
-      "raw_tokens": 3494,
+      "seconds": 0.28,
+      "tokens": 3977,
+      "raw_tokens": 3977,
       "clipped": false,
       "recall": {
         "1": 0,
         "3": 0,
-        "5": 0,
-        "10": 0
+        "5": 0.5,
+        "10": 0.5
       },
-      "hit_rank": 11,
+      "hit_rank": 5,
       "matched_file": "crates/astria-napi/src/global.rs",
       "matched_symbol": null
     },
     {
       "id": "q21",
       "question": "how does save-result and reflect memory work",
-      "seconds": 0.07,
-      "tokens": 1824,
-      "raw_tokens": 1824,
+      "seconds": 0.28,
+      "tokens": 3946,
+      "raw_tokens": 3946,
       "clipped": false,
       "recall": {
-        "1": 0,
-        "3": 0,
-        "5": 0,
-        "10": 0
+        "1": 0.5,
+        "3": 1,
+        "5": 1,
+        "10": 1
       },
-      "hit_rank": null,
-      "matched_file": null,
+      "hit_rank": 1,
+      "matched_file": "crates/astria-napi/src/feedback.rs",
       "matched_symbol": null
     },
     {
       "id": "q22",
       "question": "what does the diagnose health report show",
-      "seconds": 0.07,
-      "tokens": 3634,
-      "raw_tokens": 3634,
+      "seconds": 0.28,
+      "tokens": 3994,
+      "raw_tokens": 3994,
       "clipped": false,
       "recall": {
         "1": 0.5,
         "3": 0.5,
-        "5": 0.5,
+        "5": 1,
         "10": 1
       },
       "hit_rank": 1,
@@ -416,9 +416,9 @@
     {
       "id": "q23",
       "question": "how are hyperedges built",
-      "seconds": 0.07,
-      "tokens": 3612,
-      "raw_tokens": 3612,
+      "seconds": 0.27,
+      "tokens": 4000,
+      "raw_tokens": 4000,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -433,9 +433,9 @@
     {
       "id": "q24",
       "question": "what are surprising connections",
-      "seconds": 0.09,
-      "tokens": 3571,
-      "raw_tokens": 3571,
+      "seconds": 0.26,
+      "tokens": 3968,
+      "raw_tokens": 3968,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -450,9 +450,9 @@
     {
       "id": "q25",
       "question": "how does the repo map rank files",
-      "seconds": 0.07,
-      "tokens": 3529,
-      "raw_tokens": 3529,
+      "seconds": 0.28,
+      "tokens": 3998,
+      "raw_tokens": 3998,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -462,31 +462,31 @@
       },
       "hit_rank": 1,
       "matched_file": "crates/astria-query/src/lib.rs",
-      "matched_symbol": "repo_map"
+      "matched_symbol": null
     },
     {
       "id": "q26",
       "question": "how does SCIP index ingestion work",
-      "seconds": 0.08,
-      "tokens": 3364,
-      "raw_tokens": 3364,
+      "seconds": 0.28,
+      "tokens": 3955,
+      "raw_tokens": 3955,
       "clipped": false,
       "recall": {
-        "1": 0,
+        "1": 1,
         "3": 1,
         "5": 1,
         "10": 1
       },
-      "hit_rank": 2,
+      "hit_rank": 1,
       "matched_file": "crates/astria-ingest/src/scip.rs",
       "matched_symbol": null
     },
     {
       "id": "q27",
       "question": "how does postgres introspection work",
-      "seconds": 0.07,
-      "tokens": 3543,
-      "raw_tokens": 3543,
+      "seconds": 0.27,
+      "tokens": 3989,
+      "raw_tokens": 3989,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -501,9 +501,9 @@
     {
       "id": "q28",
       "question": "how is the report generated",
-      "seconds": 0.07,
-      "tokens": 3541,
-      "raw_tokens": 3541,
+      "seconds": 0.27,
+      "tokens": 3997,
+      "raw_tokens": 3997,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -518,9 +518,9 @@
     {
       "id": "q29",
       "question": "how does the html viewer export work",
-      "seconds": 0.08,
-      "tokens": 3513,
-      "raw_tokens": 3513,
+      "seconds": 0.27,
+      "tokens": 3985,
+      "raw_tokens": 3985,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -535,9 +535,9 @@
     {
       "id": "q30",
       "question": "what tree walkers resolve references",
-      "seconds": 0.07,
-      "tokens": 3560,
-      "raw_tokens": 3560,
+      "seconds": 0.28,
+      "tokens": 3982,
+      "raw_tokens": 3982,
       "clipped": false,
       "recall": {
         "1": 0.5,
@@ -552,9 +552,9 @@
     {
       "id": "q31",
       "question": "how does the extraction cache work",
-      "seconds": 0.07,
-      "tokens": 3500,
-      "raw_tokens": 3500,
+      "seconds": 0.27,
+      "tokens": 3978,
+      "raw_tokens": 3978,
       "clipped": false,
       "recall": {
         "1": 0,
@@ -569,26 +569,26 @@
     {
       "id": "q32",
       "question": "how is build-time graph validation done",
-      "seconds": 0.12,
-      "tokens": 3637,
-      "raw_tokens": 3637,
+      "seconds": 0.28,
+      "tokens": 3978,
+      "raw_tokens": 3978,
       "clipped": false,
       "recall": {
-        "1": 0,
-        "3": 0,
-        "5": 0,
+        "1": 1,
+        "3": 1,
+        "5": 1,
         "10": 1
       },
-      "hit_rank": 10,
+      "hit_rank": 1,
       "matched_file": "crates/astria-build/src/validate.rs",
       "matched_symbol": null
     },
     {
       "id": "q33",
       "question": "how does obsidian vault export work",
-      "seconds": 0.07,
-      "tokens": 3594,
-      "raw_tokens": 3594,
+      "seconds": 0.27,
+      "tokens": 3986,
+      "raw_tokens": 3986,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -603,9 +603,9 @@
     {
       "id": "q34",
       "question": "how does the graph merge diff work",
-      "seconds": 0.07,
-      "tokens": 3621,
-      "raw_tokens": 3621,
+      "seconds": 0.26,
+      "tokens": 3989,
+      "raw_tokens": 3989,
       "clipped": false,
       "recall": {
         "1": 1,
@@ -620,9 +620,9 @@
     {
       "id": "q35",
       "question": "how are file types detected and classified",
-      "seconds": 0.07,
-      "tokens": 3554,
-      "raw_tokens": 3554,
+      "seconds": 0.26,
+      "tokens": 3995,
+      "raw_tokens": 3995,
       "clipped": false,
       "recall": {
         "1": 0,
@@ -630,7 +630,7 @@
         "5": 0,
         "10": 0.5
       },
-      "hit_rank": 6,
+      "hit_rank": 7,
       "matched_file": "crates/astria-detect/src/lib.rs",
       "matched_symbol": null
     }
