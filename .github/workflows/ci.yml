@@ -46,7 +46,7 @@ jobs:
           # when pdf-extract migrates (suggested successor: skrifa).
           ignore: RUSTSEC-2026-0192
       - name: Run tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
