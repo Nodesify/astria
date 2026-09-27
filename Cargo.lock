@@ -88,9 +88,11 @@ dependencies = [
  "astria-core",
  "astria-extract",
  "astria-paths",
+ "regex",
  "rusqlite",
  "serde_json",
  "strsim",
+ "tempfile",
  "unicode-normalization",
 ]
 

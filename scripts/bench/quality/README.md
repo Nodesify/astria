@@ -77,6 +77,13 @@ npx promptfoo@latest eval -c scripts/bench/quality/promptfoo/promptfooconfig.yam
 at `BENCH_CORPUS`) against `graphify-provider.mjs` (original Python tool).
 Each test carries the ground-truth rubric generated from the golden set.
 
+> Disclosure: when the corpus graph is built with a local LLM endpoint, the
+> same endpoint currently powers both the graph's LLM enrichment passes and
+> promptfoo judging. At the token volumes involved this is negligible, but it
+> is mild self-preference by construction — keep it in mind when comparing
+> judged scores across setups, and prefer a different judge model for
+> published numbers.
+
 ## Golden set
 
 `golden/astria-self.jsonl` — one JSON object per line:

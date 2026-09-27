@@ -28,6 +28,7 @@ const relationFiles = [
   'crates/astria-extract/src/walkers.rs',
   'crates/astria-extract/src/docs.rs',
   'crates/astria-extract/src/manifest.rs',
+  'crates/astria-build/src/crosslayer.rs',
   'crates/astria-build/src/hyperedges.rs',
   'crates/astria-semantic/src/lib.rs',
   'crates/astria-ingest/src/lib.rs',
@@ -52,6 +53,11 @@ for (const file of relationFiles) {
   const allow = src.match(/ALLOWED_RELATIONS[^=]*=\s*&\[([^\]]*)\]/);
   if (allow) {
     for (const m of allow[1].matchAll(/"([a-z_]+)"/g)) relations.add(m[1]);
+  }
+  // crosslayer allowlist: const EMITTED_RELATIONS: &[&str] = &["a", "b", ...]
+  const emitted = src.match(/EMITTED_RELATIONS[^=]*=\s*&\[([^\]]*)\]/);
+  if (emitted) {
+    for (const m of emitted[1].matchAll(/"([a-z_]+)"/g)) relations.add(m[1]);
   }
 }
 const relSection = arch.slice(

@@ -804,6 +804,11 @@ fn run_pipeline_inner(
         && !label_communities
         && !deep
     {
+        // Nothing changed on disk, but a newer binary may bring new
+        // deterministic link passes — refresh cross-layer edges here too.
+        if let Err(e) = astria_build::crosslayer::link_cross_layer(db) {
+            eprintln!("warning: cross-layer linking failed: {e}");
+        }
         // Nothing changed on disk, but queries may have accumulated new
         // pairs worth promoting — the report should reflect them.
         let _ = astria_query::promote_learned_edges(db, 2, 3);
@@ -841,6 +846,25 @@ fn run_pipeline_inner(
     let mut extractions = astria_extract::extract(&files_to_process, root, db)?;
     let semantic_stats = enrich_with_semantics(&files_to_process, &mut extractions, db);
     let build_result = astria_build::build(&extractions, db)?;
+
+    // Cross-layer linking: docs→packages, packages→entry files, napi FFI
+    // imports→Rust functions. Deterministic DB passes (no LLM) that run over
+    // the whole graph every pipeline, so incremental updates keep their
+    // bridges even when only one side of a link changed.
+    match astria_build::crosslayer::link_cross_layer(db) {
+        Ok(stats) => {
+            let _ = db.execute(
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('last_crosslayer', ?1)",
+                rusqlite::params![format!(
+                    "ffi_bindings={} entry_points={} doc_refs={}",
+                    stats.ffi_bindings, stats.entry_points, stats.doc_refs
+                )],
+            );
+        }
+        Err(e) => {
+            eprintln!("warning: cross-layer linking failed: {e}");
+        }
+    };
 
     // Entity dedup runs after build, before clustering — duplicate nodes
     // poison community detection and god-node rankings.

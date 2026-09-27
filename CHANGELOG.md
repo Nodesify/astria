@@ -6,6 +6,18 @@ this file is the per-version summary.
 
 ## [Unreleased]
 
+### Added
+- **Cross-layer linking** (`astria-build::crosslayer`): three deterministic
+  post-build passes bridge layers the per-file extractors cannot see, all
+  edges tagged context `crosslayer` and re-derived on every pipeline run —
+  docs that name a package get `references` edges to it (the architecture
+  crate table now reaches code), packages get `entry_point` edges to their
+  conventional entry file, and TS/JS symbols importing the napi binding get
+  `ffi_binding` edges to the backing Rust function (camelCase ↔ snake_case).
+  Closes the last golden-QA full miss (q07, "how does the MCP server expose
+  tools to agents") structurally — the docs→napi→`astria-mcp` chain is now
+  traversable — with no golden-set edits.
+
 ### Changed
 - **Doc-heading cap**: query answers render at most 6 document-type nodes —
   doc headings keyword-match almost anything and could absorb the node

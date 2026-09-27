@@ -82,6 +82,12 @@ Structural (AST extraction):
 *   `requires_env`: An MCP server config and the environment-variable names it declares (names only, never values).
 *   `forks`: Symbol fork recorded from a SCIP index (`add --scip`).
 
+Cross-layer (deterministic post-build passes; edges carry context `crosslayer` and are re-derived on every pipeline run):
+
+*   `references`: A document naming a package as a whole token (crate tables, package lists) → that package's node.
+*   `entry_point`: A package → its conventional entry file (`src/lib.rs`, `index.ts`, `__init__.py`, ...), so the package layer reaches code.
+*   `ffi_binding`: A TS/JS symbol importing the napi binding → the Rust function behind it (napi-rs camelCase ↔ snake_case).
+
 Semantic & learned (opt-in):
 
 *   `similar_to`: Local embedding similarity (`--embed`); powers semantic query recall.
