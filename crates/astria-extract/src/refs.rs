@@ -153,8 +153,9 @@ mod tests {
         ];
         resolve_cross_file_references(&mut results);
         assert_eq!(results[1].edges[0].target, "src_x::run");
-        assert_eq!(results[1].edges[0].confidence, "EXTRACTED");
-        assert_eq!(results[1].edges[0].confidence_score, Some(0.9));
+        // Resolving a unique name does not make the binding compiler-proven.
+        assert_eq!(results[1].edges[0].confidence, "INFERRED");
+        assert_eq!(results[1].edges[0].confidence_score, Some(0.7));
     }
 
     #[test]
