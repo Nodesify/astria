@@ -965,6 +965,7 @@ pub fn record_query_feedback(
 mod tests {
     use super::*;
     use astria_semantic::SemanticBackend;
+    use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     // The stages take `fn()` factories, so the stub reads its canned
