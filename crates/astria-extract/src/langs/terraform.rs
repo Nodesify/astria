@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Terraform/HCL",
-        extensions: &[".tf", ".tfvars", ".hcl"],
+        name: astria_core::languages::LanguageId::Terraform
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Terraform
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_hcl::LANGUAGE.into(),
         class_types: &["block"],
         function_types: &[],

@@ -20,7 +20,9 @@ Understand a codebase before you touch it. `astria` turns any folder into a quer
 
 astria is inspired by the Python [Graphify](https://github.com/safishamsi/graphify) project's core idea — turn a corpus into a queryable knowledge graph — but it is an independent, from-scratch implementation: a deterministic, offline-first Rust/tree-sitter pipeline, not a fork or a port. astria is not affiliated with, sponsored by, or endorsed by the Graphify project or Graphify Labs.
 
-You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Reading everything costs the whole context window. The graph answers in ~3,000 tokens — **measured** at **50–110× fewer tokens per query** on real repos (printed honestly after every run, computed from real file sizes vs actual query output — [methodology and head-to-head](https://nodesify.github.io/astria/docs/explanation/benchmarks)).
+Find source-grounded code context before changing a repository. Astria retrieves symbols, file locations, and relationships from the latest committed graph snapshot through the same CLI and MCP query engine. Updates reuse cached AST extraction and reconcile references across the current corpus; inferred name matches remain distinct from declared facts.
+
+Retrieval quality and delivered context cost are measured separately. The [benchmark methodology](scripts/bench/quality/README.md) defines exact-file hit@k, recall@k, MRR, failure accounting, and the external repository baseline. Historical full-corpus/query token ratios are size diagnostics, not measured savings over targeted source search; this update publishes no new benchmark results.
 
 Three things a folder full of files can't give you:
 
@@ -56,7 +58,7 @@ Exclude files with a `.astriaignore` file in the project root (gitignore syntax)
 > astria install          # refreshes AI-tool skills/hooks (also cleans the old graphify entries)
 > ```
 >
-> `GRAPHIFY_*` environment variables keep working; `ASTRIA_*` takes precedence.
+> Legacy configuration variables remain supported where documented. LLM activation requires `--backend` or `ASTRIA_LLM_BACKEND`; `GRAPHIFY_LLM_BACKEND` does not opt in.
 
 ## Documentation
 
@@ -73,12 +75,12 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 
 - **Query it three ways** — CLI (`query`, `explain`, `path`, `affected`, `map`), an MCP server for AI agents, or an exported [markdown wiki](https://nodesify.github.io/astria/docs/guides/wiki-and-exports) any agent (or human) can crawl
 - **Local embeddings, no API key** — `run --embed` adds `similar_to` edges and semantic query recall ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
-- **Optional LLM enrichment, measured and cached** — Claude, any OpenAI-compatible endpoint, or Gemini; vision included for images; per-run with `--backend`/`--model` or env vars. Thematic community naming (`run --label-communities`, one call per *changed* community) and a `--deep` concept-linking tier (one call per changed file) are content-hash cached, so an unchanged tree re-runs for free. Every response's usage block is counted — the run summary prints API calls and input/output tokens, and `ASTRIA_LLM_BUDGET` caps the spend ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
+- **Optional LLM enrichment, measured and cached** — Claude, any OpenAI-compatible endpoint, or Gemini; vision included for images; per-run with `--backend`/`--model` or env vars. Thematic community naming (`run --label-communities`, one call per *changed* community) and a `--deep` concept-linking tier (one call per changed file) are content-hash cached, so unchanged inputs and effective configuration can reuse cached output. Backend selection is explicit; credentials alone never activate enrichment. Every response's usage block is counted — the run summary prints API calls and input/output tokens, and `ASTRIA_LLM_BUDGET` caps the spend ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
 - **Cross-repo global graph** — merge many repos into one queryable store at `~/.astria/global.db` ([global graph guide](https://nodesify.github.io/astria/docs/guides/global-graph))
 - **The graph compounds with use** — repeated queries become `learned` edges; curated Q/A memory via `save-result`/`reflect` ([memory and learning](https://nodesify.github.io/astria/docs/guides/memory-and-learning))
 - **Interactive HTML viewer, SVG, and live Neo4j** — physics-free large-graph HTML mode, deterministic community-arc SVG for Notion/GitHub embedding, an idempotent Cypher script, or a direct Bolt push into a running Neo4j — hand-rolled protocol client, zero driver dependencies ([wiki and exports](https://nodesify.github.io/astria/docs/guides/wiki-and-exports))
 - **The analyst built in** — `astria health` scores unreachable-symbol candidates, circular file dependencies, hub concentration, and staleness into one 0-100 report (also an MCP tool); `astria risk` maps the current git diff onto the graph and renders the blast radius as a PR-ready risk report ([guides](https://nodesify.github.io/astria/docs/guides/mcp-and-agents))
-- **Honest token math** — every run prints measured corpus-vs-query tokens: 110× on this repo. The printed estimate names its heuristic; the published snapshot also counts both tools with one shared tokenizer so absolute numbers are directly comparable ([benchmarks](https://nodesify.github.io/astria/docs/explanation/benchmarks))
+- **Retrieval measurement** — the [quality harness](scripts/bench/quality/README.md) separates file retrieval accuracy from delivered context tokens, includes failed queries in its denominator, and provides an opt-in external corpus comparison.
 - **Measured quality, not just cost** — a golden-QA harness scores recall@k / MRR of real query answers, a blind LLM judge grades astria against the original on the same corpus, and a LoCoMo adapter runs the memory-retrieval protocol the original publishes ([benchmarks](https://nodesify.github.io/astria/docs/explanation/benchmarks), [harness](scripts/bench/))
 - **10 MCP tools** — query_graph, repo_map, explain, get_neighbors, shortest_path, affected, god_nodes, list_communities, graph_stats, health ([MCP tools reference](https://nodesify.github.io/astria/docs/reference/mcp-tools))
 
@@ -98,10 +100,11 @@ Full release history: [release notes](https://nodesify.github.io/astria/blog).
 
 ## Architecture
 
-Rust workspace with 15 crates + Node.js CLI:
+Rust workspace with 16 crates + Node.js CLI:
 
 ```
 crates/
+  astria-bolt/      Bolt client for live Neo4j exports
   astria-core/      Types, error, SQLite schema + migrations, path validation, sensitive-path denylist
   astria-paths/     Path normalization, .astria directory management
   astria-detect/    File discovery, classification, incremental change detection
@@ -123,7 +126,7 @@ packages/
 
 Pipeline: `detect() → extract() → enrich_with_semantics() → build() → dedup_nodes() → cluster() → analyze() → report()`
 
-Each stage is a pure function in its own crate; semantic enrichment is optional and activates when an LLM backend is configured. SQLite is the persistence layer (extraction cache, file manifest, graph storage, pipeline runs, query history). petgraph provides in-memory algorithms (BFS/DFS, label propagation, shortest path).
+Pipeline stages separate extraction, persistence, and derived outputs. Semantic enrichment requires explicit `--backend` or `ASTRIA_LLM_BACKEND` selection; credentials alone do not activate it. SQLite is the persistence layer (extraction cache, file manifest, graph storage, pipeline runs, query history). petgraph provides in-memory algorithms (BFS/DFS, label propagation, shortest path).
 
 ## Build from source
 
@@ -131,9 +134,15 @@ Each stage is a pure function in its own crate; semantic enrichment is optional 
 # Build Rust core
 cargo build --release
 
+# Copy the native library for the source CLI (Linux)
+mkdir -p packages/astria-cli/dist
+cp target/release/libastria_napi.so packages/astria-cli/dist/astria.node
+
 # Build Node.js CLI
-cd packages/astria-cli && npm run build
+cd packages/astria-cli && npm ci && npm run build
 ```
+
+See [Contributing](CONTRIBUTING.md#development-setup) for macOS and Windows native artifact paths.
 
 Requires Rust 1.88+ (declared as `rust-version` in the workspace) and Node.js >= 22.
 

@@ -37,8 +37,12 @@ BFS/DFS traversal of the knowledge graph for a natural-language question. Return
 | `depth` | integer | `2` | Maximum traversal depth |
 | `budget` | integer | `2000` | Output token budget |
 | `directed` | boolean | `false` | Follow edges only in stored direction (caller → callee, importer → module) |
-| `detail` | `all` \| `high` | `all` | `high` keeps only `EXTRACTED` facts, dropping inferred and semantic edges |
+| `detail` | `all` \| `high` | `all` | `high` keeps only `EXTRACTED` and `DECLARED` facts, regardless of numeric popularity scores |
 | `cursor` | integer | `0` | Continuation token from a previous truncated result |
+
+CLI and MCP use the same query engine, including optional embedding recall when compiled with the `embed` feature and both node embeddings and a cached model are available. Queries never download a model. Each operation reloads a consistent SQLite graph snapshot, so long-running MCP sessions see subsequent database updates.
+
+Undirected traversal can cross an edge backwards, but returned arrows always retain the stored source and target and the exact relationship traversed.
 
 Truncated results report the next cursor value — re-run with `cursor` set to fetch the next slice.
 

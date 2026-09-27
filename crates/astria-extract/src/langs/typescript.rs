@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "TypeScript",
-        extensions: &[".ts", ".tsx"],
+        name: astria_core::languages::LanguageId::Typescript
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Typescript
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         class_types: &["class_declaration"],
         function_types: &[

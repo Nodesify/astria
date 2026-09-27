@@ -29,7 +29,12 @@ pub fn extract(
     let mut results = Vec::new();
 
     for file_path in files {
-        let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let extension = file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let ext = extension.as_str();
 
         // Node-id prefixes must come from the path relative to the scanned
         // root, never from the caller's CWD-joined path: identical content
@@ -69,15 +74,10 @@ pub fn extract(
                 results.push(cached);
                 continue;
             }
-            match astria_pdf::extract_to_markdown(file_path) {
-                Ok(md_text) if !md_text.trim().is_empty() => {
-                    let extraction =
-                        extract_markdown_from_string(file_path, "pdf", &md_text, naming);
-                    save_cache(db, file_path, &hash, &extraction);
-                    results.push(extraction);
-                }
-                _ => {}
-            }
+            let md_text = astria_pdf::extract_to_markdown(file_path)?;
+            let extraction = extract_markdown_from_string(file_path, "pdf", &md_text, naming);
+            save_cache(db, file_path, &hash, &extraction);
+            results.push(extraction);
             continue;
         }
 
@@ -87,10 +87,9 @@ pub fn extract(
                 results.push(cached);
                 continue;
             }
-            if let Ok(extraction) = extract_text_file(file_path, "text", naming) {
-                save_cache(db, file_path, &hash, &extraction);
-                results.push(extraction);
-            }
+            let extraction = extract_text_file(file_path, "text", naming)?;
+            save_cache(db, file_path, &hash, &extraction);
+            results.push(extraction);
             continue;
         }
 
@@ -100,16 +99,26 @@ pub fn extract(
                 results.push(cached);
                 continue;
             }
-            if let Ok(extraction) = extract_rst(file_path, naming) {
-                save_cache(db, file_path, &hash, &extraction);
-                results.push(extraction);
-            }
+            let extraction = extract_rst(file_path, naming)?;
+            save_cache(db, file_path, &hash, &extraction);
+            results.push(extraction);
             continue;
         }
 
         let cfg = match langs::get_language_for_extension(ext) {
             Some(c) => c,
-            None => continue,
+            None => {
+                // Media can receive semantic facts, but has no structural
+                // extractor. An empty extraction also removes obsolete facts
+                // when semantic enrichment is explicitly disabled.
+                results.push(Extraction {
+                    file_path: file_path.clone(),
+                    language: "media".into(),
+                    nodes: Vec::new(),
+                    edges: Vec::new(),
+                });
+                continue;
+            }
         };
 
         // Check cache

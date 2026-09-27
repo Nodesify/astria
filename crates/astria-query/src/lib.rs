@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock, RwLock};
 
-use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use rusqlite::Connection;
@@ -14,16 +13,6 @@ use astria_paths::relative_display;
 const NODE_BUDGET_SHARE: f64 = 0.6;
 /// How many near-miss labels to suggest when a query matches nothing.
 const SUGGESTION_COUNT: usize = 3;
-
-/// Global cache of loaded graphs, keyed by normalized DB path.
-static GRAPH_CACHE: LazyLock<RwLock<HashMap<String, Arc<LoadedGraph>>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-
-/// Invalidate the cached graph for a given DB path. Called after pipeline runs.
-pub fn invalidate_graph_cache(db_path: &str) {
-    let mut cache = GRAPH_CACHE.write().unwrap();
-    cache.remove(db_path);
-}
 
 fn log_query(db: &Connection, question: &str, answer: &str) {
     let ts = std::time::SystemTime::now()
@@ -59,6 +48,17 @@ struct EdgeData {
 }
 
 impl EdgeData {
+    fn meets_detail(&self, min_strength: f64) -> bool {
+        if min_strength >= 0.9 {
+            matches!(
+                self.confidence.to_ascii_uppercase().as_str(),
+                "EXTRACTED" | "DECLARED"
+            )
+        } else {
+            self.strength() >= min_strength
+        }
+    }
+
     /// Effective strength of this edge: the stored numeric score when
     /// present, otherwise a rank derived from the confidence label.
     fn strength(&self) -> f64 {
@@ -210,18 +210,21 @@ fn load_graph(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph
     })
 }
 
-fn load_graph_cached(db: &Connection, db_path: &str) -> astria_core::Result<Arc<LoadedGraph>> {
-    {
-        let cache = GRAPH_CACHE.read().unwrap();
-        if let Some(entry) = cache.get(db_path) {
-            return Ok(Arc::clone(entry));
-        }
-    }
+// Read both tables in one SQLite snapshot. Reloading avoids stale state after
+// external commits, local writes, and rollbacks.
+fn read_snapshot(db: &Connection) -> astria_core::Result<Option<rusqlite::Transaction<'_>>> {
+    Ok(if db.is_autocommit() {
+        Some(db.unchecked_transaction()?)
+    } else {
+        None
+    })
+}
 
-    let loaded = Arc::new(load_graph(db, db_path)?);
-    {
-        let mut cache = GRAPH_CACHE.write().unwrap();
-        cache.insert(db_path.to_string(), Arc::clone(&loaded));
+fn load_graph_snapshot(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph> {
+    let transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
     }
     Ok(loaded)
 }
@@ -250,20 +253,17 @@ fn iter_neighbors_filtered<'a>(
     idx: NodeIndex,
     directed: bool,
     min_strength: f64,
-) -> impl Iterator<Item = NodeIndex> + 'a {
-    let outgoing = graph
+) -> impl Iterator<Item = (NodeIndex, EdgeIndex)> + 'a {
+    graph
         .edges_directed(idx, Direction::Outgoing)
-        .filter(move |e| e.weight().strength() >= min_strength)
-        .map(|e| e.target());
-    if directed {
-        Box::new(outgoing) as Box<dyn Iterator<Item = NodeIndex> + 'a>
-    } else {
-        let incoming = graph
-            .edges_directed(idx, Direction::Incoming)
-            .filter(move |e| e.weight().strength() >= min_strength)
-            .map(|e| e.source());
-        Box::new(outgoing.chain(incoming)) as Box<dyn Iterator<Item = NodeIndex> + 'a>
-    }
+        .filter(move |e| e.weight().meets_detail(min_strength))
+        .map(|e| (e.target(), e.id()))
+        .chain(
+            graph
+                .edges_directed(idx, Direction::Incoming)
+                .filter(move |e| !directed && e.weight().meets_detail(min_strength))
+                .map(|e| (e.source(), e.id())),
+        )
 }
 
 /// The strongest edge connecting `a` and `b`, in either direction.
@@ -634,11 +634,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
 }
 
 /// `(visited nodes, observed edges, hop distance from the seeds)`.
-type TraversalResult = (
-    HashSet<NodeIndex>,
-    Vec<(NodeIndex, NodeIndex)>,
-    HashMap<NodeIndex, u32>,
-);
+type TraversalResult = (HashSet<NodeIndex>, Vec<EdgeIndex>, HashMap<NodeIndex, u32>);
 
 fn bfs_subgraph(
     loaded: &LoadedGraph,
@@ -649,18 +645,20 @@ fn bfs_subgraph(
 ) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = start_nodes.iter().copied().collect();
     let mut frontier: Vec<NodeIndex> = start_nodes.to_vec();
-    let mut edges_seen: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+    let mut edges_seen: Vec<EdgeIndex> = Vec::new();
     let mut distance: HashMap<NodeIndex, u32> = start_nodes.iter().map(|&n| (n, 0)).collect();
 
     for depth in 0..max_depth {
         let mut next_frontier = Vec::new();
         for &node in &frontier {
-            for neighbor in iter_neighbors_filtered(&loaded.graph, node, directed, min_strength) {
+            for (neighbor, edge_id) in
+                iter_neighbors_filtered(&loaded.graph, node, directed, min_strength)
+            {
                 if !visited.contains(&neighbor) {
                     visited.insert(neighbor);
                     distance.insert(neighbor, depth as u32 + 1);
                     next_frontier.push(neighbor);
-                    edges_seen.push((node, neighbor));
+                    edges_seen.push(edge_id);
                 }
             }
         }
@@ -680,7 +678,7 @@ fn dfs_subgraph(
     min_strength: f64,
 ) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut edges_seen: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+    let mut edges_seen: Vec<EdgeIndex> = Vec::new();
     let mut stack: Vec<(NodeIndex, usize)> = start_nodes.iter().rev().map(|&n| (n, 0)).collect();
 
     while let Some((node, depth)) = stack.pop() {
@@ -688,10 +686,15 @@ fn dfs_subgraph(
             continue;
         }
         visited.insert(node);
-        for neighbor in iter_neighbors_filtered(&loaded.graph, node, directed, min_strength) {
+        if depth == max_depth {
+            continue;
+        }
+        for (neighbor, edge_id) in
+            iter_neighbors_filtered(&loaded.graph, node, directed, min_strength)
+        {
             if !visited.contains(&neighbor) {
                 stack.push((neighbor, depth + 1));
-                edges_seen.push((node, neighbor));
+                edges_seen.push(edge_id);
             }
         }
     }
@@ -717,7 +720,7 @@ fn label_is_file(label: &str) -> bool {
 fn subgraph_to_text(
     loaded: &LoadedGraph,
     visited: &HashSet<NodeIndex>,
-    edges_seen: &[(NodeIndex, NodeIndex)],
+    edges_seen: &[EdgeIndex],
     relevance: &HashMap<NodeIndex, f64>,
     distance: &HashMap<NodeIndex, u32>,
     prefer_files: bool,
@@ -852,17 +855,18 @@ fn subgraph_to_text(
 fn finish_edges(
     loaded: &LoadedGraph,
     mut out: String,
-    edges_seen: &[(NodeIndex, NodeIndex)],
+    edges_seen: &[EdgeIndex],
     token_budget: i64,
     char_budget: usize,
     node_budget: usize,
 ) -> String {
     let edge_budget = char_budget.saturating_sub(node_budget).max(200);
     let mut edge_spent = 0usize;
-    for (src_idx, tgt_idx) in edges_seen {
-        let src = &loaded.graph[*src_idx];
-        let tgt = &loaded.graph[*tgt_idx];
-        if let Some(edge) = edge_between(&loaded.graph, *src_idx, *tgt_idx) {
+    for &edge_id in edges_seen {
+        if let Some((src_idx, tgt_idx)) = loaded.graph.edge_endpoints(edge_id) {
+            let src = &loaded.graph[src_idx];
+            let tgt = &loaded.graph[tgt_idx];
+            let edge = &loaded.graph[edge_id];
             let loc = match edge.source_line {
                 Some(l) => format!(" @{}:{}", loaded.display_path(&edge.source_file), l),
                 None => String::new(),
@@ -891,27 +895,29 @@ fn shortest_path_bfs(
     end: NodeIndex,
     directed: bool,
     min_strength: f64,
-) -> Option<Vec<NodeIndex>> {
+) -> Option<Vec<EdgeIndex>> {
     if start == end {
-        return Some(vec![start]);
+        return Some(Vec::new());
     }
     let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+    let mut parent: HashMap<NodeIndex, (NodeIndex, EdgeIndex)> = HashMap::new();
     let mut queue = std::collections::VecDeque::new();
     queue.push_back(start);
     visited.insert(start);
 
     while let Some(current) = queue.pop_front() {
-        for neighbor in iter_neighbors_filtered(&loaded.graph, current, directed, min_strength) {
+        for (neighbor, edge_id) in
+            iter_neighbors_filtered(&loaded.graph, current, directed, min_strength)
+        {
             if visited.contains(&neighbor) {
                 continue;
             }
-            parent.insert(neighbor, current);
+            parent.insert(neighbor, (current, edge_id));
             if neighbor == end {
-                let mut path = vec![end];
+                let mut path = Vec::new();
                 let mut cur = end;
-                while let Some(&p) = parent.get(&cur) {
-                    path.push(p);
+                while let Some(&(p, edge_id)) = parent.get(&cur) {
+                    path.push(edge_id);
                     cur = p;
                 }
                 path.reverse();
@@ -923,6 +929,9 @@ fn shortest_path_bfs(
     }
     None
 }
+
+/// Rendered text, node count, edge count, and pagination cursor.
+pub type QueryOutput = (String, usize, usize, Option<usize>);
 
 /// Traversal query. `min_strength` is the fidelity tier (0.0 = all facts;
 /// 0.9 = EXTRACTED/DECLARED only); `cursor` continues a previously
@@ -941,7 +950,7 @@ pub fn query_graph(
     cursor: usize,
     prefer_files: bool,
 ) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
-    query_graph_with_semantic(
+    query_graph_with_metadata(
         db,
         db_path,
         question,
@@ -951,9 +960,63 @@ pub fn query_graph(
         directed,
         min_strength,
         cursor,
-        &[],
         prefer_files,
     )
+    .map(|(result, _)| result)
+}
+
+/// Query output and build timestamp read from the same SQLite generation.
+#[allow(clippy::too_many_arguments)]
+pub fn query_graph_with_metadata(
+    db: &Connection,
+    db_path: &str,
+    question: &str,
+    mode: &str,
+    depth: usize,
+    budget: i64,
+    directed: bool,
+    min_strength: f64,
+    cursor: usize,
+    prefer_files: bool,
+) -> astria_core::Result<(QueryOutput, Option<String>)> {
+    let transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
+    let graph_built_at = db
+        .query_row(
+            "SELECT value FROM _meta WHERE key = 'graph_published_at'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+    // Only use an already cached model: queries never initiate a download.
+    #[cfg(feature = "embed")]
+    let semantic = if astria_embed::has_embeddings(db) && astria_embed::model_cached() {
+        astria_embed::load_embedder()
+            .ok()
+            .and_then(|mut model| astria_embed::semantic_scores(db, &mut model, question).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    #[cfg(not(feature = "embed"))]
+    let semantic: Vec<(String, f64)> = Vec::new();
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
+    }
+    query_graph_loaded(
+        db,
+        loaded,
+        question,
+        mode,
+        depth,
+        budget,
+        directed,
+        min_strength,
+        cursor,
+        &semantic,
+        prefer_files,
+    )
+    .map(|result| (result, graph_built_at))
 }
 
 /// Rescale a cosine in [0.55, 1.0] into the seed-score scale: a perfect
@@ -982,7 +1045,36 @@ pub fn query_graph_with_semantic(
     semantic: &[(String, f64)],
     prefer_files: bool,
 ) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
-    let loaded = load_graph_cached(db, db_path)?;
+    let loaded = load_graph_snapshot(db, db_path)?;
+    query_graph_loaded(
+        db,
+        loaded,
+        question,
+        mode,
+        depth,
+        budget,
+        directed,
+        min_strength,
+        cursor,
+        semantic,
+        prefer_files,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn query_graph_loaded(
+    db: &Connection,
+    loaded: LoadedGraph,
+    question: &str,
+    mode: &str,
+    depth: usize,
+    budget: i64,
+    directed: bool,
+    min_strength: f64,
+    cursor: usize,
+    semantic: &[(String, f64)],
+    prefer_files: bool,
+) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
     if loaded.graph.node_count() == 0 {
         return Ok(("No nodes in graph.".to_string(), 0, 0, None));
     }
@@ -1214,7 +1306,8 @@ pub fn find_shortest_path(
     directed: bool,
     min_strength: f64,
 ) -> astria_core::Result<(bool, usize, String)> {
-    let loaded = load_graph_cached(db, db_path)?;
+    let transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
     if loaded.graph.node_count() == 0 {
         return Ok((false, 0, "No nodes in graph.".to_string()));
     }
@@ -1296,21 +1389,24 @@ pub fn find_shortest_path(
         None => return Ok((false, 0, "No path found.".to_string())),
     };
 
-    let hops = path.len().saturating_sub(1);
+    let hops = path.len();
     let mut text = format!("Shortest path ({} hops):\n", hops);
 
-    for i in 0..path.len().saturating_sub(1) {
-        let src = &loaded.graph[path[i]];
-        let tgt = &loaded.graph[path[i + 1]];
-        let edge_info = edge_between(&loaded.graph, path[i], path[i + 1]);
-        let rel = edge_info.map_or("?".to_string(), |e| e.relation.clone());
-        let conf = edge_info.map_or("?".to_string(), |e| e.confidence.clone());
+    for edge_id in path {
+        let (source, target) = loaded
+            .graph
+            .edge_endpoints(edge_id)
+            .expect("traversed edge exists");
+        let edge = &loaded.graph[edge_id];
         text.push_str(&format!(
             "  {} --{} [{}]--> {}\n",
-            src.label, rel, conf, tgt.label
+            loaded.graph[source].label, edge.relation, edge.confidence, loaded.graph[target].label
         ));
     }
 
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
+    }
     let answer = format!("path found: {} hops", hops);
     log_query(
         db,
@@ -1331,7 +1427,7 @@ pub fn repo_map(
     budget: i64,
     min_strength: f64,
 ) -> astria_core::Result<(String, usize)> {
-    let loaded = load_graph_cached(db, db_path)?;
+    let loaded = load_graph_snapshot(db, db_path)?;
     if loaded.graph.node_count() == 0 {
         return Ok(("No nodes in graph.".to_string(), 0));
     }
@@ -1356,7 +1452,7 @@ pub fn repo_map(
     let mut adj: Vec<HashMap<usize, f64>> = vec![HashMap::new(); n];
     let mut out_sum: Vec<f64> = vec![0.0; n];
     for e in loaded.graph.edge_references() {
-        if e.weight().strength() < min_strength {
+        if !e.weight().meets_detail(min_strength) {
             continue;
         }
         let sf = &file_of[e.source().index()];
@@ -1442,7 +1538,8 @@ pub fn explain_with_neighbors(
     db_path: &str,
     node_id: &str,
 ) -> astria_core::Result<Option<ExplainResult>> {
-    let loaded = load_graph_cached(db, db_path)?;
+    let transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
 
     // A stub must not shadow a same-named real definition: explaining by a
     // bare name would otherwise land on a speculative node (no edges, no
@@ -1514,7 +1611,6 @@ pub fn explain_with_neighbors(
     neighbors.truncate(20);
 
     let answer = format!("explain: {} ({} neighbors)", node.label, neighbor_count);
-    log_query(db, node_id, &answer);
 
     // Hyperedge membership: which N-ary groups this node belongs to.
     let hyperedges: Vec<String> = {
@@ -1526,6 +1622,11 @@ pub fn explain_with_neighbors(
         let rows = stmt.query_map(rusqlite::params![node.id], |r| r.get::<_, String>(0))?;
         rows.filter_map(|r| r.ok()).collect()
     };
+
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
+    }
+    log_query(db, node_id, &answer);
 
     Ok(Some(ExplainResult {
         id: node.id.clone(),
@@ -1572,7 +1673,8 @@ pub fn callflow_mermaid(
     depth: usize,
     direction: &str,
 ) -> astria_core::Result<String> {
-    let loaded = load_graph_cached(db, db_path)?;
+    let _transaction = read_snapshot(db)?;
+    let loaded = load_graph(db, db_path)?;
     if loaded.graph.node_count() == 0 {
         return Ok("No nodes in graph.".to_string());
     }
@@ -1932,7 +2034,7 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = load_graph_cached(&db, "scorer-prior-test").unwrap();
+        let loaded = load_graph_snapshot(&db, "scorer-prior-test").unwrap();
         let scored = score_nodes(&loaded, &["validation".to_string()]);
         assert!(scored.len() >= 2);
         // equal term evidence (both labels contain "validation") — the code
@@ -1967,7 +2069,7 @@ mod tests {
         inserts.push(';');
         db.execute_batch(&inserts).unwrap();
 
-        let loaded = load_graph_cached(&db, "idf-test").unwrap();
+        let loaded = load_graph_snapshot(&db, "idf-test").unwrap();
         let scored = score_nodes(
             &loaded,
             &[
@@ -2007,7 +2109,7 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = load_graph_cached(&db, "entry-intent-test").unwrap();
+        let loaded = load_graph_snapshot(&db, "entry-intent-test").unwrap();
         let scored = score_nodes(
             &loaded,
             &[
@@ -2227,8 +2329,8 @@ mod tests {
         "test".to_string()
     }
 
-    fn loaded(db: &Connection, key: &str) -> Arc<LoadedGraph> {
-        load_graph_cached(db, key).unwrap()
+    fn loaded(db: &Connection, key: &str) -> LoadedGraph {
+        load_graph_snapshot(db, key).unwrap()
     }
 
     #[test]
@@ -2375,7 +2477,7 @@ mod tests {
 
         // A label in the narrow similarity band (matched by neither exact
         // nor the fuzzy-rescue threshold) surfaces via did-you-mean.
-        let g = load_graph_cached(&db, &key).unwrap();
+        let g = load_graph_snapshot(&db, &key).unwrap();
         let sugg = nearest_labels(&g, "Ahpah", 3);
         assert!(
             sugg.iter().any(|s| s.contains("Alpha")),

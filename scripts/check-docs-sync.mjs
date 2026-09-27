@@ -6,6 +6,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generateLanguageSupport, languageSupportPath } from './generate-language-support.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const problems = [];
@@ -109,6 +110,11 @@ if (enginesMajor && badgeMajor && enginesMajor > Number(badgeMajor)) {
 }
 if (!readme.includes(`Node.js >= ${badgeMajor}`) && badgeMajor) {
   problems.push(`README.md: prose does not state Node.js >= ${badgeMajor}`);
+}
+
+// The language table is generated from the runtime registry and parser configs.
+if (read(languageSupportPath).replace(/\r\n/g, '\n') !== generateLanguageSupport()) {
+  problems.push(`${languageSupportPath}: stale; run node scripts/generate-language-support.mjs`);
 }
 
 if (problems.length) {

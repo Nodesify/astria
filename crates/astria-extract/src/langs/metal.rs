@@ -4,9 +4,13 @@ use super::config::LanguageConfig;
 /// vertex/fragment/kernel functions well enough for symbol coverage.
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Metal",
+        name: astria_core::languages::LanguageId::Metal
+            .registration()
+            .name,
         name_child: None,
-        extensions: &[".metal"],
+        extensions: astria_core::languages::LanguageId::Metal
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_cpp::LANGUAGE.into(),
         class_types: &["struct_specifier", "class_specifier"],
         function_types: &["function_definition"],

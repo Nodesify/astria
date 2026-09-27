@@ -555,11 +555,6 @@ pub fn run_pipeline(
     deep: Option<bool>,
 ) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
-    let db_path_str = astria_paths::normalize(&astria_paths::db_path(
-        &root_pb
-            .canonicalize()
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?,
-    )?);
     let result = pipeline::run_pipeline_with(
         &root_pb,
         !no_dedup.unwrap_or(false),
@@ -568,7 +563,6 @@ pub fn run_pipeline(
         deep.unwrap_or(false),
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    query::invalidate_graph_cache(&db_path_str);
     Ok(pipeline_result_js(&result))
 }
 
@@ -583,11 +577,6 @@ pub fn update_pipeline(
     deep: Option<bool>,
 ) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
-    let db_path_str = astria_paths::normalize(&astria_paths::db_path(
-        &root_pb
-            .canonicalize()
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?,
-    )?);
     let result = pipeline::run_pipeline_with(
         &root_pb,
         !no_dedup.unwrap_or(false),
@@ -596,7 +585,6 @@ pub fn update_pipeline(
         deep.unwrap_or(false),
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    query::invalidate_graph_cache(&db_path_str);
     Ok(pipeline_result_js(&result))
 }
 
@@ -763,47 +751,22 @@ pub fn query_graph(
         .unwrap_or_else(|| root.clone());
     let started = std::time::Instant::now();
 
-    // Hybrid recall: when node embeddings exist and the model is cached,
-    // semantic candidates rescue questions with zero string overlap.
-    // Both gates are required so a query never downloads a model.
-    #[cfg(feature = "embed")]
-    let semantic: Vec<(String, f64)> =
-        if astria_embed::has_embeddings(&db) && astria_embed::model_cached() {
-            astria_embed::load_embedder()
-                .ok()
-                .and_then(|mut embedder| {
-                    astria_embed::semantic_scores(&db, &mut embedder, &question).ok()
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-    #[cfg(not(feature = "embed"))]
-    let semantic: Vec<(String, f64)> = Vec::new();
-
     // `--detail high` also prefers file-level nodes when rendering answers.
     let prefer_files = min_strength_for(&detail) >= 0.9;
-    let (text, node_count, edge_count, next_cursor) = query::query_graph_with_semantic(
-        &db,
-        &db_path_str,
-        &question,
-        &mode,
-        depth as usize,
-        budget,
-        directed.unwrap_or(false),
-        min_strength_for(&detail),
-        cursor.unwrap_or(0).max(0) as usize,
-        &semantic,
-        prefer_files,
-    )
-    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let graph_built_at = db
-        .query_row(
-            "SELECT finished_at FROM pipeline_runs WHERE status = 'completed' ORDER BY id DESC LIMIT 1",
-            [],
-            |row| row.get::<_, String>(0),
+    let ((text, node_count, edge_count, next_cursor), graph_built_at) =
+        query::query_graph_with_metadata(
+            &db,
+            &db_path_str,
+            &question,
+            &mode,
+            depth as usize,
+            budget,
+            directed.unwrap_or(false),
+            min_strength_for(&detail),
+            cursor.unwrap_or(0).max(0) as usize,
+            prefer_files,
         )
-        .ok();
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     pipeline::record_query_feedback(
         astria_dir.as_deref(),
         "query",
@@ -1083,11 +1046,6 @@ pub fn ingest_url(
             root_pb.display()
         )));
     }
-    let db_path_str = astria_paths::normalize(&astria_paths::db_path(
-        &root_pb
-            .canonicalize()
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?,
-    )?);
 
     let opts = astria_ingest::IngestOptions {
         author,
@@ -1100,7 +1058,6 @@ pub fn ingest_url(
     // Incremental update picks the new file up (hash manifest sees it as new)
     pipeline::run_pipeline_with(&root_pb, true, false, false, false)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    query::invalidate_graph_cache(&db_path_str);
 
     Ok(IngestResultJs {
         saved_path: astria_paths::normalize(&saved),
@@ -1141,7 +1098,6 @@ pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let db =
         pipeline::load_graph_db(&root_pb).map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let db_path_str = astria_paths::normalize(&root_pb.join(".astria").join("db.sqlite"));
 
     let cluster_result =
         astria_cluster::cluster(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
@@ -1152,8 +1108,6 @@ pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
 
     let astria_dir = root_pb.join(".astria");
     let _ = std::fs::write(astria_dir.join("graph_report.md"), &report);
-
-    query::invalidate_graph_cache(&db_path_str);
 
     Ok(PipelineResultJs {
         nodes_added: 0,

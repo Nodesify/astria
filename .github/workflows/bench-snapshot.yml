@@ -102,8 +102,8 @@ jobs:
           if-no-files-found: ignore
 
   # Retrieval-quality benchmark: the published CLI answering the golden QA
-  # set over this repo's own graph. Non-blocking while the golden set and
-  # the query ranking mature; numbers land on the docs site via the commit.
+  # set over this repo's own graph. This published-release snapshot is separate
+  # from quality.yml, which gates proposed source changes with a local build.
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -117,9 +117,11 @@ jobs:
           node-version: 22
       - name: Install astria (published CLI)
         run: npm install -g @nodesify/astria
+      - name: Install shared exact tokenizer
+        run: npm install --no-save js-tiktoken
       - name: Build the graph over this repo
         run: astria run .
-      - name: Retrieval quality (recall@k / MRR)
+      - name: Retrieval quality (file hit@k, recall@k, MRR)
         # Blocking with a floor, not a ceiling: recall@5 below 50% fails the
         # run, so ranking regressions gate the snapshot.
         run: node scripts/bench/quality/run-quality.mjs --out website/src/data/quality-snapshot.json --min-recall5 50

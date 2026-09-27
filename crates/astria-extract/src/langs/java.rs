@@ -2,8 +2,10 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Java",
-        extensions: &[".java"],
+        name: astria_core::languages::LanguageId::Java.registration().name,
+        extensions: astria_core::languages::LanguageId::Java
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_java::LANGUAGE.into(),
         class_types: &[
             "class_declaration",

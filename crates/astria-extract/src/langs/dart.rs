@@ -2,8 +2,10 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Dart",
-        extensions: &[".dart"],
+        name: astria_core::languages::LanguageId::Dart.registration().name,
+        extensions: astria_core::languages::LanguageId::Dart
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_dart::LANGUAGE.into(),
         class_types: &[
             "class_definition",

@@ -20,10 +20,10 @@ export async function runCommand(
       const outDir = pathMod.join(path, '.astria', 'wiki');
       const articles = exportWiki(path, outDir, 25);
       console.log(`Wiki written: ${articles} articles -> ${pathMod.join(outDir, 'index.md')}`);
+    }
     if (opts.global) {
       const merged = globalAdd(path, opts.as);
       console.log(`Global graph: repo '${merged.tag}' merged (${merged.nodesAdded} nodes, ${merged.edgesAdded} edges, ${merged.sameTypeEdges} same_type_as, ${merged.crossRepoCallEdges} cross-repo calls)`);
-    }
     }
     const benchmark = tokenBenchmark(path);
     if (benchmark) console.log(benchmark);

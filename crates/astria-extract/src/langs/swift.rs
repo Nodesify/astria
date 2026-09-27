@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Swift",
-        extensions: &[".swift"],
+        name: astria_core::languages::LanguageId::Swift
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Swift
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_swift::LANGUAGE.into(),
         class_types: &[
             "class_declaration",

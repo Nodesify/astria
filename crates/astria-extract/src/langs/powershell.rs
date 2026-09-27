@@ -2,8 +2,12 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "PowerShell",
-        extensions: &[".ps1", ".psm1", ".psd1"],
+        name: astria_core::languages::LanguageId::Powershell
+            .registration()
+            .name,
+        extensions: astria_core::languages::LanguageId::Powershell
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_powershell::LANGUAGE.into(),
         class_types: &["class_statement"],
         function_types: &["function_statement", "filter_statement"],

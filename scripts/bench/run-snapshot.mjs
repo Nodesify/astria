@@ -115,6 +115,8 @@ const parityCorpus = await corpusTokensExact(corpus, tok);
 
 // 6. assemble snapshot
 const snapshot = {
+  schema_version: 2,
+  provenance: { mode: 'published-npm', harness_commit: sh('git', ['rev-parse', 'HEAD'], {cwd:repoRoot}).trim(), source_build_commit: null, node:process.version, platform:process.platform },
   generated_at: new Date().toISOString(),
   runner: process.env.BENCH_RUNNER_LABEL ?? 'local machine',
   corpus: {
@@ -156,10 +158,14 @@ const snapshot = {
     corpus_tokens: parityCorpus.tokens,
     corpus_bytes: parityCorpus.bytes,
     astria: {
+      answered: oursParityAnswers.length,
+      failed: PARITY_QUESTIONS.length - oursParityAnswers.length,
       avg_query_tokens: oursParityAvg,
       reduction: oursParityAvg ? Number((parityCorpus.tokens / oursParityAvg).toFixed(1)) : null,
     },
     original: {
+      answered: origParityAnswers.length,
+      failed: PARITY_QUESTIONS.length - origParityAnswers.length,
       avg_query_tokens: origParityAvg,
       reduction: origParityAvg ? Number((parityCorpus.tokens / origParityAvg).toFixed(1)) : null,
     },
