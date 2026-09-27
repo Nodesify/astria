@@ -18,7 +18,8 @@ pub mod types;
 /// v7: complete-corpus reference reconciliation and strict extraction errors.
 /// v8: preserve scoped definitions, assigned functions, test roles and Python implementations.
 /// v9: chunk document body text into searchable section chunks (markdown, text, RST).
-pub const EXTRACTION_HASH_VERSION: &str = "v9";
+/// v10: chunk overlap across boundaries, `chunk` node type, ASTRIA_CHUNK_CHARS override.
+pub const EXTRACTION_HASH_VERSION: &str = "v10";
 
 /// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`
 /// spelling so pre-1.0 env configs keep working. The new name wins; an empty

@@ -143,6 +143,9 @@ pub(crate) fn extract_markdown_from_string(
             }
             None => {
                 if !line.trim().is_empty() {
+                    if pre_body_start == 0 {
+                        pre_body_start = line_no as u32 + 1;
+                    }
                     pre_body.push_str(line);
                     pre_body.push('\n');
                 }
@@ -292,10 +295,25 @@ fn truncate_with_ellipsis(text: &str, max: usize) -> String {
     }
 }
 
-/// Maximum characters of body text carried by one chunk node (~250-300
-/// tokens): small enough that query-term scoring and embedding inputs stay
-/// focused, large enough to keep doc-graph node counts sane.
+/// Default maximum characters of body text carried by one chunk node
+/// (~250-300 tokens): small enough that query-term scoring and embedding
+/// inputs stay focused, large enough to keep doc-graph node counts sane.
+/// Override per run with ASTRIA_CHUNK_CHARS (clamped to 400..=8000).
 const CHUNK_MAX_CHARS: usize = 1200;
+/// Characters of the previous chunk prepended to the next one so evidence
+/// spanning a chunk boundary is still retrievable from either side.
+const CHUNK_OVERLAP_CHARS: usize = 180;
+
+fn chunk_max_chars() -> usize {
+    chunk_max_chars_value(astria_core::env_var("CHUNK_CHARS").as_deref())
+}
+
+fn chunk_max_chars_value(value: Option<&str>) -> usize {
+    value
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|v| v.clamp(400, 8000))
+        .unwrap_or(CHUNK_MAX_CHARS)
+}
 
 /// A body-text chunk with the 1-based source line of its first line.
 struct BodyChunk {
@@ -378,12 +396,13 @@ fn paragraph_pieces(body: &str, max: usize) -> Vec<(u32, String)> {
 /// hard boundaries. `body_start` is the 1-based source line of the body's
 /// first line; each chunk carries the absolute line it begins at.
 fn chunk_body(body: &str, body_start: u32) -> Vec<BodyChunk> {
-    let pieces = paragraph_pieces(body, CHUNK_MAX_CHARS);
+    let max = chunk_max_chars();
+    let pieces = paragraph_pieces(body, max);
     let mut chunks: Vec<BodyChunk> = Vec::new();
     let mut current: Option<(u32, String)> = None;
     for (piece_line, piece) in pieces {
         match &mut current {
-            Some((_, text)) if text.chars().count() + piece.chars().count() + 2 > CHUNK_MAX_CHARS => {
+            Some((_, text)) if text.chars().count() + piece.chars().count() + 2 > max => {
                 let (line, text) = current.take().unwrap();
                 chunks.push(BodyChunk { start_line: body_start + line - 1, text });
                 current = Some((piece_line, piece));
@@ -400,7 +419,41 @@ fn chunk_body(body: &str, body_start: u32) -> Vec<BodyChunk> {
             chunks.push(BodyChunk { start_line: body_start + line - 1, text });
         }
     }
+    add_overlap(&mut chunks);
     chunks
+}
+
+/// Prepend a line-snapped tail of the previous chunk to each successor so a
+/// match near a boundary surfaces from both chunks. `start_line` moves back
+/// by the number of lines the tail occupies.
+fn add_overlap(chunks: &mut [BodyChunk]) {
+    for i in 1..chunks.len() {
+        let tail = line_snapped_tail(&chunks[i - 1].text, CHUNK_OVERLAP_CHARS)
+            .trim()
+            .to_string();
+        if tail.is_empty() {
+            continue;
+        }
+        let tail_lines = tail.matches('\n').count() as u32 + 1;
+        let text = chunks[i].text.clone();
+        chunks[i].text = format!("{tail}\n{text}");
+        chunks[i].start_line = chunks[i].start_line.saturating_sub(tail_lines - 1);
+    }
+}
+
+/// Last `max` characters of `text`, cut at a line boundary when one falls
+/// inside the window.
+fn line_snapped_tail(text: &str, max: usize) -> String {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    if chars.len() <= max {
+        return text.to_string();
+    }
+    let cut = chars[chars.len() - max].0;
+    let window = &text[cut..];
+    match window.find('\n') {
+        Some(pos) if pos + 1 < window.len() => window[pos + 1..].to_string(),
+        _ => window.to_string(),
+    }
 }
 
 /// Emit chunk nodes for `body` under `parent_id`, linked with `contains`
@@ -427,7 +480,14 @@ fn push_chunk_nodes(
                 .chain(std::iter::once(index_slug.as_str()))
                 .collect::<Vec<_>>(),
         );
-        let label = truncate_with_ellipsis(chunk.text.lines().next().unwrap_or("").trim(), 80);
+        let label = truncate_with_ellipsis(
+            chunk
+                .text
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("body"),
+            80,
+        );
         nodes.push(ExtractedNode {
             id: id.clone(),
             label,
@@ -562,6 +622,9 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
             }
             None => {
                 if !text_line.trim().is_empty() {
+                    if pre_body_start == 0 {
+                        pre_body_start = i as u32 + 1;
+                    }
                     pre_body.push_str(text_line);
                     pre_body.push('\n');
                 }
@@ -580,6 +643,9 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
             }
             None => {
                 if !last.trim().is_empty() {
+                    if pre_body_start == 0 {
+                        pre_body_start = i as u32 + 1;
+                    }
                     pre_body.push_str(last);
                     pre_body.push('\n');
                 }
@@ -707,5 +773,66 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].docstring.as_deref().unwrap().contains("Setup text here"));
         assert!(chunks[0].id.starts_with(&title.id));
+    }
+
+    #[test]
+    fn chunks_overlap_across_boundaries() {
+        let line = "x".repeat(300);
+        let body: String = (0..8).map(|_| format!("{line}\n")).collect();
+        let ex = extract_md(&format!("# Big\n\n{body}\n"));
+        let chunks: Vec<_> = ex
+            .nodes
+            .iter()
+            .filter(|n| n.node_type == "chunk")
+            .collect();
+        assert!(chunks.len() >= 2);
+        // Each successor starts with the tail of its predecessor, so a match
+        // spanning the boundary surfaces from either side.
+        let first_text = chunks[0].docstring.as_deref().unwrap();
+        let tail_of_first: String = first_text[first_text.len() - 40..].to_string();
+        assert!(
+            chunks[1].docstring.as_deref().unwrap().contains(&tail_of_first),
+            "successor chunk must carry the predecessor tail"
+        );
+        // The overlap shifts the reported start line back accordingly.
+        assert!(chunks[1].source_line.unwrap() < chunks[0].source_line.unwrap() + 4);
+        for c in &chunks {
+            assert!(
+                c.docstring.as_deref().unwrap().chars().count()
+                    <= CHUNK_MAX_CHARS + CHUNK_OVERLAP_CHARS + 2,
+                "chunk exceeded the cap including overlap"
+            );
+        }
+    }
+
+    #[test]
+    fn overlap_tails_never_produce_empty_labels() {
+        // Bodies whose paragraphs are separated by blank lines can snap an
+        // overlap tail to a blank line; labels must still come from real
+        // content or extraction validation fails.
+        let body = "first paragraph line one"
+            .repeat(30) + "
+
+" + &"second paragraph line".repeat(30) + "
+
+" + &"third paragraph line".repeat(30) + "
+";
+        let ex = extract_md(&format!("# Gap
+
+{}
+", body));
+        assert!(
+            ex.nodes.iter().all(|n| !n.label.trim().is_empty()),
+            "no chunk may carry an empty label"
+        );
+    }
+
+    #[test]
+    fn chunk_size_override_is_parsed_and_clamped() {
+        assert_eq!(chunk_max_chars_value(None), CHUNK_MAX_CHARS);
+        assert_eq!(chunk_max_chars_value(Some(" 2000 ")), 2000);
+        assert_eq!(chunk_max_chars_value(Some("junk")), CHUNK_MAX_CHARS);
+        assert_eq!(chunk_max_chars_value(Some("10")), 400, "clamped low");
+        assert_eq!(chunk_max_chars_value(Some("999999")), 8000, "clamped high");
     }
 }

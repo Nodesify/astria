@@ -240,7 +240,7 @@ pub fn dedup_nodes(db: &Connection) -> Result<usize> {
             if matches!(
                 r.file_type.as_str(),
                 "code" | "test" | "stub" | "package" | "rationale" | "document" | "reference"
-                    | "paper"
+                    | "paper" | "chunk"
             ) || r.label.is_empty()
                 || label_shape(&r.label) == Shape::File
             {

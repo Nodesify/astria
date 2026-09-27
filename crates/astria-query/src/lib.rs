@@ -461,6 +461,12 @@ fn component_coverage(needle: &[String], haystack: &[String]) -> f64 {
         / needle.len() as f64
 }
 
+/// Prose node types: chunked document bodies share the document lifecycle
+/// (seed quota, priors) with whole-document nodes.
+fn is_doc_type(file_type: &str) -> bool {
+    matches!(file_type, "document" | "reference" | "paper" | "chunk")
+}
+
 fn wants_docs(terms: &[String]) -> bool {
     terms.iter().flat_map(|t| tokenize(t)).any(|t| {
         matches!(
@@ -479,6 +485,14 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         .node_indices()
         .map(|idx| loaded.graph[idx].label.to_lowercase())
         .collect();
+    let doc_share = {
+        let docs = loaded
+            .graph
+            .node_indices()
+            .filter(|&i| is_doc_type(&loaded.graph[i].file_type))
+            .count();
+        docs as f64 / loaded.graph.node_count().max(1) as f64
+    };
     let label_components: Vec<Vec<String>> = loaded
         .graph
         .node_indices()
@@ -542,7 +556,8 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         // Code answers rank above documentation and speculative stubs on
         // equal term evidence: without the prior, prose-heavy doc nodes and
         // std-call stubs crowd code symbols out of the seed set.
-        let is_doc = matches!(node.file_type.as_str(), "document" | "reference" | "paper");
+        let is_chunk = node.file_type == "chunk";
+        let is_doc = is_chunk || is_doc_type(&node.file_type);
         let symbol_parts = &label_components[i];
         let is_test = node.file_type == "test"
             || is_testish_path(&node.source_file)
@@ -555,6 +570,20 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
                 1.25
             } else {
                 0.4
+            }
+        } else if is_chunk {
+            // Chunked prose out-scoring code on body-term luck displaced
+            // exact code answers by a couple of ranks; in code-majority
+            // graphs chunks rank under documents, while on doc-only graphs
+            // they ARE the corpus and rank like any document.
+            if doc_share > 0.95 {
+                if wants_docs {
+                    1.25
+                } else {
+                    0.55
+                }
+            } else {
+                0.45
             }
         } else if is_doc {
             if wants_docs {
@@ -593,6 +622,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             .map(|d| tokenize(d).into_iter().take(400).collect())
             .unwrap_or_default();
         let mut score = 0.0;
+        let mut matched_terms = 0usize;
         for term in terms {
             let term = term.trim();
             if term.len() <= 2 {
@@ -619,7 +649,11 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             };
             let doc_coverage = component_coverage(&term_tokens, &doc_tokens);
             let path_coverage = component_coverage(&term_tokens, &file_tokens);
-            let doc_score = 0.35 * doc_coverage * doc_coverage;
+            // A chunk's body is its content: body evidence there scores at
+            // label parity, so label luck (a speaker name in the first line)
+            // cannot outrank the chunk that actually answers the question.
+            let doc_coeff = if is_chunk { 1.1 } else { 0.35 };
+            let doc_score = doc_coeff * doc_coverage * doc_coverage;
             let path_score = 0.55 * path_coverage * path_coverage;
             let fuzzy_score = if label_score + doc_score + path_score == 0.0
                 && term_tokens.len() == 1
@@ -631,7 +665,23 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             } else {
                 0.0
             };
+            if label_score + doc_score + path_score + fuzzy_score > 0.0 {
+                matched_terms += 1;
+            }
             score += (label_score.max(doc_score) + path_score + fuzzy_score) * idf_weight(term);
+        }
+        // Questions are multi-term: a node covering most of them outranks a
+        // lexically lucky single-term match ("paint" in a speaker line vs
+        // the chunk holding melanie + painted + sunrise).
+        let effective_terms = terms
+            .iter()
+            .filter(|t| {
+                let t = t.trim();
+                t.len() > 2 && !STOPWORDS.contains(&t.to_lowercase().as_str())
+            })
+            .count();
+        if effective_terms > 0 {
+            score *= 0.8 + 0.2 * (matched_terms as f64 / effective_terms as f64);
         }
         // Entry-point intent: a file that imports many modules and is
         // imported by none is the program's front door, whatever it is
@@ -816,6 +866,15 @@ fn subgraph_to_text(
             "NODE {} [id={} src={} community={}]\n",
             node.label, node.id, loc, comm
         );
+        // Chunked bodies cite their covered line range so agents can quote
+        // exact spans; harness parsers only read the src= token, so the
+        // range rides on its own line.
+        if node.file_type == "chunk" {
+            if let (Some(start), Some(doc)) = (node.source_line, &node.docstring) {
+                let end = start + doc.lines().count() as i64 - 1;
+                line.push_str(&format!("  span: L{start}-L{end}\n"));
+            }
+        }
         if let Some(sig) = &node.signature {
             let short: String = sig.chars().take(140).collect();
             line.push_str(&format!("  sig: {}\n", short));
@@ -1232,7 +1291,6 @@ fn query_graph_loaded(
     // doc-only graphs (transcript corpora, docs sites with no code) the
     // quota would leave the traversal nearly seedless — there is no code to
     // protect, so the quota opens up to the full seed limit.
-    let is_doc_type = |ft: &str| matches!(ft, "document" | "reference" | "paper");
     let doc_node_count = loaded
         .graph
         .node_indices()
@@ -2179,6 +2237,74 @@ mod tests {
         assert!(
             doc_seeds >= 4,
             "doc-only graph seeded only {doc_seeds} nodes, quota did not open up"
+        );
+    }
+    #[test]
+    fn chunk_bodies_cite_their_span() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, source_line, docstring) VALUES
+                ('c0', 'sunrise turn', 'chunk', 't/s01.md', 14, 'Melanie painted a sunrise
+and the morning felt bright
+across the whole valley
+with friends around
+at the lake house');",
+        )
+        .unwrap();
+        let (text, _, _, _) = query_graph(
+            &db,
+            "chunk-span",
+            "sunrise",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        assert!(
+            text.contains("span: L14-L18"),
+            "chunk record must cite its covered lines: {text}"
+        );
+    }
+
+    #[test]
+    fn code_majority_graph_ranks_chunks_under_code() {
+        // The chunk's body matches the question, but on a code corpus it must
+        // not displace the exact code symbol from the top of the answer.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
+                ('sym', 'validation()', 'code', 'src/v.rs', NULL),
+                ('callers', 'run_checks()', 'code', 'src/w.rs', NULL),
+                ('c0', 'notes turn', 'chunk', 'docs/n.md', 'validation notes about prose'),
+                ('c1', 'other turn', 'chunk', 'docs/m.md', 'unrelated text'),
+                ('doc0', 'validation notes', 'document', 'docs/a.md', NULL);",
+        )
+        .unwrap();
+        let (text, _, _, _) = query_graph(
+            &db,
+            "chunk-prior",
+            "validation",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        let first_node = text.lines().find(|l| l.starts_with("NODE ")).unwrap();
+        assert!(
+            first_node.contains("validation()"),
+            "code symbol must outrank chunked prose on a code corpus: {first_node}"
+        );
+        assert!(
+            text.contains("notes turn"),
+            "the chunk must still surface, just ranked under code"
         );
     }
 
