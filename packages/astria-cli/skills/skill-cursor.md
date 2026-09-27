@@ -36,4 +36,6 @@ When `.astria/` exists, the `.cursor/rules/astria.mdc` rule enforces graph usage
 
 ## After editing code
 
-Run `astria update .` to keep the graph current.
+If git hooks are installed (`astria hook install`), the graph refreshes itself after every commit — this step is already done.
+
+Otherwise run `astria update .` to keep the graph current (`--quiet --if-stale 10` skips while fresh). To share the graph, `astria export --format html --out graph.html` writes a self-contained interactive bubble viewer — click to expand, search to jump, click a node to focus its relation-labeled neighbors.

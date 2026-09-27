@@ -149,6 +149,15 @@ Incremental rebuild — only re-extracts files that changed (SHA-256 detection).
 
 Much faster than `run` for existing projects.
 
+Options (all also available on `run`, except `--quiet`/`--if-stale`):
+- `--no-dedup` — skip near-duplicate node merging
+- `--backend <name>` / `--model <name>` — semantic LLM backend (claude, openai, gemini) and model
+- `--embed` — compute local embeddings: `similar_to` edges + semantic query recall
+- `--label-communities` — name changed communities thematically (one LLM call per changed community)
+- `--deep` — second extraction tier: LLM-linked cross-file concept edges
+- `--quiet` — suppress progress lines and the token benchmark (for hooks/CI)
+- `--if-stale <minutes>` — skip the rebuild entirely when the graph is fresher than N minutes
+
 ### `astria health [options]`
 
 Code-health report (heuristic 0-100 score): unreachable-symbol candidates,
@@ -224,7 +233,11 @@ Repeated queries leave a trace: node pairs that keep coming up across distinct q
 
 ### MCP server
 
-`astria mcp --graph .` runs an MCP stdio server exposing the graph to AI agents with tools: `query_graph` (supports `cursor` continuation and `detail` tiers), `repo_map`, `explain`, `get_neighbors`, `shortest_path`, `affected`, `god_nodes`, `list_communities`, `graph_stats`.
+`astria mcp --graph .` runs an MCP stdio server exposing the graph to AI agents with tools: `query_graph` (supports `cursor` continuation and `detail` tiers), `repo_map`, `explain`, `get_neighbors`, `shortest_path`, `affected`, `god_nodes`, `list_communities`, `graph_stats`, `health`.
+
+### Git hooks
+
+`astria hook install|uninstall|status` — per-machine git hooks that run a quiet, freshness-throttled `astria update .` after every code commit and branch switch, so the graph stays current without anyone remembering to run `update`. Skips during rebase/merge; re-run `astria hook install` after upgrading astria to refresh the installed template. `astria hook-guard <mode>` installs the editor PreToolUse guard (`search | read | gemini`).
 
 
 ### `astria stats [options]`
@@ -237,15 +250,18 @@ Graph staleness check: fresh/stale/very_stale with age in minutes.
 
 ### `astria export [options]`
 
-Export graph to JSON, HTML, GraphML, or Cypher (Neo4j).
+Export graph to JSON, HTML, GraphML, SVG, Cypher (Neo4j), or FalkorDB Cypher.
 
 ```
 astria export --format html --out graph.html
+astria export --format svg --out graph.svg              # static, embeds anywhere
 astria export --format graphml --out graph.graphml
-astria export --format cypher --out astria.cypher   # idempotent MERGE script for Neo4j
+astria export --format cypher --out astria.cypher       # idempotent MERGE script for Neo4j
+astria export --format falkordb --out astria.cypher     # Cypher for FalkorDB/Redis
 ```
 
-`--format html` writes a self-contained interactive viewer (opens as community bubbles; click to expand, search symbols or community names to jump, focus a node to see its relation-labeled neighbors, "All nodes" for the full graph). `--mode standard` allows up to 5,000 nodes; `--mode large` lifts the cap.
+`--format html` writes a self-contained interactive viewer (opens as community bubbles; click to expand, search symbols or community names to jump, focus a node to see its relation-labeled neighbors, "All nodes" for the full graph). `--mode standard` allows up to 5,000 nodes; `--mode large` lifts the cap. For a filesystem-hierarchy view instead, `astria tree --out tree.html`.
+`--neo4j-push <bolt://host:port>` pushes the cypher export live to Neo4j; `--redis-push <host:port>` pushes a falkordb export to FalkorDB/Redis. (Obsidian is a wiki format: `astria wiki --format obsidian`.)
 
 ### `astria wiki [options]`
 
@@ -259,7 +275,9 @@ astria wiki --format obsidian --out my-vault   # Obsidian vault + canvas
 
 ## Post-Edit Protocol
 
-After modifying code files in a session with an active graph:
+With git hooks installed (`astria hook install`), the graph refreshes itself after every commit — nothing to do.
+
+After modifying code files in a session with an active graph (no hooks):
 
 ```bash
 astria update .
