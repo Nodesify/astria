@@ -1158,7 +1158,10 @@ fn semantic_seeds_disabled() -> bool {
 #[cfg_attr(not(feature = "embed"), allow(dead_code))]
 fn semantic_seeds_disabled_value(value: Option<&str>) -> bool {
     match value {
-        Some(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "0" | "false" | "no"),
+        Some(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "off" | "0" | "false" | "no"
+        ),
         None => false,
     }
 }

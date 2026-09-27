@@ -9,6 +9,7 @@ export async function queryCommand(question: string, opts: {
   detail?: string;
   cursor?: string;
   noEmbed?: boolean;
+  json?: boolean;
 }) {
   try {
     const mode = opts.dfs ? 'dfs' : 'bfs';
@@ -28,6 +29,28 @@ export async function queryCommand(question: string, opts: {
       opts.detail,
       cursor
     );
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            question,
+            mode,
+            depth,
+            budget,
+            directed: opts.directed ?? false,
+            nodeCount: result.nodeCount,
+            edgeCount: result.edgeCount,
+            // Present when the node list was truncated; pass back as --cursor.
+            nextCursor: result.nextCursor ?? null,
+            graphBuiltAt: result.graphBuiltAt ?? null,
+            text: result.text,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     process.stdout.write(result.text);
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);

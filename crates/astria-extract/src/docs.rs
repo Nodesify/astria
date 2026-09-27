@@ -61,8 +61,8 @@ pub(crate) fn extract_markdown_from_string(
     let mut pre_body_start = 0u32;
 
     let flush_pending = |pending: &mut Option<(String, String, u32, String)>,
-                             nodes: &mut Vec<ExtractedNode>,
-                             edges: &mut Vec<ExtractedEdge>| {
+                         nodes: &mut Vec<ExtractedNode>,
+                         edges: &mut Vec<ExtractedEdge>| {
         if let Some((section_id, _slug, start, body)) = pending.take() {
             if !body.trim().is_empty() {
                 let parts: Vec<&str> = section_id.split("::").collect();
@@ -266,7 +266,13 @@ pub(crate) fn extract_text_file(
 
     for (i, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
-            flush_paragraph(&mut para_lines, para_start, &mut chunk_index, &mut nodes, &mut edges);
+            flush_paragraph(
+                &mut para_lines,
+                para_start,
+                &mut chunk_index,
+                &mut nodes,
+                &mut edges,
+            );
         } else {
             if para_lines.is_empty() {
                 para_start = i as u32 + 1;
@@ -274,7 +280,13 @@ pub(crate) fn extract_text_file(
             para_lines.push(line);
         }
     }
-    flush_paragraph(&mut para_lines, para_start, &mut chunk_index, &mut nodes, &mut edges);
+    flush_paragraph(
+        &mut para_lines,
+        para_start,
+        &mut chunk_index,
+        &mut nodes,
+        &mut edges,
+    );
 
     Ok(Extraction {
         file_path: path.to_path_buf(),
@@ -288,7 +300,11 @@ pub(crate) fn extract_text_file(
 /// when longer.
 fn truncate_with_ellipsis(text: &str, max: usize) -> String {
     if text.chars().count() > max {
-        let cut: usize = text.char_indices().nth(max - 3).map(|(i, _)| i).unwrap_or(0);
+        let cut: usize = text
+            .char_indices()
+            .nth(max - 3)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
         format!("{}...", &text[..cut])
     } else {
         text.to_string()
@@ -404,7 +420,10 @@ fn chunk_body(body: &str, body_start: u32) -> Vec<BodyChunk> {
         match &mut current {
             Some((_, text)) if text.chars().count() + piece.chars().count() + 2 > max => {
                 let (line, text) = current.take().unwrap();
-                chunks.push(BodyChunk { start_line: body_start + line - 1, text });
+                chunks.push(BodyChunk {
+                    start_line: body_start + line - 1,
+                    text,
+                });
                 current = Some((piece_line, piece));
             }
             Some((_, text)) => {
@@ -416,7 +435,10 @@ fn chunk_body(body: &str, body_start: u32) -> Vec<BodyChunk> {
     }
     if let Some((line, text)) = current {
         if !text.trim().is_empty() {
-            chunks.push(BodyChunk { start_line: body_start + line - 1, text });
+            chunks.push(BodyChunk {
+                start_line: body_start + line - 1,
+                text,
+            });
         }
     }
     add_overlap(&mut chunks);
@@ -544,8 +566,8 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
     let mut pre_body_start = 0u32;
 
     let flush_pending = |pending: &mut Option<(String, String, u32, String)>,
-                             nodes: &mut Vec<ExtractedNode>,
-                             edges: &mut Vec<ExtractedEdge>| {
+                         nodes: &mut Vec<ExtractedNode>,
+                         edges: &mut Vec<ExtractedEdge>| {
         if let Some((section_id, _slug, start, body)) = pending.take() {
             if !body.trim().is_empty() {
                 let parts: Vec<&str> = section_id.split("::").collect();
@@ -710,11 +732,7 @@ mod tests {
     fn heading_free_markdown_chunks_under_the_document() {
         let ex = extract_md("alpha paragraph with content\n\nbeta paragraph also\n");
         assert!(ex.nodes.iter().any(|n| n.node_type == "document"));
-        let chunks: Vec<_> = ex
-            .nodes
-            .iter()
-            .filter(|n| n.node_type == "chunk")
-            .collect();
+        let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.node_type == "chunk").collect();
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].docstring.as_deref().unwrap().contains("beta"));
         assert!(chunks[0].id.ends_with("::p0"));
@@ -749,11 +767,7 @@ mod tests {
         )
         .unwrap();
         let ex = extract_text_file(p.as_path(), "text", p.as_path()).unwrap();
-        let chunks: Vec<_> = ex
-            .nodes
-            .iter()
-            .filter(|n| n.node_type == "chunk")
-            .collect();
+        let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.node_type == "chunk").collect();
         assert_eq!(chunks.len(), 2);
         let doc = chunks[0].docstring.as_deref().unwrap();
         assert!(doc.contains("first line has sunrise"));
@@ -766,12 +780,20 @@ mod tests {
     fn rst_section_body_is_captured() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("guide.rst");
-        std::fs::write(&p, "Title\n=====\n\nSetup text here\nMore setup\n\nNext\n=====\n").unwrap();
+        std::fs::write(
+            &p,
+            "Title\n=====\n\nSetup text here\nMore setup\n\nNext\n=====\n",
+        )
+        .unwrap();
         let ex = extract_rst(p.as_path(), p.as_path()).unwrap();
         let title = ex.nodes.iter().find(|n| n.label == "Title").unwrap();
         let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.docstring.is_some()).collect();
         assert_eq!(chunks.len(), 1);
-        assert!(chunks[0].docstring.as_deref().unwrap().contains("Setup text here"));
+        assert!(chunks[0]
+            .docstring
+            .as_deref()
+            .unwrap()
+            .contains("Setup text here"));
         assert!(chunks[0].id.starts_with(&title.id));
     }
 
@@ -780,18 +802,18 @@ mod tests {
         let line = "x".repeat(300);
         let body: String = (0..8).map(|_| format!("{line}\n")).collect();
         let ex = extract_md(&format!("# Big\n\n{body}\n"));
-        let chunks: Vec<_> = ex
-            .nodes
-            .iter()
-            .filter(|n| n.node_type == "chunk")
-            .collect();
+        let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.node_type == "chunk").collect();
         assert!(chunks.len() >= 2);
         // Each successor starts with the tail of its predecessor, so a match
         // spanning the boundary surfaces from either side.
         let first_text = chunks[0].docstring.as_deref().unwrap();
         let tail_of_first: String = first_text[first_text.len() - 40..].to_string();
         assert!(
-            chunks[1].docstring.as_deref().unwrap().contains(&tail_of_first),
+            chunks[1]
+                .docstring
+                .as_deref()
+                .unwrap()
+                .contains(&tail_of_first),
             "successor chunk must carry the predecessor tail"
         );
         // The overlap shifts the reported start line back accordingly.
@@ -810,17 +832,22 @@ mod tests {
         // Bodies whose paragraphs are separated by blank lines can snap an
         // overlap tail to a blank line; labels must still come from real
         // content or extraction validation fails.
-        let body = "first paragraph line one"
-            .repeat(30) + "
+        let body = "first paragraph line one".repeat(30)
+            + "
 
-" + &"second paragraph line".repeat(30) + "
+" + &"second paragraph line".repeat(30)
+            + "
 
-" + &"third paragraph line".repeat(30) + "
+" + &"third paragraph line".repeat(30)
+            + "
 ";
-        let ex = extract_md(&format!("# Gap
+        let ex = extract_md(&format!(
+            "# Gap
 
 {}
-", body));
+",
+            body
+        ));
         assert!(
             ex.nodes.iter().all(|n| !n.label.trim().is_empty()),
             "no chunk may carry an empty label"
