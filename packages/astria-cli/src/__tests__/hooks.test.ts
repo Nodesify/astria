@@ -65,6 +65,7 @@ function testFreshInstall() {
   assert(content.startsWith('#!/usr/bin/env node'), 'fresh install: node shebang');
   assert(content.includes('// astria-hook-start'), 'fresh install: current marker present');
   assert(content.includes('ASTRIA_HOOK_VERSION'), 'fresh install: version sentinel present');
+  assert(content.includes('--if-stale'), 'fresh install: hook throttles by freshness');
   assert(!content.includes('nodesify-graphify'), 'fresh install: no legacy marker');
 }
 

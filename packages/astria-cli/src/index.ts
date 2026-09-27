@@ -67,7 +67,11 @@ program
   .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
   .option('--label-communities', 'Name communities thematically with one LLM call per changed community (requires a semantic backend)')
   .option('--deep', 'Second extraction tier: LLM-linked cross-file concept edges, cached per file (requires a semantic backend)')
-  .action(updateCommand);
+  .option('--quiet', 'Suppress progress lines and the token benchmark')
+  .option('--if-stale <minutes>', 'Skip when the graph was updated less than N minutes ago')
+  .action((path, opts) =>
+    updateCommand(path, { ...opts, ifStale: opts.ifStale ? Number(opts.ifStale) : undefined }),
+  );
 
 program
   .command('watch')

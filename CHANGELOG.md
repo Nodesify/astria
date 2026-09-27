@@ -13,6 +13,7 @@ this file is the per-version summary.
 - **Relation-aware focus** — the exported edge payload now carries the edge kind (`calls`, `imports`, …): the focus panel lists a selected node's neighbors with their relation, and the highlighted 1-hop edges gain direction arrowheads (direction shown where it matters, not on the hairball).
 - **Community search** — search matches community names as well as symbols and files; picking a community expands and centers its bubble.
 - **Accessibility floor** — the canvas exposes a `role="img"` label with node/community/edge counts plus a visually hidden summary of the controls, so screen readers get a usable description of the export.
+- **Quiet, throttled git hooks** — `astria hook install` now writes v4 hooks that invoke `update . --quiet --if-stale 10`: hook-driven rebuilds print nothing (no progress lines, no token benchmark), and skip entirely when the graph was published less than 10 minutes ago, so a burst of commits rebuilds once instead of per commit. `astria update` gained matching `--quiet` / `--if-stale <minutes>` flags; hooks retry plain `update .` against any CLI version that predates the flags, and still never break a commit.
 
 ## [1.0.6] — 2026-09-27
 
