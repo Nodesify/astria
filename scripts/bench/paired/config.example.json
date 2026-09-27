@@ -1,0 +1,62 @@
+{
+  "output": "bench-work/paired-new",
+  "python": "bench-work/venv/Scripts/python.exe",
+  "graphify_source": "bench-work/corpus",
+  "graphify_commit": "4139885a1212956cf69a76946fbde0d181ab85e9",
+  "astria_cli": "packages/astria-cli/dist/index.js",
+  "astria_native": "target/release/astria_napi.dll",
+  "profile": "release",
+  "corpora": [
+    {
+      "name": "astria-self",
+      "source": ".",
+      "commit": "71e70ef2ceeb4aadf19a0cc7044c83d1f9411f63",
+      "golden": "scripts/bench/quality/golden/astria-self.jsonl",
+      "split": "frozen-v1"
+    },
+    {
+      "name": "click",
+      "source": "bench-work/paired-20260927-162610/click-source",
+      "commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+      "golden": "scripts/bench/external/click.jsonl",
+      "split": "frozen-v1",
+      "definitions": "scripts/bench/paired/click.diagnostic-definitions.json"
+    },
+    {
+      "name": "click-heldout",
+      "source": "bench-work/paired-20260927-162610/click-source",
+      "commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+      "golden": "scripts/bench/paired/click.heldout-v1.jsonl",
+      "split": "additional-validation-v1"
+    },
+    {
+      "name": "express",
+      "source": "bench-work/paired-20260927-162610/express-source",
+      "commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+      "golden": "scripts/bench/external/express.jsonl",
+      "split": "frozen-v1",
+      "definitions": "scripts/bench/paired/express.diagnostic-definitions.json"
+    },
+    {
+      "name": "express-heldout",
+      "source": "bench-work/paired-20260927-162610/express-source",
+      "commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+      "golden": "scripts/bench/paired/express.heldout-v1.jsonl",
+      "split": "additional-validation-v1"
+    },
+    {
+      "name": "ripgrep",
+      "source": "bench-work/paired-20260927-162610/ripgrep-source",
+      "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+      "golden": "scripts/bench/external/ripgrep.jsonl",
+      "split": "frozen-v1"
+    },
+    {
+      "name": "ripgrep-heldout",
+      "source": "bench-work/paired-20260927-162610/ripgrep-source",
+      "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+      "golden": "scripts/bench/paired/ripgrep.heldout-v1.jsonl",
+      "split": "additional-validation-v1"
+    }
+  ]
+}

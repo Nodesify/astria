@@ -64,13 +64,49 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      - name: Blind judging (promptfoo, gated on judge key)
+        # Spend control: LLM judging runs ONLY on a manual dispatch by the
+        # maintainer. Automated snapshot runs (bench-trigger pushes) never
+        # call a paid API, and fork PRs neither trigger this workflow nor
+        # receive secrets.
+        if: github.event_name == 'workflow_dispatch' && github.actor == 'erictong0602'
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Judge model is set in repo Settings > Secrets and variables >
+          # Actions > Variables as JUDGE_MODEL (any OpenRouter model id);
+          # falls back to the default when unset.
+          JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'openrouter:openai/gpt-4o-mini' }}
+          BENCH_CORPUS: ${{ github.workspace }}/bench-work/corpus
+          ASTRIA_CMD: astria
+          GRAPHIFY_CMD: ${{ github.workspace }}/bench-work/venv/bin/graphify
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "OPENROUTER_API_KEY is not set - skipping blind judging (issue #80)."
+            exit 0
+          fi
+          # The snapshot cleans the original's artifacts before astria runs;
+          # rebuild the original's graph so both providers can answer.
+          "$([ -x bench-work/venv/bin/python ] && echo bench-work/venv/bin/python || echo bench-work/venv/Scripts/python.exe)"             scripts/bench/orig_run.py "$BENCH_CORPUS" bench-work/orig-judge.json
+          node scripts/bench/quality/promptfoo/gen-promptfoo-tests.mjs
+          mkdir -p scripts/bench/quality/out
+          cd scripts/bench/quality/promptfoo
+          npx --yes promptfoo@latest eval -c promptfooconfig.yaml --grader "$JUDGE_MODEL" --output ../../out/promptfoo-results.json
+
+      - name: Upload blind-judging results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: promptfoo-results
+          path: scripts/bench/quality/out/promptfoo-results.json
+          if-no-files-found: ignore
+
   # Retrieval-quality benchmark: the published CLI answering the golden QA
-  # set over this repo's own graph. Non-blocking while the golden set and
-  # the query ranking mature; numbers land on the docs site via the commit.
+  # set over this repo's own graph. This published-release snapshot is separate
+  # from quality.yml, which gates proposed source changes with a local build.
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -81,10 +117,14 @@ jobs:
           node-version: 22
       - name: Install astria (published CLI)
         run: npm install -g @nodesify/astria
+      - name: Install shared exact tokenizer
+        run: npm install --no-save js-tiktoken
       - name: Build the graph over this repo
         run: astria run .
-      - name: Retrieval quality (recall@k / MRR)
-        run: node scripts/bench/quality/run-quality.mjs --out website/src/data/quality-snapshot.json
+      - name: Retrieval quality (file hit@k, recall@k, MRR)
+        # Blocking with a floor, not a ceiling: recall@5 below 50% fails the
+        # run, so ranking regressions gate the snapshot.
+        run: node scripts/bench/quality/run-quality.mjs --out website/src/data/quality-snapshot.json --min-recall5 50
       - name: Commit quality snapshot
         run: |
           git config user.name "github-actions[bot]"

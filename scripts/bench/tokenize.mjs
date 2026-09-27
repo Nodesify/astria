@@ -39,7 +39,14 @@ export async function loadTokenizer() {
   try {
     const { encodingForModel } = await import('js-tiktoken');
     const enc = encodingForModel('gpt-4o'); // o200k_base
-    return { name: 'o200k_base', implementation: 'js-tiktoken', count: (t) => enc.encode(t).length };
+    // Empty allowed/disallowed lists: corpora can contain literal
+    // `<|endoftext|>` text (test fixtures do); count it as plain text
+    // instead of throwing.
+    return {
+      name: 'o200k_base',
+      implementation: 'js-tiktoken',
+      count: (t) => enc.encode(t, [], []).length,
+    };
   } catch {
     return null;
   }

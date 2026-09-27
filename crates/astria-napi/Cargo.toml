@@ -14,6 +14,7 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 napi = { version = "3", features = ["tokio_rt"] }
 napi-derive = "3"
+astria-bolt = { workspace = true }
 astria-core = { workspace = true }
 astria-detect = { workspace = true }
 astria-extract = { workspace = true }
@@ -38,7 +39,7 @@ sha2 = { workspace = true }
 # Runtime ships no prebuilt binaries (x86_64-apple-darwin) — those builds
 # error clearly when --embed is requested.
 default = ["embed"]
-embed = ["dep:astria-embed"]
+embed = ["dep:astria-embed", "astria-query/embed", "astria-mcp/embed"]
 
 [build-dependencies]
 napi-build = "2"

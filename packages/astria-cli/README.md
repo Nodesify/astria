@@ -8,7 +8,7 @@ Turn any folder into a queryable knowledge graph.
 npm install -g @nodesify/astria
 ```
 
-Requires Node.js >= 20. No Rust toolchain needed — ships prebuilt native binaries for macOS, Linux, and Windows.
+Requires Node.js >= 22. No Rust toolchain needed — ships prebuilt native binaries for macOS, Linux, and Windows.
 
 > **Migrating from `@nodesify/graphify`?** Run `astria migrate` once (renames `.graphify/` → `.astria/` and the global store), then `astria install` to refresh AI-tool skills and hooks. `GRAPHIFY_*` env vars keep working; `ASTRIA_*` takes precedence.
 
@@ -16,7 +16,7 @@ Requires Node.js >= 20. No Rust toolchain needed — ships prebuilt native binar
 
 ```bash
 astria run <path>                            # Full pipeline: detect → extract → build → cluster → analyze → report
-astria update <path>                         # Incremental rebuild (only changed files)
+astria update <path>                         # Reuse cached extraction; reconcile current corpus
 astria watch <path> [--debounce 3000]        # Watch for file changes, auto-rebuild
 astria explain <node> [--graph .]            # Explain a node and its connections
 astria query <question> [--dfs] [--depth 2] [--budget 2000] [--graph .]  # BFS/DFS traversal
@@ -35,6 +35,14 @@ Running `astria run .` creates `.astria/` with:
 - `db.sqlite` — the graph database
 - `graph.json` — full graph export
 - `graph_report.md` — report with hub nodes, communities, surprising connections
+
+### Retrieval and upgrades
+
+Scoped code definitions survive semantic deduplication. JS/TS assigned functions retain binding names and bodies; Python implementations take precedence over overload declarations. Queries favor complete identifiers while honoring explicit requests for tests or documentation. Static receiver matching does not infer runtime types or aliases.
+
+`query --budget N` caps the full query text using `o200k_base`, including metadata. CLI and MCP share that text budget; MCP transport JSON is excluded. Budgets must fit metadata and the next complete record or the query returns an error. Use the returned `--cursor N` for the next page of node and edge records.
+
+After upgrading, run `astria update .` to refresh extraction and restore definitions removed by older deduplication. Discard old pagination cursors after an upgrade or graph rebuild.
 
 ### HTML visualization modes
 

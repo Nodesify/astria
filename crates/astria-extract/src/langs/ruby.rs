@@ -2,13 +2,16 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "Ruby",
-        extensions: &[".rb", ".rake"],
+        name: astria_core::languages::LanguageId::Ruby.registration().name,
+        extensions: astria_core::languages::LanguageId::Ruby
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_ruby::LANGUAGE.into(),
         class_types: &["class", "module", "singleton_class"],
         function_types: &["method", "singleton_method"],
         import_types: &["call"],
         call_type: "call",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["body_statement", "do"],

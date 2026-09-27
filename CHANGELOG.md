@@ -4,6 +4,154 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+### Retrieval correctness and response budgets
+- Preserve scoped code/test definitions during semantic deduplication. Extraction cache invalidation lets `astria update .` restore previously lost definitions.
+- Extract JS/TS assigned functions with qualified bindings, scope, documentation and callback bodies. Prefer Python concrete implementations over same-scope overload declarations.
+- Rank complete identifiers and honor explicit test/documentation intent; classify Rust inline tests from AST attributes and modules.
+- Enforce exact `o200k_base` query-text budgets, including metadata, in CLI and MCP. Invalid or insufficient budgets return errors. MCP transport JSON is excluded. Continuation cursors now count node and edge records; discard old cursors after upgrading or rebuilding.
+- Add pinned paired benchmarks, grounded symbol diagnostics and ID collision reporting. See [current results and limitations](website/docs/explanation/retrieval-validation.md).
+
+### Added
+- **Cross-layer linking** (`astria-build::crosslayer`): three deterministic
+  post-build passes bridge layers the per-file extractors cannot see, all
+  edges tagged context `crosslayer` and re-derived on every pipeline run —
+  docs that name a package get `references` edges to it (the architecture
+  crate table now reaches code), packages get `entry_point` edges to their
+  conventional entry file, and TS/JS symbols importing the napi binding get
+  `ffi_binding` edges to the backing Rust function (camelCase ↔ snake_case).
+  Closes the last golden-QA full miss (q07, "how does the MCP server expose
+  tools to agents") structurally — the docs→napi→`astria-mcp` chain is now
+  traversable — with no golden-set edits.
+
+### Changed
+- **Doc-heading cap**: query answers render at most 6 document-type nodes —
+  doc headings keyword-match almost anything and could absorb the node
+  budget (the second ranked-fix from the golden-QA indictment).
+- **`--detail high` prefers file-level nodes** when rendering answers, on
+  equal relevance.
+- The quality job in the benchmark snapshot workflow is now **blocking**:
+  fails when golden-QA recall@5 falls below 50% (`--min-recall5`).
+- **Docs-vs-code drift guard** (`scripts/check-docs-sync.mjs`, CI job
+  `docs-sync`): asserts every workspace crate and every emitted relation is
+  documented in ARCHITECTURE.md, and that README/CONTRIBUTING version
+  claims match the workspace metadata. Caught 5 undocumented relations on
+  its first run.
+- Blind LLM judging (promptfoo) is wired as a workflow job, gated on the
+  `PROMPTFOO_JUDGE_KEY` secret.
+- **Four new languages**: Terraform/HCL, PowerShell, Verilog/SystemVerilog,
+  and Metal shaders (via the C++ grammar) — 21 -> 25.
+- **`astria callflow <node>`**: Mermaid `flowchart` of the calls around a
+  node (`--depth`, `--direction in|out|both`), rendered natively by GitHub
+  and Obsidian.
+- **FalkorDB export**: `export --format falkordb` writes openCypher with
+  load instructions; `--redis-push host:port` loads it live via redis-cli
+  (alongside the maintainer-added SVG export and live Neo4j push).
+- Video/audio ingestion via Whisper transcription is scoped and tracked
+  in issue #82 (external-binary mode recommended).
+- Query seed selection caps documentation-type seeds at 2 of 5 and scores
+  directory/crate-name path matches above bare substrings; the self-corpus
+  ignores `worked/` via `.astriaignore`. Measured on the golden set:
+  MRR 0.537 -> 0.576, recall@5 62.9% -> 71.4%, recall@10 85.7% -> 88.6%.
+  The three former full misses (tree-sitter language support, MCP tool
+  exposure, LLM semantic enrichment) now surface their implementing files.
+- **Phrase bonus in seed scoring**: consecutive question tokens appearing
+  verbatim in a label or docstring ("blast radius") lift the node —
+  token-level scoring treated the words as unrelated and lost to weaker
+  lexical-luck matches (fixes the q09 blast-radius regression).
+- **Same-named files in different directories are separate entities**:
+  dedup no longer merges file-shaped nodes at all (transitive union chains
+  had merged `src/index.ts` into `install/index.ts`, erasing the CLI entry
+  file). The guard prevents future merges; healing the already-scarred
+  store additionally required a full rebuild, because the incremental
+  pipeline only re-extracts changed files and never restored the deleted
+  entry node on its own.
+- **IDF-weighted seed scoring**: a term that matches a large share of node
+  labels ("index" hits every index.* file) is scaled down, while rare terms
+  ("scip") keep full strength — previously the generic matches won by
+  alphabetical tie-break and flooded the seed set (fixes the q26 SCIP miss).
+- **Entry-point intent**: questions asking for the entry point are answered
+  structurally — a file that imports many modules and is imported by none
+  (tests excluded) is the program's front door, whatever its filename —
+  because no lexical hook can find an entry file named `index.ts` (fixes
+  the q17 CLI-entry-point miss). Measured on the golden set after the
+  rebuild + scoring work: MRR 0.592 -> 0.690, recall@1 45.7% -> 57.1%,
+  recall@5 80.0% -> 88.6%; one question remains a full miss (q07, the MCP
+  server crate sits across a prose-to-code layer gap the traversal does
+  not bridge).
+- **Benchmark re-pinned to upstream graphify v0.9.69** (first release with
+  a query-capable CLI): the blind answer-quality comparison now compares
+  against answers instead of errors. The speed/density corpus changes
+  accordingly; historical numbers remain labeled at their original pins.
+- **File ids are collision-free across a workspace**: extraction rooted node
+  ids at the last path directory only, so every crate's `src/lib.rs`
+  produced the same `src_lib` id and build treated the later crates' lib.rs
+  as cross-file merges of the first — one hub node absorbed the whole
+  workspace's `contains` edges (degree 400+ in the self graph). Stems now
+  join every path component; flat layouts keep their old ids.
+- **Thematic community labels**: communities are named after their most
+  distinctive term ("Extract", "Similarity") — the token that concentrates
+  inside the community relative to the whole graph — instead of the
+  highest-degree member's name ("get()", "lib.rs"). Sub-support communities
+  keep the deterministic hub label; naming is a pure function of the graph.
+- `learned`-edge regeneration drops every learned edge, not only rows
+  stamped `query_history` — a stale row from an older convention no longer
+  survives beside its regenerated twin.
+- Self-corpus ignore additions: `website/versioned_docs/` (frozen docusaurus
+  copies duplicate the live docs byte-for-byte and split clusters against
+  their live twins) and `crates/astria-napi/tests/fixtures/` (parser
+  fixtures held community slots without aiding orientation).
+
+### Added
+- **Measured, capped, cached LLM enrichment**: every backend response's
+  usage block is counted (OpenAI/Anthropic/Gemini wire formats), the run
+  summary prints `LLM usage: N API calls, X in / Y out tokens` plus the
+  cache-hit count, and `pipeline_runs` persists the spend per run.
+  `ASTRIA_LLM_BUDGET` caps a run's total tokens; remaining files fail
+  loudly instead of silently degrading.
+- **`run --label-communities` / `update --label-communities`**: thematic
+  community naming with one LLM call per *changed* community (membership
+  fingerprint cached in `communities.member_hash`; rebuilds preserve LLM
+  labels while membership is unchanged and drop them when it drifts).
+  Labels carry a one-line summary and explicit provenance
+  (`communities.label_source`: `llm` vs `hub`), surfaced in MCP
+  `list_communities`, `graph_report.md`, the new `communities` array in
+  `graph.json`, and exports. `ASTRIA_LLM_COMMUNITY_MAX` caps calls per run
+  (default 48, largest communities first); communities under 3 nodes keep
+  deterministic names.
+- **`run --deep` / `update --deep`**: second extraction tier — one LLM call
+  per file links the file's code symbols to concept nodes from other files
+  as `INFERRED` edges (`context='deep'`), the cross-file concept mesh the
+  AST cannot see. Cached per file content hash; stale links are replaced
+  idempotently on rebuild.
+- **`.github/copilot-instructions.md` injection** for `install copilot`:
+  the managed section now lands in Copilot's native custom-instructions
+  file in addition to AGENTS.md (parity with upstream's installer).
+- **`astria health`** (and MCP `health` tool): a scored code-health report —
+  unreachable-symbol candidates (call-graph heuristic; entry points, test
+  files, and file-shaped nodes excluded), circular file dependencies
+  (SCC over calls/imports), hub concentration, and graph staleness, with
+  the deduction schedule printed inline.
+- **`astria risk`**: maps the current `git diff` (or `--staged`) onto the
+  graph via reverse reachability and renders a PR-ready report — impacted
+  symbols by depth, communities touched (labels included), review focus,
+  and a documented heuristic score for CI triage.
+- **`export --format svg`**: deterministic community-arc SVG (dark theme,
+  hub labels, XML-escaped) — byte-identical across runs, graceful caps at
+  2k nodes / 6k edges.
+- **`export --format cypher --neo4j-push <url>`**: live Neo4j push over a
+  hand-rolled Bolt client (new `astria-bolt` crate: PackStream + chunked
+  framing + HELLO/RUN/PULL, mock-server tested, zero driver dependencies).
+  Parameterized UNWIND batches; idempotent MERGEs; communities pushed as
+  first-class nodes.
+
+### Fixed
+- Build validation rejected the pipeline's own `SEMANTIC` edge confidence
+  (added by LLM enrichment) — `run` with any semantic backend failed
+  wholesale at build time. `SEMANTIC` is now part of the accepted
+  vocabulary (query ranking already treats it above `INFERRED`).
+
 ## [1.0.4] — 2026-09-26
 
 ### Changed

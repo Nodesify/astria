@@ -1,0 +1,35 @@
+name: Source retrieval quality
+on:
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - run: npm install --install-strategy=nested
+        working-directory: packages/astria-cli
+      - run: cargo build --release --locked -p astria-napi
+      - run: mkdir -p packages/astria-cli/dist && cp target/release/libastria_napi.so packages/astria-cli/dist/astria.node
+      - run: npm run build
+        working-directory: packages/astria-cli
+      - name: Install shared exact tokenizer
+        run: npm install --no-save js-tiktoken
+      - name: Build source graph and gate retrieval
+        run: |
+          node packages/astria-cli/dist/index.js run .
+          node scripts/bench/quality/run-quality.mjs --astria "$GITHUB_WORKSPACE/packages/astria-cli/dist/index.js" --min-recall5 50
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: source-retrieval-quality
+          path: scripts/bench/quality/out/quality-results.json

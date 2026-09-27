@@ -632,6 +632,73 @@ function testLegacyMigration() {
   fs.rmSync(legacyMcpDir, { recursive: true, force: true });
 }
 
+// ---- Copilot instructions parity ----
+
+function testCopilotInstructions() {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-proj-'));
+  const prevUserProfile = process.env.USERPROFILE;
+  const prevHome = process.env.HOME;
+  process.env.USERPROFILE = fakeHome;
+  process.env.HOME = fakeHome;
+  try {
+    const results = installPlatform('copilot', project);
+
+    // Skill file lands under the project-scoped .github skills dir.
+    assert(
+      fs.existsSync(path.join(fakeHome, '.github', 'skills', 'astria', 'SKILL.md')),
+      'Copilot: skill file installed'
+    );
+    // AGENTS.md gets the managed section...
+    assert(
+      fs.readFileSync(path.join(project, 'AGENTS.md'), 'utf-8').includes('## astria'),
+      'Copilot: AGENTS.md section added'
+    );
+    // ...and so does .github/copilot-instructions.md (Copilot's native
+    // custom-instructions file, which not every Copilot version reads
+    // AGENTS.md for).
+    const instructionsPath = path.join(project, '.github', 'copilot-instructions.md');
+    assert(results.some((r) => r.includes('copilot-instructions.md')), 'Copilot: install reported');
+    assert(
+      fs.readFileSync(instructionsPath, 'utf-8').includes('## astria'),
+      'Copilot: instructions section added'
+    );
+
+    // Re-install is idempotent and reported as such.
+    const again = installPlatform('copilot', project);
+    assert(
+      again.some((r) => r.includes('already up to date')),
+      'Copilot: re-install reported unchanged'
+    );
+
+    // Uninstall removes both sections and the skill file. A file holding
+    // only the managed section is deleted outright (removeSection contract),
+    // so absence counts as removed.
+    const { uninstallPlatform } = require('../install') as typeof import('../install');
+    uninstallPlatform('copilot', project);
+    const instructionsAfter = fs.existsSync(instructionsPath)
+      ? fs.readFileSync(instructionsPath, 'utf-8')
+      : '';
+    assert(
+      !instructionsAfter.includes('## astria'),
+      'Copilot: uninstall removes instructions section'
+    );
+    const agentsAfter = fs.existsSync(path.join(project, 'AGENTS.md'))
+      ? fs.readFileSync(path.join(project, 'AGENTS.md'), 'utf-8')
+      : '';
+    assert(!agentsAfter.includes('## astria'), 'Copilot: uninstall removes AGENTS.md section');
+    assert(
+      !fs.existsSync(path.join(fakeHome, '.github', 'skills', 'astria', 'SKILL.md')),
+      'Copilot: uninstall removes skill file'
+    );
+  } finally {
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+}
+
 // ---- Run all ----
 
 testClaudeHook();
@@ -645,6 +712,7 @@ testAgentMcp();
 testMarkdownInject();
 testLegacyMigration();
 testLegacySkillDirCleanup();
+testCopilotInstructions();
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {

@@ -2,8 +2,10 @@ use super::config::LanguageConfig;
 
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
-        name: "PHP",
-        extensions: &[".php"],
+        name: astria_core::languages::LanguageId::Php.registration().name,
+        extensions: astria_core::languages::LanguageId::Php
+            .registration()
+            .extensions,
         language_fn: || tree_sitter_php::LANGUAGE_PHP.into(),
         class_types: &[
             "class_declaration",
@@ -18,6 +20,7 @@ pub fn config() -> &'static LanguageConfig {
         ],
         import_types: &["namespace_use_declaration", "namespace_definition"],
         call_type: "function_call_expression",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["compound_statement", "declaration_list"],

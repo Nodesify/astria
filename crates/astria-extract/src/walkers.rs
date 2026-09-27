@@ -31,6 +31,18 @@ fn first_child_text<'a>(node: &Node<'a>, source: &'a [u8]) -> Option<&'a str> {
 }
 
 /// Get the second child of a tree-sitter node.
+/// The nth (1-based) named child: positional naming for grammars without
+/// named fields (HCL blocks name themselves from their label string, which
+/// is the 2nd named child).
+fn nth_named_child<'a>(node: &Node<'a>, n: usize) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    let named: Vec<_> = node
+        .children(&mut cursor)
+        .filter(|c| c.is_named())
+        .collect();
+    named.get(n.saturating_sub(1)).copied()
+}
+
 fn second_child<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     let child = node.children(&mut cursor).nth(1);
@@ -134,6 +146,299 @@ pub(crate) struct ExtractionState<'a> {
     /// are stable under line edits — only reordering or inserting a closure
     /// earlier in the same scope shifts later ones.
     pub closure_counts: HashMap<String, usize>,
+    /// JavaScript lexical function/class nesting, independent of class context.
+    pub lexical_scopes: Vec<String>,
+}
+
+fn is_javascript(cfg: &LanguageConfig) -> bool {
+    matches!(cfg.name, "JavaScript" | "TypeScript")
+}
+
+fn python_overload(node: Node<'_>, source: &[u8]) -> bool {
+    let Some(decorated) = node.parent().filter(|p| p.kind() == "decorated_definition") else {
+        return false;
+    };
+    let mut cursor = decorated.walk();
+    let found = decorated.named_children(&mut cursor).any(|decorator| {
+        if decorator.kind() != "decorator" {
+            return false;
+        }
+        let Some(expression) = decorator.named_child(0) else {
+            return false;
+        };
+        match expression.kind() {
+            "identifier" => node_text(&expression, source) == "overload",
+            "attribute" => expression
+                .child_by_field_name("attribute")
+                .is_some_and(|name| node_text(&name, source) == "overload"),
+            _ => false,
+        }
+    });
+    found
+}
+
+/// An overload is a declaration of the following runtime callable, not an
+/// alternative body. Keep declarations only when no implementation exists
+/// in their lexical block (as in a stub file).
+fn python_overload_has_implementation(node: Node<'_>, source: &[u8]) -> bool {
+    if !python_overload(node, source) {
+        return false;
+    }
+    let Some(name) = node.child_by_field_name("name") else {
+        return false;
+    };
+    let Some(block) = node.parent().and_then(|decorated| decorated.parent()) else {
+        return false;
+    };
+    let mut cursor = block.walk();
+    let found = block.named_children(&mut cursor).any(|sibling| {
+        let definition = if sibling.kind() == "decorated_definition" {
+            sibling.child_by_field_name("definition")
+        } else {
+            Some(sibling)
+        };
+        definition.is_some_and(|definition| {
+            definition.kind() == "function_definition"
+                && definition
+                    .child_by_field_name("name")
+                    .is_some_and(|other| node_text(&other, source) == node_text(&name, source))
+                && !python_overload(definition, source)
+        })
+    });
+    found
+}
+
+/// Rust attributes are sibling AST nodes, not part of a function's text.
+/// Inspect only attached attributes and enclosing items so strings/comments
+/// mentioning tests cannot classify production functions as tests.
+fn is_rust_test_function(node: Node<'_>, source: &[u8]) -> bool {
+    let mut current = Some(node);
+    while let Some(item) = current {
+        if item.kind() == "mod_item"
+            && item
+                .child_by_field_name("name")
+                .is_some_and(|name| node_text(&name, source) == "tests")
+        {
+            return true;
+        }
+        let mut previous = item.prev_named_sibling();
+        while let Some(attribute) = previous {
+            match attribute.kind() {
+                "attribute_item" => {
+                    let text: String = node_text(&attribute, source)
+                        .chars()
+                        .filter(|ch| !ch.is_whitespace())
+                        .collect();
+                    let content = text.strip_prefix("#[").and_then(|s| s.strip_suffix(']'));
+                    if content.is_some_and(|content| {
+                        content == "cfg(test)"
+                            || ["test", "tokio::test", "async_std::test"]
+                                .iter()
+                                .any(|name| {
+                                    content == *name
+                                        || content
+                                            .strip_prefix(name)
+                                            .is_some_and(|suffix| suffix.starts_with('('))
+                                })
+                    }) {
+                        return true;
+                    }
+                }
+                "line_comment" | "block_comment" => {}
+                _ => break,
+            }
+            previous = attribute.prev_named_sibling();
+        }
+        current = item.parent();
+    }
+    false
+}
+
+/// Canonicalize statically named access without guessing dynamic receivers or
+/// computed values. `api['run']` and `api.run` denote the same binding.
+fn javascript_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "identifier" | "property_identifier" | "private_property_identifier" | "this" | "super" => {
+            Some(node_text(&node, source).to_string())
+        }
+        "string" => Some(unquote_literal(node_text(&node, source)).to_string()),
+        "member_expression" => Some(format!(
+            "{}.{}",
+            javascript_name(node.child_by_field_name("object")?, source)?,
+            javascript_name(node.child_by_field_name("property")?, source)?
+        )),
+        "subscript_expression" => {
+            let index = node.child_by_field_name("index")?;
+            if index.kind() != "string" {
+                return None;
+            }
+            Some(format!(
+                "{}.{}",
+                javascript_name(node.child_by_field_name("object")?, source)?,
+                javascript_name(index, source)?
+            ))
+        }
+        "computed_property_name" => {
+            let key = node.named_child(0)?;
+            (key.kind() == "string")
+                .then(|| javascript_name(key, source))
+                .flatten()
+        }
+        "parenthesized_expression" | "non_null_expression" => {
+            javascript_name(node.named_child(0)?, source)
+        }
+        _ => None,
+    }
+}
+
+/// Follow the value's binding, rather than an expression's private function
+/// name. Object literals retain their containing binding (exports.api.run).
+fn javascript_binding(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let parent = node.parent()?;
+    let field = match parent.kind() {
+        "variable_declarator" => "name",
+        "assignment_expression" => "left",
+        "pair" => "key",
+        "public_field_definition" | "field_definition" => "name",
+        "parenthesized_expression"
+        | "as_expression"
+        | "satisfies_expression"
+        | "type_assertion"
+        | "non_null_expression" => {
+            return javascript_binding(parent, source);
+        }
+        _ => return None,
+    };
+    let value_field = if parent.kind() == "assignment_expression" {
+        "right"
+    } else {
+        "value"
+    };
+    if parent
+        .child_by_field_name(value_field)
+        .is_none_or(|value| value.id() != node.id())
+    {
+        return None;
+    }
+    let key = parent.child_by_field_name(field)?;
+    let name = javascript_name(key, source).unwrap_or_else(|| node_text(&key, source).to_string());
+    if parent.kind() == "pair" {
+        if let Some(prefix) = parent
+            .parent()
+            .and_then(|object| javascript_binding(object, source))
+        {
+            return Some(format!("{prefix}.{name}"));
+        }
+    }
+    Some(name)
+}
+
+fn javascript_doc(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut anchor = node;
+    loop {
+        if let Some(comment) = anchor
+            .prev_named_sibling()
+            .filter(|n| n.kind() == "comment")
+        {
+            let raw = node_text(&comment, source);
+            if raw.starts_with("/**") {
+                return Some(
+                    raw.trim_start_matches("/**")
+                        .trim_end_matches("*/")
+                        .lines()
+                        .map(|line| line.trim().trim_start_matches('*').trim())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .trim()
+                        .to_string(),
+                );
+            }
+        }
+        let parent = anchor.parent()?;
+        if !matches!(
+            parent.kind(),
+            "variable_declarator"
+                | "lexical_declaration"
+                | "variable_declaration"
+                | "assignment_expression"
+                | "expression_statement"
+                | "pair"
+                | "export_statement"
+                | "parenthesized_expression"
+                | "as_expression"
+                | "satisfies_expression"
+                | "public_field_definition"
+                | "field_definition"
+        ) {
+            return None;
+        }
+        anchor = parent;
+    }
+}
+
+fn walk_javascript_function<'a>(state: &mut ExtractionState<'a>, node: &Node<'a>) {
+    let parent_id = state
+        .lexical_scopes
+        .last()
+        .unwrap_or(&state.file_id)
+        .clone();
+    let name = javascript_binding(*node, state.source)
+        .or_else(|| {
+            node.child_by_field_name("name").map(|name| {
+                let name = javascript_name(name, state.source)
+                    .unwrap_or_else(|| node_text(&name, state.source).to_string());
+                if node.kind() == "method_definition" {
+                    if let Some(prefix) = node
+                        .parent()
+                        .filter(|p| p.kind() == "object")
+                        .and_then(|object| javascript_binding(object, state.source))
+                    {
+                        return format!("{prefix}.{name}");
+                    }
+                }
+                name
+            })
+        })
+        .unwrap_or_else(|| {
+            let count = state.closure_counts.entry(parent_id.clone()).or_insert(0);
+            *count += 1;
+            format!("{{closure#{count}}}")
+        });
+    let base_id = make_node_id(&[&parent_id, &name]);
+    // Separate block-local bindings and repeated assignments in the same scope.
+    let mut func_id = base_id.clone();
+    let mut ordinal = 1;
+    while state.nodes.iter().any(|existing| existing.id == func_id) {
+        ordinal += 1;
+        func_id = make_node_id(&[&base_id, &ordinal.to_string()]);
+    }
+    state.nodes.push(ExtractedNode {
+        id: func_id.clone(),
+        label: format!("{name}()"),
+        source_file: state.file_path.clone(),
+        source_line: Some(node.start_position().row as u32),
+        docstring: javascript_doc(*node, state.source),
+        signature: node_signature(node, state.source, state.cfg),
+        node_type: "function".to_string(),
+    });
+    state.edges.push(ExtractedEdge {
+        source: parent_id,
+        target: func_id.clone(),
+        relation: "contains".to_string(),
+        confidence: "EXTRACTED".to_string(),
+        confidence_score: Some(1.0),
+        source_file: state.file_path.clone(),
+        source_line: Some(node.start_position().row as u32),
+    });
+    if let Some(body) = find_body(node, state.cfg) {
+        walk_calls(state, &func_id, &body);
+    }
+    state.lexical_scopes.push(func_id);
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_structural(state, &child);
+    }
+    state.lexical_scopes.pop();
 }
 
 /// Maximum reference nodes extracted from one file — bounds the graph cost
@@ -471,8 +776,10 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
             // the impl type instead of colliding at file level when several impls
             // define the same method name.
             let type_field_node = node.child_by_field_name("type");
+            let positional = state.cfg.name_child.and_then(|n| nth_named_child(node, n));
             let name_node = node
                 .child_by_field_name(state.cfg.name_field)
+                .or(positional)
                 .or(type_field_node);
             let name_node = match name_node {
                 Some(n) => Some(n),
@@ -488,7 +795,13 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                 && kind == "impl_item";
             if let Some(name_node) = name_node {
                 let name = node_text(&name_node, state.source).to_string();
-                let class_id = make_node_id(&[&state.file_id, &name]);
+                let parent_id = if is_javascript(state.cfg) {
+                    state.lexical_scopes.last().unwrap_or(&state.file_id)
+                } else {
+                    &state.file_id
+                }
+                .clone();
+                let class_id = make_node_id(&[&parent_id, &name]);
                 let docstring = extract_docstring(node, state.source, state.cfg);
 
                 if !scope_only {
@@ -503,7 +816,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                     });
 
                     state.edges.push(ExtractedEdge {
-                        source: state.file_id.clone(),
+                        source: parent_id,
                         target: class_id.clone(),
                         relation: "contains".to_string(),
                         confidence: "EXTRACTED".to_string(),
@@ -514,6 +827,9 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                 }
 
                 // Walk children inside this class context
+                if is_javascript(state.cfg) {
+                    state.lexical_scopes.push(class_id.clone());
+                }
                 let prev_class = state.current_class_id.replace(class_id);
                 let prev_label = state.current_class_label.replace(name.clone());
                 let mut cursor = node.walk();
@@ -522,6 +838,9 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                 }
                 state.current_class_id = prev_class;
                 state.current_class_label = prev_label;
+                if is_javascript(state.cfg) {
+                    state.lexical_scopes.pop();
+                }
                 return;
             }
         }
@@ -573,6 +892,13 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
 
     // --- Functions / methods ---
     if state.cfg.function_types.contains(&kind) {
+        if state.cfg.name == "Python" && python_overload_has_implementation(*node, state.source) {
+            return;
+        }
+        if is_javascript(state.cfg) {
+            walk_javascript_function(state, node);
+            return;
+        }
         // Call-name filter: if function_call_names is non-empty, check first child text
         let passes_filter = if state.cfg.function_call_names.is_empty() {
             true
@@ -583,13 +909,19 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
         };
 
         if passes_filter {
-            // Try name_field first, then fall back to second child for call-based languages
-            let name_node = node.child_by_field_name(state.cfg.name_field);
-            let name_node = match name_node {
-                Some(n) => Some(n),
-                None if !state.cfg.function_call_names.is_empty() => second_child(node),
-                _ => None,
-            };
+            // Try name_field first, then a positional named child, then fall
+            // back to second child for call-based languages
+            let positional = state.cfg.name_child.and_then(|n| nth_named_child(node, n));
+            let name_node = node
+                .child_by_field_name(state.cfg.name_field)
+                .or(positional)
+                .or_else(|| {
+                    if !state.cfg.function_call_names.is_empty() {
+                        second_child(node)
+                    } else {
+                        None
+                    }
+                });
             if let Some(name_node) = name_node {
                 let name = node_text(&name_node, state.source).to_string();
                 let func_label = format!("{}()", name);
@@ -605,7 +937,14 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                     source_line: Some(node.start_position().row as u32),
                     docstring,
                     signature: node_signature(node, state.source, state.cfg),
-                    node_type: "function".to_string(),
+                    node_type: if state.cfg.name == "Rust"
+                        && is_rust_test_function(*node, state.source)
+                    {
+                        "test"
+                    } else {
+                        "function"
+                    }
+                    .to_string(),
                 });
 
                 state.edges.push(ExtractedEdge {
@@ -778,9 +1117,21 @@ fn extract_import_module(text: &str, kind: &str, language: &str) -> Option<Strin
 
 fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, body: &Node<'a>) {
     let kind = body.kind();
+    // An expression-bodied arrow can return another function directly.
+    // That returned function owns its calls, just like a nested declaration.
+    if is_javascript(state.cfg)
+        && (state.cfg.function_types.contains(&kind) || state.cfg.class_types.contains(&kind))
+    {
+        return;
+    }
 
     if kind == state.cfg.call_type {
-        let callee_name = extract_callee_name(body, state.source);
+        let callee_name = if is_javascript(state.cfg) {
+            body.child_by_field_name("function")
+                .and_then(|callee| javascript_name(callee, state.source))
+        } else {
+            extract_callee_name(body, state.source)
+        };
         if let Some(name) = callee_name {
             // Skip language builtins: they resolve to bare-name stubs that
             // merge corpus-wide and pollute god-node rankings.
@@ -804,7 +1155,11 @@ fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, body: &Node<
     // they must not also attribute to the enclosing function.
     let mut cursor = body.walk();
     for child in body.children(&mut cursor) {
-        if state.cfg.closure_types.contains(&child.kind()) {
+        if state.cfg.closure_types.contains(&child.kind())
+            || (is_javascript(state.cfg)
+                && (state.cfg.function_types.contains(&child.kind())
+                    || state.cfg.class_types.contains(&child.kind())))
+        {
             continue;
         }
         walk_calls(state, caller_id, &child);
@@ -960,6 +1315,7 @@ pub(crate) fn extract_single(
         current_class_label: None,
         string_refs_seen: HashSet::new(),
         closure_counts: HashMap::new(),
+        lexical_scopes: Vec::new(),
     };
 
     // Add file node

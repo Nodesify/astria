@@ -8,7 +8,7 @@
 {"id": "q08", "question": "how does graph traversal work bfs or dfs", "expected_files": ["crates/astria-query/src/lib.rs"], "expected_symbols": ["query_graph"]}
 {"id": "q09", "question": "what breaks if I change a function blast radius", "expected_files": ["crates/astria-analyze/src/affected.rs"]}
 {"id": "q10", "question": "how do local embeddings work", "expected_files": ["crates/astria-embed/src/lib.rs"]}
-{"id": "q11", "question": "how does LLM semantic enrichment work", "expected_files": ["crates/astria-semantic/src/lib.rs"]}
+{"id": "q11", "question": "how does LLM semantic enrichment work", "expected_files": ["crates/astria-semantic/src/lib.rs", "crates/astria-semantic/src/enrichment.rs"]}
 {"id": "q12", "question": "how does URL ingestion protect against SSRF", "expected_files": ["crates/astria-ingest/src/lib.rs", "crates/astria-core/src/security.rs"]}
 {"id": "q13", "question": "how are PDFs processed", "expected_files": ["crates/astria-pdf/src/lib.rs"]}
 {"id": "q14", "question": "how is the markdown wiki generated", "expected_files": ["crates/astria-napi/src/export_wiki.rs"]}

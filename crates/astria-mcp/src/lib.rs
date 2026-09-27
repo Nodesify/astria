@@ -52,9 +52,11 @@ fn tools() -> Value {
             "relation": {"type": "string"}}, "required": ["node"]}},
         {"name": "god_nodes", "description": "The highest-degree nodes — what everything connects through.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "list_communities", "description": "All communities with their hub-based labels, sizes, and cohesion.",
+        {"name": "list_communities", "description": "All communities with labels, sizes, and cohesion. Labels are LLM-thematic when a semantic backend ran with --label-communities, else deterministic thematic/hub terms.",
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "graph_stats", "description": "Node/edge/community/file counts for the graph.",
+         "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "health", "description": "Code-health report: unreachable-symbol candidates, circular file dependencies, hub concentration, graph staleness — one heuristic score (0-100).",
          "inputSchema": {"type": "object", "properties": {}}}
     ])
 }
@@ -117,16 +119,9 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 directed,
                 min_strength_for(&detail),
                 cursor,
+                min_strength_for(&detail) >= 0.9,
             )
-            .map(|(text, n, e, next)| {
-                let mut out = format!("{text}\n\n({n} nodes, {e} edges)");
-                if let Some(next) = next {
-                    out.push_str(&format!(
-                        "\n(continuation: re-run with cursor {next} for the next nodes)"
-                    ));
-                }
-                text_result(out)
-            })
+            .map(|(text, _, _, _)| text_result(text))
         }
         "repo_map" => {
             let budget = args.get("budget").and_then(|v| v.as_u64()).unwrap_or(2000) as i64;
@@ -255,10 +250,22 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             text_result(out)
         }),
         "list_communities" => {
-            let mut stmt =
-                db.prepare("SELECT id, label, cohesion, size FROM communities ORDER BY size DESC")?;
-            let rows: Vec<(i64, String, Option<f64>, i64)> = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            let mut stmt = db.prepare(
+                "SELECT id, label, summary, label_source, cohesion, size
+                 FROM communities ORDER BY size DESC",
+            )?;
+            #[allow(clippy::type_complexity)]
+            let rows: Vec<(i64, String, Option<String>, String, Option<f64>, i64)> = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                })?
                 .collect::<std::result::Result<_, _>>()?;
             let modularity: Option<f64> = db
                 .query_row(
@@ -270,13 +277,26 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             let modularity_txt = modularity
                 .map(|q| format!(" (modularity {q:.3})"))
                 .unwrap_or_default();
+            let llm_named = rows
+                .iter()
+                .filter(|(_, _, _, source, _, _)| source.as_str() == "llm")
+                .count();
             let mut out = format!("{} communities{modularity_txt}:\n", rows.len());
-            for (id, label, cohesion, size) in rows {
+            for (id, label, summary, source, cohesion, size) in rows {
+                // Provenance matters: an LLM label is a summary of the code,
+                // a hub label is a fact about it.
+                let source_tag = if source == "llm" { "" } else { " [hub]" };
+                let summary_txt = summary.map(|s| format!(" — {s}")).unwrap_or_default();
                 out.push_str(&format!(
-                    "  [{id}] {label} - {size} nodes, cohesion {}\n",
+                    "  [{id}] {label}{source_tag} - {size} nodes, cohesion {}{summary_txt}\n",
                     cohesion
                         .map(|c| format!("{c:.2}"))
                         .unwrap_or_else(|| "-".into())
+                ));
+            }
+            if llm_named > 0 {
+                out.push_str(&format!(
+                    "\n{llm_named} communities carry LLM thematic labels (astria run --label-communities)."
                 ));
             }
             Ok(text_result(out))
@@ -308,6 +328,15 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 "nodes: {nodes}, edges: {edges}, communities: {communities}, files tracked: {files}{modularity_txt}"
             )))
         }
+        "health" => astria_analyze::health::health(db).map(|report| {
+            // Stored paths are absolute; show them relative to the project
+            // root so lines stay short.
+            let root = std::path::Path::new(db_path)
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"));
+            text_result(astria_analyze::health::render(&report, root.as_deref()))
+        }),
         other => Ok(error_result(format!("unknown tool: {other}"))),
     }));
 
@@ -449,6 +478,7 @@ mod tests {
             "god_nodes",
             "list_communities",
             "graph_stats",
+            "health",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }

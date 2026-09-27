@@ -1,6 +1,6 @@
 // naming: stable identifier construction shared by every extractor.
 
-use std::path::Path;
+use std::path::{Component, Path};
 
 use astria_core::ids::normalize_id;
 
@@ -29,22 +29,27 @@ pub(crate) fn make_target_id(name: &str) -> String {
         .join("::")
 }
 
-/// Return `parent_dir_stem/file_stem` for uniqueness.
+/// Collision-free id stem for a file: every path component (extension
+/// dropped) joined with `_`, so ids stay unique across a workspace.
+/// `src/lib.rs` → `src_lib` (flat projects keep their old ids), while
+/// `crates/a/src/lib.rs` → `crates_a_src_lib` instead of colliding with
+/// every other crate's `src/lib.rs` — the collision that used to funnel
+/// every crate's `contains` edges into one shared `src_lib` hub node.
 pub(crate) fn file_stem(path: &Path) -> String {
-    let file_name = path
+    let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown");
-    let parent = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    if parent.is_empty() {
-        file_name.to_string()
-    } else {
-        format!("{}_{}", parent, file_name)
-    }
+    let dirs: Vec<&str> = path
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(dir) => dir.to_str(),
+            _ => None,
+        })
+        .collect();
+    let mut parts: Vec<&str> = dirs[..dirs.len().saturating_sub(1)].to_vec();
+    parts.push(stem);
+    parts.join("_")
 }
 
 #[cfg(test)]
@@ -74,5 +79,20 @@ mod tests {
     fn file_stem_includes_parent_dir() {
         assert_eq!(file_stem(&PathBuf::from("src/lib.rs")), "src_lib");
         assert_eq!(file_stem(&PathBuf::from("main.py")), "main");
+    }
+
+    #[test]
+    fn workspace_file_ids_do_not_collide() {
+        // The stem used to keep only the last directory, so every crate's
+        // src/lib.rs produced the same `src_lib` id and build() treated the
+        // later crates' lib.rs as cross-file merges of the first — one hub
+        // node absorbed the whole workspace's `contains` edges.
+        let analyze = PathBuf::from("crates/astria-analyze/src/lib.rs");
+        let cluster = PathBuf::from("crates/astria-cluster/src/lib.rs");
+        assert_eq!(
+            make_node_id(&[&file_stem(&analyze)]),
+            "crates_astria_analyze_src_lib"
+        );
+        assert_ne!(file_stem(&analyze), file_stem(&cluster));
     }
 }

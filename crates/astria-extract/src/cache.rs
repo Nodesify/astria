@@ -36,15 +36,15 @@ pub(crate) fn check_cache(db: &Connection, path: &Path, hash: &str) -> Option<Ex
         Ok((language, nodes_json, edges_json))
     })
     .ok()
-    .map(|(language, nodes_json, edges_json)| {
-        let nodes: Vec<ExtractedNode> = serde_json::from_str(&nodes_json).unwrap_or_default();
-        let edges: Vec<ExtractedEdge> = serde_json::from_str(&edges_json).unwrap_or_default();
-        Extraction {
+    .and_then(|(language, nodes_json, edges_json)| {
+        let nodes: Vec<ExtractedNode> = serde_json::from_str(&nodes_json).ok()?;
+        let edges: Vec<ExtractedEdge> = serde_json::from_str(&edges_json).ok()?;
+        Some(Extraction {
             file_path: path.to_path_buf(),
             language,
             nodes,
             edges,
-        }
+        })
     })
 }
 
