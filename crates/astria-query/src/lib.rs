@@ -366,14 +366,120 @@ const STOPWORDS: &[&str] = &[
     "each", "other", "more", "most",
 ];
 
+/// Import-graph degree per node: how many `imports` edges leave and enter
+/// each node. Entry-point questions ("what is the CLI entry point") ask for
+/// a structural fact — the file execution starts from — that the import DAG
+/// encodes (imports many modules, imported by none) and no file name spells
+/// out; lexical scoring can never see it.
+fn import_degrees(
+    loaded: &LoadedGraph,
+) -> (
+    std::collections::HashMap<NodeIndex, u32>,
+    std::collections::HashMap<NodeIndex, u32>,
+) {
+    let (mut out, mut inc) = (
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+    );
+    for e in loaded.graph.edge_references() {
+        if loaded.graph[e.id()].relation == "imports" {
+            *out.entry(e.source()).or_insert(0u32) += 1;
+            *inc.entry(e.target()).or_insert(0u32) += 1;
+        }
+    }
+    (out, inc)
+}
+
+/// Test/spec/example files import many modules and are imported by none —
+/// structurally indistinguishable from an entry file — but they are never
+/// the program's front door, so they are excluded from entry candidacy.
+fn is_testish_path(path: &str) -> bool {
+    let p = path.to_lowercase().replace('\\', "/");
+    ["test", "spec", "example", "fixture", "benchmark"]
+        .iter()
+        .any(|marker| {
+            p.contains(&format!("/{marker}"))
+                || p.contains(&format!("{marker}s/"))
+                || p.contains(&format!("_{marker}."))
+                || p.contains(&format!(".{marker}."))
+        })
+}
+
+/// Phrases whose presence marks a question as asking for the program's
+/// starting file rather than a concept.
+const ENTRY_INTENT_PHRASES: &[&str] = &[
+    "entry point",
+    "entrypoint",
+    "main file",
+    "starting point",
+    "bootstrap",
+];
+
+/// Minimum outgoing imports for a file to count as an entry candidate —
+/// below this it is a leaf module, not a front door.
+const ENTRY_MIN_IMPORTS: u32 = 3;
+/// Score added to a structural entry candidate when entry intent is present.
+const ENTRY_INTENT_BOOST: f64 = 2.0;
+
+/// IDF floor/floor-cap: even a term in every label keeps a quarter of its
+/// label weight, so ubiquitous terms still break ties, just never dominate.
+const IDF_FLOOR: f64 = 0.25;
+
 /// Hybrid seed scoring, layered from cheap/exact to expensive/fuzzy so a
 /// paraphrased or slightly-misspelled question still finds its entry nodes:
 /// 1. label/path substring, exact & prefix token match (deterministic, free)
 /// 2. docstring token matches (where prose descriptions of symbols live)
 /// 3. fuzzy token match (Jaro-Winkler) for typos and word variants
+///
+/// Label/doc contributions are scaled by an IDF weight: a term that matches a
+/// large share of labels ("index" hits every index.* file in a repo) carries
+/// little locating signal, while a term naming one or two nodes is the
+/// question's real target. Path matches keep full weight — a directory or
+/// crate segment is locating evidence regardless of how common the term is.
 fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> {
+    // IDF weights + per-node lowercase labels, one shared pre-pass.
+    let n_nodes = loaded.graph.node_count().max(1) as f64;
+    let ln_nodes = n_nodes.ln().max(1.0);
+    let labels_lower: Vec<String> = loaded
+        .graph
+        .node_indices()
+        .map(|idx| loaded.graph[idx].label.to_lowercase())
+        .collect();
+    let mut idf: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
+    let mut effective: Vec<&String> = Vec::new();
+    for term in terms {
+        let t = term.trim();
+        if t.len() <= 2 || STOPWORDS.contains(&t.to_lowercase().as_str()) {
+            continue;
+        }
+        effective.push(term);
+    }
+    for term in &effective {
+        let tl = term.trim().to_lowercase();
+        let hits = labels_lower.iter().filter(|l| l.contains(&tl)).count();
+        let w = if hits == 0 {
+            1.0
+        } else {
+            ((n_nodes / hits as f64).ln() / ln_nodes).clamp(IDF_FLOOR, 1.0)
+        };
+        idf.insert(term.as_str(), w);
+    }
+    let idf_weight = |term: &str| -> f64 { idf.get(term).copied().unwrap_or(1.0) };
+
+    // Entry-point intent: detect once, pay for the degree maps only then.
+    let joined = terms.join(" ").to_lowercase();
+    let wants_entry = ENTRY_INTENT_PHRASES.iter().any(|p| joined.contains(p));
+    let (imports_out, imports_in) = if wants_entry {
+        import_degrees(loaded)
+    } else {
+        (
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        )
+    };
+
     let mut scored: Vec<(f64, NodeIndex)> = Vec::new();
-    for idx in loaded.graph.node_indices() {
+    for (i, idx) in loaded.graph.node_indices().enumerate() {
         let node = &loaded.graph[idx];
         // Code answers rank above documentation and speculative stubs on
         // equal term evidence: without the prior, prose-heavy doc nodes and
@@ -388,7 +494,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         // token-level scoring alone treats the words as unrelated and loses
         // to weaker-but-lexically-luckier matches.
         let doc_lower = node.docstring.as_deref().map(|d| d.to_lowercase());
-        let label_lower_full = node.label.to_lowercase();
+        let label_lower_full = labels_lower[i].clone();
         let mut phrase_bonus = 0.0f64;
         for w in terms.windows(2) {
             let phrase = format!("{} {}", w[0].to_lowercase(), w[1].to_lowercase());
@@ -421,7 +527,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
                 continue;
             }
             let term_tokens = tokenize(term);
-            let label_lower = node.label.to_lowercase();
+            let label_lower = labels_lower[i].as_str();
             let sf_lower = node.source_file.to_lowercase();
 
             // Layer 1: label + path
@@ -499,7 +605,19 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
                 0.0
             };
 
-            score += label_score.max(doc_score) + path_score + fuzzy_score;
+            let scaled = label_score.max(doc_score) * idf_weight(term);
+            score += scaled + path_score + fuzzy_score;
+        }
+        // Entry-point intent: a file that imports many modules and is
+        // imported by none is the program's front door, whatever it is
+        // named ("index.ts", "main.rs", "cli.py").
+        if wants_entry
+            && label_is_file(&node.label)
+            && !is_testish_path(&node.source_file)
+            && imports_in.get(&idx).copied().unwrap_or(0) == 0
+            && imports_out.get(&idx).copied().unwrap_or(0) >= ENTRY_MIN_IMPORTS
+        {
+            score += ENTRY_INTENT_BOOST;
         }
         if score > 0.0 {
             scored.push(((score + phrase_bonus) * prior, idx));
@@ -1824,6 +1942,93 @@ mod tests {
         // question words alone match nothing
         let empty = score_nodes(&loaded, &["where".to_string(), "does".to_string()]);
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn ubiquitous_terms_downweighted_so_rare_targets_seed() {
+        // "scip index ingestion": "index" matches every index.* file in the
+        // repo while "scip" names exactly one — the rare term must win the
+        // seed race, not lose it to alphabetical tie-breaking among the
+        // generic matches.
+        let db = open_db_in_memory().unwrap();
+        let mut inserts = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('scip', 'scip.rs', 'code', 'crates/astria-ingest/src/scip.rs')",
+        );
+        for (id, label, path) in [
+            ("i1", "index.js", "website/src/pages/index.js"),
+            ("i2", "index.ts", "packages/cli/src/index.ts"),
+            ("i3", "index.module.css", "web/src/index.module.css"),
+            ("i4", "index.tsx", "app/src/index.tsx"),
+            ("i5", "index.php", "legacy/public/index.php"),
+        ] {
+            inserts.push_str(&format!(", ('{id}', '{label}', 'code', '{path}')"));
+        }
+        inserts.push(';');
+        db.execute_batch(&inserts).unwrap();
+
+        let loaded = load_graph_cached(&db, "idf-test").unwrap();
+        let scored = score_nodes(
+            &loaded,
+            &[
+                "scip".to_string(),
+                "index".to_string(),
+                "ingestion".to_string(),
+            ],
+        );
+        assert!(!scored.is_empty());
+        assert_eq!(
+            loaded.graph[scored[0].1].label, "scip.rs",
+            "the rare-term target must outrank ubiquitous 'index' matches"
+        );
+    }
+
+    #[test]
+    fn entry_point_intent_boosts_import_root_file() {
+        // "what is the CLI entry point": no file is named "entry", so lexical
+        // scoring ties everything on a path token ("cli"); the import DAG
+        // knows the answer — a file importing many commands and imported by
+        // none is the program's front door.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('entry', 'index.ts', 'code', 'packages/cli/src/index.ts'),
+                ('noise', 'cli.test.ts', 'code', 'packages/cli/src/__tests__/cli.test.ts'),
+                ('doc', 'CLI reference', 'reference', 'website/docs/cli.md'),
+                ('cmd1', 'run.ts', 'code', 'packages/cli/src/commands/run.ts'),
+                ('cmd2', 'query.ts', 'code', 'packages/cli/src/commands/query.ts'),
+                ('cmd3', 'map.ts', 'code', 'packages/cli/src/commands/map.ts'),
+                ('cmd4', 'export.ts', 'code', 'packages/cli/src/commands/export.ts');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('entry', 'cmd1', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts'),
+                ('entry', 'cmd2', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts'),
+                ('entry', 'cmd3', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts'),
+                ('entry', 'cmd4', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts');",
+        )
+        .unwrap();
+
+        let loaded = load_graph_cached(&db, "entry-intent-test").unwrap();
+        let scored = score_nodes(
+            &loaded,
+            &[
+                "what".to_string(),
+                "is".to_string(),
+                "the".to_string(),
+                "CLI".to_string(),
+                "entry".to_string(),
+                "point".to_string(),
+            ],
+        );
+        assert!(!scored.is_empty());
+        let top: Vec<&str> = scored
+            .iter()
+            .take(3)
+            .map(|(_, idx)| loaded.graph[*idx].id.as_str())
+            .collect();
+        assert!(
+            top.contains(&"entry"),
+            "the import root must seed on entry-point intent; top3 = {top:?}"
+        );
     }
 
     #[test]
