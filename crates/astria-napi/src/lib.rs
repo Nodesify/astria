@@ -1223,7 +1223,7 @@ mod tests {
         let (text, nodes, edges, _) =
             query::query_graph(&db, &key, "anything", "bfs", 3, 2000, false, 0.0, 0, false)
                 .unwrap();
-        assert_eq!(text, "No nodes in graph.");
+        assert_eq!(text, "No nodes in graph.\n");
         assert_eq!(nodes, 0);
         assert_eq!(edges, 0);
     }
@@ -1246,7 +1246,7 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(text, "No matching nodes found.");
+        assert_eq!(text, "No matching nodes found.\n");
         assert_eq!(nodes, 0);
     }
 

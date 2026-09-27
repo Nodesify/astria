@@ -2706,7 +2706,12 @@ mod tests {
             }
             sql.push_str(&format!("('n{i:02}', 'Node{i:02}', 'code', 'f.rs')"));
         }
-        sql.push_str("; INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('n00','n01','calls','EXTRACTED','f.rs');");
+        sql.push(';');
+        // Make all fixture nodes reachable, with explicit confidence scores,
+        // so pagination measures a traversal larger than the five seeds.
+        for i in 1..30 {
+            sql.push_str(&format!("INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file) VALUES ('n00','n{i:02}','calls','EXTRACTED',1.0,'f.rs');"));
+        }
         db.execute_batch(&sql).unwrap();
         let key = ":memory:cursor";
 
