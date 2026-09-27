@@ -139,16 +139,14 @@ pub fn run_pipeline_with(
         |row| row.get(0),
     )?;
 
-    let result = run_pipeline_inner(
-        &root,
-        &db,
-        &astria_dir,
+    let options = PipelineOptions {
         dedup,
         embed,
         label_communities,
         deep,
         cli_version,
-    );
+    };
+    let result = run_pipeline_inner(&root, &db, &astria_dir, &options);
 
     // Record pipeline completion, including this run's measured LLM spend.
     let usage = astria_semantic::enrichment::usage_snapshot();
@@ -590,17 +588,24 @@ fn deep_link_stage_with(
     Ok(Some(stats))
 }
 
-fn run_pipeline_inner(
-    root: &Path,
-    db: &Connection,
-    astria_dir: &Path,
+/// Options threaded from the napi bindings into the pipeline driver; kept
+/// in one place so the driver never grows a long positional signature.
+#[derive(Default)]
+struct PipelineOptions<'a> {
     dedup: bool,
     embed: bool,
     label_communities: bool,
     deep: bool,
-    cli_version: Option<&str>,
+    cli_version: Option<&'a str>,
+}
+
+fn run_pipeline_inner(
+    root: &Path,
+    db: &Connection,
+    astria_dir: &Path,
+    options: &PipelineOptions,
 ) -> astria_core::Result<PipelineResult> {
-    if (label_communities || deep) && !astria_semantic::enrichment_enabled() {
+    if (options.label_communities || options.deep) && !astria_semantic::enrichment_enabled() {
         return Err(astria_core::AstriaError::Graph(
             "--label-communities and --deep require an explicit --backend or ASTRIA_LLM_BACKEND"
                 .into(),
@@ -608,7 +613,7 @@ fn run_pipeline_inner(
     }
     let detected = graph_update::detect(root, db)?;
     let configuration = semantic_pass::configuration()?;
-    let build_configuration = format!("{configuration}:dedup={dedup}");
+    let build_configuration = format!("{configuration}:dedup={}", options.dedup);
     let previous_configuration: Option<String> = db
         .query_row(
             "SELECT value FROM _meta WHERE key = 'build_configuration'",
@@ -633,7 +638,7 @@ fn run_pipeline_inner(
             &detected,
             &extractions,
             &build_configuration,
-            cli_version,
+            options.cli_version,
         )?;
         (build_result, semantic_stats)
     } else {
@@ -671,7 +676,7 @@ fn run_pipeline_inner(
 
     // Entity dedup runs after build, before clustering — duplicate nodes
     // poison community detection and god-node rankings.
-    let dedup_merged = if dedup {
+    let dedup_merged = if options.dedup {
         astria_build::dedup::dedup_nodes(db)?
     } else {
         0
@@ -691,13 +696,13 @@ fn run_pipeline_inner(
     // Deep concept linking runs BEFORE embeddings and clustering so its
     // cross-file INFERRED edges shape both: concept nodes bridge files the
     // AST never connected.
-    let deep_stats = deep_link_stage(db, root, deep)?;
+    let deep_stats = deep_link_stage(db, root, options.deep)?;
 
     // Semantic similarity pass (local embeddings, no API key): embed new
     // nodes and regenerate similar_to edges BEFORE clustering so they shape
     // communities and analysis. Explicit --embed fails loudly; the silent
     // auto-refresh path never triggers a model download.
-    embed_stage(db, embed)?;
+    embed_stage(db, options.embed)?;
 
     // Feedback loop: promote query pairs that recurred across distinct
     // questions into learned edges. Best-effort — a failure here must not
@@ -718,7 +723,7 @@ fn run_pipeline_inner(
     // Thematic community naming runs after clustering (fresh memberships)
     // and before hyperedges/wiki exports so every downstream surface —
     // report, MCP list_communities, graph.json — sees the good names.
-    let label_stats = label_communities_stage(db, label_communities)?;
+    let label_stats = label_communities_stage(db, options.label_communities)?;
 
     // Hyperedges: deterministic N-ary groups (communities, shared references).
     // Best-effort — a failure here must not block the build.
