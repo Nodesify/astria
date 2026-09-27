@@ -19,7 +19,7 @@ jobs:
       checks: write
 
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -42,11 +42,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             platform: linux-x64-gnu
             lib: libastria_napi.so
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             platform: linux-arm64-gnu
             lib: libastria_napi.so
@@ -104,13 +104,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: mkdir -p packages/astria-cli/dist && cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/astria-cli/dist/astria.node
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: astria-${{ matrix.platform }}
           path: packages/astria-cli/dist/astria.node
 
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: build
     # Must match the Environment field of the npm Trusted Publisher bindings
@@ -218,6 +218,6 @@ jobs:
           L=$(ls -t /home/runner/.npm/_logs/* 2>/dev/null | head -1)
           [ -n "$L" ] && { echo "--- latest npm debug log ($L):"; cat "$L"; } || echo "none"
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           generate_release_notes: true

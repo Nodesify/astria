@@ -20,10 +20,10 @@ concurrency:
 
 jobs:
   snapshot:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      BENCH_RUNNER_LABEL: ubuntu-latest (GitHub Actions)
+      BENCH_RUNNER_LABEL: ubuntu-24.04 (GitHub Actions)
     steps:
       # Always bench and commit on develop: the snapshot push must go to an
       # unprotected branch (main is PR-only), and the benchmark measures the
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: '3.12'
       # Deliberate: benchmarks the PUBLISHED CLI from npm, not repo HEAD, so
@@ -95,7 +95,7 @@ jobs:
 
       - name: Upload blind-judging results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: promptfoo-results
           path: scripts/bench/quality/out/promptfoo-results.json
@@ -105,7 +105,7 @@ jobs:
   # set over this repo's own graph. This published-release snapshot is separate
   # from quality.yml, which gates proposed source changes with a local build.
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
