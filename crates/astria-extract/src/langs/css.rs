@@ -10,7 +10,7 @@ pub fn config() -> &'static LanguageConfig {
         import_types: &["import_statement"], // @import
         call_type: "call_expression", // CSS functions like calc(), var()
         name_child: None,
-        name_field: "name",         // not heavily used for CSS but consistent with API
+        name_field: "name", // not heavily used for CSS but consistent with API
         body_field: Some("block"),
         body_fallback_types: &[],
         class_call_names: &[],

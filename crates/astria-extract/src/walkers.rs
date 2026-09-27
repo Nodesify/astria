@@ -31,6 +31,18 @@ fn first_child_text<'a>(node: &Node<'a>, source: &'a [u8]) -> Option<&'a str> {
 }
 
 /// Get the second child of a tree-sitter node.
+/// The nth (1-based) named child: positional naming for grammars without
+/// named fields (HCL blocks name themselves from their label string, which
+/// is the 2nd named child).
+fn nth_named_child<'a>(node: &Node<'a>, n: usize) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    let named: Vec<_> = node
+        .children(&mut cursor)
+        .filter(|c| c.is_named())
+        .collect();
+    named.get(n.saturating_sub(1)).copied()
+}
+
 fn second_child<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     let child = node.children(&mut cursor).nth(1);
@@ -471,10 +483,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
             // the impl type instead of colliding at file level when several impls
             // define the same method name.
             let type_field_node = node.child_by_field_name("type");
-            let positional = state
-                .cfg
-                .name_child
-                .and_then(|i| node.child(i));
+            let positional = state.cfg.name_child.and_then(|n| nth_named_child(node, n));
             let name_node = node
                 .child_by_field_name(state.cfg.name_field)
                 .or(positional)
@@ -588,13 +597,19 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
         };
 
         if passes_filter {
-            // Try name_field first, then fall back to second child for call-based languages
-            let name_node = node.child_by_field_name(state.cfg.name_field);
-            let name_node = match name_node {
-                Some(n) => Some(n),
-                None if !state.cfg.function_call_names.is_empty() => second_child(node),
-                _ => None,
-            };
+            // Try name_field first, then a positional named child, then fall
+            // back to second child for call-based languages
+            let positional = state.cfg.name_child.and_then(|n| nth_named_child(node, n));
+            let name_node = node
+                .child_by_field_name(state.cfg.name_field)
+                .or(positional)
+                .or_else(|| {
+                    if !state.cfg.function_call_names.is_empty() {
+                        second_child(node)
+                    } else {
+                        None
+                    }
+                });
             if let Some(name_node) = name_node {
                 let name = node_text(&name_node, state.source).to_string();
                 let func_label = format!("{}()", name);
