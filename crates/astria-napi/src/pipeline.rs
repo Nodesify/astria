@@ -62,7 +62,7 @@ mod graph_update;
 mod semantic_pass;
 
 pub fn run_pipeline(root: &Path) -> astria_core::Result<PipelineResult> {
-    run_pipeline_with(root, true, false, false, false)
+    run_pipeline_with(root, true, false, false, false, None)
 }
 
 /// Run the pipeline with explicit dedup control (`--no-dedup`).
@@ -70,12 +70,15 @@ pub fn run_pipeline(root: &Path) -> astria_core::Result<PipelineResult> {
 /// `label_communities` (`--label-communities`) names communities thematically
 /// with one LLM call per changed community; `deep` (`--deep`) adds the
 /// cached cross-file concept-linking pass. Both require a semantic backend.
+/// `cli_version` is the npm package version of the calling driver, stamped
+/// into the graph so `astria status` can report which release built it.
 pub fn run_pipeline_with(
     root: &Path,
     dedup: bool,
     embed: bool,
     label_communities: bool,
     deep: bool,
+    cli_version: Option<&str>,
 ) -> astria_core::Result<PipelineResult> {
     let root = if root.exists() {
         root.canonicalize().map_err(astria_core::AstriaError::Io)?
@@ -110,6 +113,24 @@ pub fn run_pipeline_with(
         }
         _ => {}
     }
+    // The npm CLI version is the one users actually upgrade; warn when the
+    // graph came from a different release so staleness is visible here too.
+    if let Some(running) = cli_version {
+        let stored_cli: Option<String> = db
+            .query_row(
+                "SELECT value FROM _meta WHERE key = 'astria_version'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        if let Some(prev) = stored_cli {
+            if prev != running {
+                eprintln!(
+                    "[astria] graph was last built by astria {prev}, this binary is astria {running}"
+                );
+            }
+        }
+    }
 
     // Record pipeline start (root is now canonicalized)
     let run_id: i64 = db.query_row(
@@ -118,15 +139,14 @@ pub fn run_pipeline_with(
         |row| row.get(0),
     )?;
 
-    let result = run_pipeline_inner(
-        &root,
-        &db,
-        &astria_dir,
+    let options = PipelineOptions {
         dedup,
         embed,
         label_communities,
         deep,
-    );
+        cli_version,
+    };
+    let result = run_pipeline_inner(&root, &db, &astria_dir, &options);
 
     // Record pipeline completion, including this run's measured LLM spend.
     let usage = astria_semantic::enrichment::usage_snapshot();
@@ -568,16 +588,24 @@ fn deep_link_stage_with(
     Ok(Some(stats))
 }
 
-fn run_pipeline_inner(
-    root: &Path,
-    db: &Connection,
-    astria_dir: &Path,
+/// Options threaded from the napi bindings into the pipeline driver; kept
+/// in one place so the driver never grows a long positional signature.
+#[derive(Default)]
+struct PipelineOptions<'a> {
     dedup: bool,
     embed: bool,
     label_communities: bool,
     deep: bool,
+    cli_version: Option<&'a str>,
+}
+
+fn run_pipeline_inner(
+    root: &Path,
+    db: &Connection,
+    astria_dir: &Path,
+    options: &PipelineOptions,
 ) -> astria_core::Result<PipelineResult> {
-    if (label_communities || deep) && !astria_semantic::enrichment_enabled() {
+    if (options.label_communities || options.deep) && !astria_semantic::enrichment_enabled() {
         return Err(astria_core::AstriaError::Graph(
             "--label-communities and --deep require an explicit --backend or ASTRIA_LLM_BACKEND"
                 .into(),
@@ -585,7 +613,7 @@ fn run_pipeline_inner(
     }
     let detected = graph_update::detect(root, db)?;
     let configuration = semantic_pass::configuration()?;
-    let build_configuration = format!("{configuration}:dedup={dedup}");
+    let build_configuration = format!("{configuration}:dedup={}", options.dedup);
     let previous_configuration: Option<String> = db
         .query_row(
             "SELECT value FROM _meta WHERE key = 'build_configuration'",
@@ -604,8 +632,14 @@ fn run_pipeline_inner(
         let mut extractions = astria_extract::extract(&files, root, db)?;
         let semantic_stats =
             semantic_pass::enrich_with_semantics(&files, &mut extractions, db, &configuration)?;
-        let build_result =
-            graph_update::publish(root, db, &detected, &extractions, &build_configuration)?;
+        let build_result = graph_update::publish(
+            root,
+            db,
+            &detected,
+            &extractions,
+            &build_configuration,
+            options.cli_version,
+        )?;
         (build_result, semantic_stats)
     } else {
         (
@@ -642,7 +676,7 @@ fn run_pipeline_inner(
 
     // Entity dedup runs after build, before clustering — duplicate nodes
     // poison community detection and god-node rankings.
-    let dedup_merged = if dedup {
+    let dedup_merged = if options.dedup {
         astria_build::dedup::dedup_nodes(db)?
     } else {
         0
@@ -662,13 +696,13 @@ fn run_pipeline_inner(
     // Deep concept linking runs BEFORE embeddings and clustering so its
     // cross-file INFERRED edges shape both: concept nodes bridge files the
     // AST never connected.
-    let deep_stats = deep_link_stage(db, root, deep)?;
+    let deep_stats = deep_link_stage(db, root, options.deep)?;
 
     // Semantic similarity pass (local embeddings, no API key): embed new
     // nodes and regenerate similar_to edges BEFORE clustering so they shape
     // communities and analysis. Explicit --embed fails loudly; the silent
     // auto-refresh path never triggers a model download.
-    embed_stage(db, embed)?;
+    embed_stage(db, options.embed)?;
 
     // Feedback loop: promote query pairs that recurred across distinct
     // questions into learned edges. Best-effort — a failure here must not
@@ -689,7 +723,7 @@ fn run_pipeline_inner(
     // Thematic community naming runs after clustering (fresh memberships)
     // and before hyperedges/wiki exports so every downstream surface —
     // report, MCP list_communities, graph.json — sees the good names.
-    let label_stats = label_communities_stage(db, label_communities)?;
+    let label_stats = label_communities_stage(db, options.label_communities)?;
 
     // Hyperedges: deterministic N-ary groups (communities, shared references).
     // Best-effort — a failure here must not block the build.

@@ -5,6 +5,9 @@ import { runCommand } from './commands/run';
 import { healthCommand } from './commands/health';
 import { riskCommand } from './commands/risk';
 import { statsCommand } from './commands/stats';
+import { godNodesCommand } from './commands/god-nodes';
+import { communitiesCommand } from './commands/communities';
+import { neighborsCommand } from './commands/neighbors';
 import { explainCommand } from './commands/explain';
 import { exportCommand } from './commands/export';
 import { callflowCommand } from './commands/callflow';
@@ -78,6 +81,7 @@ program
   .description('Explain a node and its connections')
   .argument('<node>', 'Node ID or label')
   .option('--graph <path>', 'Path to project root', '.')
+  .option('--json', 'Emit machine-readable JSON')
   .action(explainCommand);
 
 program
@@ -91,6 +95,8 @@ program
   .option('--directed', 'Follow edges only in their stored direction (caller -> callee)')
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
   .option('--cursor <n>', 'Continuation token from a previous truncated query', '0')
+  .option('--no-embed', 'Skip auto-merged embedding seeds even when the graph has vectors')
+  .option('--json', 'Emit machine-readable JSON')
   .action(queryCommand);
 
 program
@@ -101,6 +107,7 @@ program
   .option('--graph <path>', 'Path to project root', '.')
   .option('--directed', 'Follow edges only in their stored direction (caller -> callee)')
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
+  .option('--json', 'Emit machine-readable JSON')
   .action(pathCommand);
 
 program
@@ -109,6 +116,7 @@ program
   .option('--graph <path>', 'Path to project root', '.')
   .option('--budget <n>', 'Token budget for output', '2000')
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
+  .option('--json', 'Emit machine-readable JSON')
   .action(mapCommand);
 
 program
@@ -118,13 +126,38 @@ program
   .option('--graph <path>', 'Path to project root', '.')
   .option('--depth <n>', 'Maximum hops to traverse', '2')
   .option('--relation <type>', 'Only follow one relation (e.g. calls, imports, uses)')
+  .option('--json', 'Emit machine-readable JSON')
   .action(affectedCommand);
 
 program
   .command('stats')
   .description('Show graph statistics')
   .option('--graph <path>', 'Path to project root', '.')
+  .option('--json', 'Emit machine-readable JSON')
   .action(statsCommand);
+
+program
+  .command('god-nodes')
+  .description('List the highest-degree hub nodes (CLI parity with the MCP god_nodes tool)')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--json', 'Emit machine-readable JSON')
+  .action(godNodesCommand);
+
+program
+  .command('communities')
+  .description('List communities with labels, size, cohesion, and modularity (CLI parity with the MCP list_communities tool)')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--json', 'Emit machine-readable JSON')
+  .action(communitiesCommand);
+
+program
+  .command('neighbors')
+  .description('List a node\'s neighbors, optionally filtered by relation (CLI parity with the MCP get_neighbors tool)')
+  .argument('<node>', 'Node ID or label')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--relation <type>', 'Only include edges with this relation')
+  .option('--json', 'Emit machine-readable JSON')
+  .action(neighborsCommand);
 
 program
   .command('health')
@@ -237,8 +270,9 @@ program
 
 program
   .command('status')
-  .description('Check graph health and staleness')
+  .description('Check graph health, staleness, and build provenance (which astria and extraction rules built it)')
   .option('--graph <path>', 'Path to project root', '.')
+  .option('--json', 'Emit machine-readable JSON')
   .action(statusCommand);
 
 program

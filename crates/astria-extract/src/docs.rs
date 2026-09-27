@@ -53,10 +53,29 @@ pub(crate) fn extract_markdown_from_string(
     // Repeated section titles in one file (e.g. several "## Changes") get
     // ordinal suffixes so ids stay unique within the extraction.
     let mut seen_section_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Body text between headings: the open section's slug, id, the 1-based
+    // line its body starts at, and the accumulated lines. Text before the
+    // first heading belongs to the document node.
+    let mut pending: Option<(String, String, u32, String)> = None;
+    let mut pre_body = String::new();
+    let mut pre_body_start = 0u32;
+
+    let flush_pending = |pending: &mut Option<(String, String, u32, String)>,
+                         nodes: &mut Vec<ExtractedNode>,
+                         edges: &mut Vec<ExtractedEdge>| {
+        if let Some((section_id, _slug, start, body)) = pending.take() {
+            if !body.trim().is_empty() {
+                let parts: Vec<&str> = section_id.split("::").collect();
+                let mut ctx = ChunkContext { nodes, edges, path };
+                push_chunk_nodes(&mut ctx, &section_id, &parts, 0, &body, start);
+            }
+        }
+    };
 
     for (line_no, line) in content.lines().enumerate() {
         // Parse headings
         if let Some(caps) = heading_re.captures(line) {
+            flush_pending(&mut pending, &mut nodes, &mut edges);
             let hashes = caps.get(1).unwrap().as_str().len();
             let title = caps.get(2).unwrap().as_str().trim().to_string();
             let level = hashes;
@@ -111,7 +130,27 @@ pub(crate) fn extract_markdown_from_string(
                 source_line: Some(line_no as u32 + 1),
             });
 
-            heading_stack.push((level, section_id));
+            heading_stack.push((level, section_id.clone()));
+            pending = Some((section_id, slug, line_no as u32 + 2, String::new()));
+            continue;
+        }
+
+        // Body text accumulates under the open section, or the document
+        // before the first heading.
+        match &mut pending {
+            Some((_, _, _, body)) => {
+                body.push_str(line);
+                body.push('\n');
+            }
+            None => {
+                if !line.trim().is_empty() {
+                    if pre_body_start == 0 {
+                        pre_body_start = line_no as u32 + 1;
+                    }
+                    pre_body.push_str(line);
+                    pre_body.push('\n');
+                }
+            }
         }
 
         // Parse links (only local .md references)
@@ -144,6 +183,22 @@ pub(crate) fn extract_markdown_from_string(
                 });
             }
         }
+    }
+    flush_pending(&mut pending, &mut nodes, &mut edges);
+    if !pre_body.trim().is_empty() {
+        let mut ctx = ChunkContext {
+            nodes: &mut nodes,
+            edges: &mut edges,
+            path,
+        };
+        push_chunk_nodes(
+            &mut ctx,
+            &file_id,
+            &[&fid],
+            0,
+            &pre_body,
+            pre_body_start.max(1),
+        );
     }
 
     Extraction {
@@ -182,66 +237,52 @@ pub(crate) fn extract_text_file(
         node_type: "document".to_string(),
     });
 
-    let mut line_no = 0u32;
-    let mut para_index = 0u32;
-    let mut current_para_start: Option<(u32, String)> = None;
+    let mut chunk_index = 0usize;
+    let mut para_lines: Vec<&str> = Vec::new();
+    let mut para_start = 0u32;
 
-    for line in content.lines() {
-        line_no += 1;
+    let flush_paragraph = |para_lines: &mut Vec<&str>,
+                           para_start: u32,
+                           chunk_index: &mut usize,
+                           nodes: &mut Vec<ExtractedNode>,
+                           edges: &mut Vec<ExtractedEdge>| {
+        if para_lines.is_empty() {
+            return;
+        }
+        let para = para_lines.join("\n");
+        para_lines.clear();
+        if para.trim().is_empty() {
+            return;
+        }
+        let before = nodes.len();
+        let mut ctx = ChunkContext { nodes, edges, path };
+        push_chunk_nodes(&mut ctx, &file_id, &[&fid], *chunk_index, &para, para_start);
+        *chunk_index += nodes.len() - before;
+    };
+
+    for (i, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
-            if let Some((start_line, text)) = current_para_start.take() {
-                let label = truncate_with_ellipsis(&text, 80);
-                let section_id = make_node_id(&[&fid, &format!("p{}", para_index)]);
-
-                nodes.push(ExtractedNode {
-                    id: section_id.clone(),
-                    label,
-                    source_file: path.to_path_buf(),
-                    source_line: Some(start_line),
-                    docstring: None,
-                    signature: None,
-                    node_type: "section".to_string(),
-                });
-                edges.push(ExtractedEdge {
-                    source: file_id.clone(),
-                    target: section_id,
-                    relation: "contains".to_string(),
-                    confidence: "EXTRACTED".to_string(),
-                    confidence_score: Some(1.0),
-                    source_file: path.to_path_buf(),
-                    source_line: Some(start_line),
-                });
-                para_index += 1;
-            }
+            flush_paragraph(
+                &mut para_lines,
+                para_start,
+                &mut chunk_index,
+                &mut nodes,
+                &mut edges,
+            );
         } else {
-            if current_para_start.is_none() {
-                current_para_start = Some((line_no, line.trim().to_string()));
+            if para_lines.is_empty() {
+                para_start = i as u32 + 1;
             }
+            para_lines.push(line);
         }
     }
-    // Handle trailing paragraph
-    if let Some((start_line, text)) = current_para_start.take() {
-        let label = truncate_with_ellipsis(&text, 80);
-        let section_id = make_node_id(&[&fid, &format!("p{}", para_index)]);
-        nodes.push(ExtractedNode {
-            id: section_id.clone(),
-            label,
-            source_file: path.to_path_buf(),
-            source_line: Some(start_line),
-            docstring: None,
-            signature: None,
-            node_type: "section".to_string(),
-        });
-        edges.push(ExtractedEdge {
-            source: file_id.clone(),
-            target: section_id,
-            relation: "contains".to_string(),
-            confidence: "EXTRACTED".to_string(),
-            confidence_score: Some(1.0),
-            source_file: path.to_path_buf(),
-            source_line: Some(start_line),
-        });
-    }
+    flush_paragraph(
+        &mut para_lines,
+        para_start,
+        &mut chunk_index,
+        &mut nodes,
+        &mut edges,
+    );
 
     Ok(Extraction {
         file_path: path.to_path_buf(),
@@ -251,13 +292,244 @@ pub(crate) fn extract_text_file(
     })
 }
 
-/// First `max` chars (byte-safe here: labels are trimmed ASCII-ish text and
-/// clamped upstream) with an ellipsis suffix when longer.
+/// First `max` chars (split on a char boundary) with an ellipsis suffix
+/// when longer.
 fn truncate_with_ellipsis(text: &str, max: usize) -> String {
-    if text.len() > max {
-        format!("{}...", &text[..max - 3])
+    if text.chars().count() > max {
+        let cut: usize = text
+            .char_indices()
+            .nth(max - 3)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        format!("{}...", &text[..cut])
     } else {
         text.to_string()
+    }
+}
+
+/// Default maximum characters of body text carried by one chunk node
+/// (~250-300 tokens): small enough that query-term scoring and embedding
+/// inputs stay focused, large enough to keep doc-graph node counts sane.
+/// Override per run with ASTRIA_CHUNK_CHARS (clamped to 400..=8000).
+const CHUNK_MAX_CHARS: usize = 1200;
+/// Characters of the previous chunk prepended to the next one so evidence
+/// spanning a chunk boundary is still retrievable from either side.
+const CHUNK_OVERLAP_CHARS: usize = 180;
+
+fn chunk_max_chars() -> usize {
+    chunk_max_chars_value(astria_core::env_var("CHUNK_CHARS").as_deref())
+}
+
+fn chunk_max_chars_value(value: Option<&str>) -> usize {
+    value
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|v| v.clamp(400, 8000))
+        .unwrap_or(CHUNK_MAX_CHARS)
+}
+
+/// A body-text chunk with the 1-based source line of its first line.
+struct BodyChunk {
+    start_line: u32,
+    text: String,
+}
+
+/// Blank-line separated paragraphs, each pre-split so no piece exceeds
+/// `max` characters — oversized paragraphs break at line, then hard
+/// character boundaries.
+fn paragraph_pieces(body: &str, max: usize) -> Vec<(u32, String)> {
+    let mut pieces: Vec<(u32, String)> = Vec::new();
+    let mut para_lines: Vec<&str> = Vec::new();
+    let mut para_start = 0u32;
+    let flush = |lines: &mut Vec<&str>, start: u32, pieces: &mut Vec<(u32, String)>| {
+        if lines.is_empty() {
+            return;
+        }
+        let para = lines.join("\n");
+        lines.clear();
+        if para.chars().count() <= max {
+            if !para.trim().is_empty() {
+                pieces.push((start, para));
+            }
+            return;
+        }
+        let mut buf = String::new();
+        let mut buf_start = start;
+        let mut offset = 0u32;
+        for line in para.lines() {
+            offset += 1;
+            let line_chars = line.chars().count();
+            if line_chars > max {
+                if !buf.is_empty() {
+                    pieces.push((buf_start, std::mem::take(&mut buf)));
+                }
+                let line_abs = start + offset - 1;
+                let mut piece = String::new();
+                for (i, c) in line.chars().enumerate() {
+                    piece.push(c);
+                    if (i + 1) % max == 0 {
+                        pieces.push((line_abs, std::mem::take(&mut piece)));
+                    }
+                }
+                if !piece.is_empty() {
+                    pieces.push((line_abs, piece));
+                }
+                buf_start = line_abs;
+                continue;
+            }
+            if buf.chars().count() + line_chars + 1 > max {
+                pieces.push((buf_start, std::mem::take(&mut buf)));
+                buf_start = start + offset - 1;
+            }
+            if !buf.is_empty() {
+                buf.push('\n');
+            }
+            buf.push_str(line);
+        }
+        if !buf.trim().is_empty() {
+            pieces.push((buf_start, buf));
+        }
+    };
+    for (i, line) in body.lines().enumerate() {
+        if line.trim().is_empty() {
+            flush(&mut para_lines, para_start, &mut pieces);
+            para_start = i as u32 + 1;
+        } else {
+            if para_lines.is_empty() {
+                para_start = i as u32 + 1;
+            }
+            para_lines.push(line);
+        }
+    }
+    flush(&mut para_lines, para_start, &mut pieces);
+    pieces
+}
+
+/// Split body text into chunk-sized pieces at paragraph, then line, then
+/// hard boundaries. `body_start` is the 1-based source line of the body's
+/// first line; each chunk carries the absolute line it begins at.
+fn chunk_body(body: &str, body_start: u32) -> Vec<BodyChunk> {
+    let max = chunk_max_chars();
+    let pieces = paragraph_pieces(body, max);
+    let mut chunks: Vec<BodyChunk> = Vec::new();
+    let mut current: Option<(u32, String)> = None;
+    for (piece_line, piece) in pieces {
+        match &mut current {
+            Some((_, text)) if text.chars().count() + piece.chars().count() + 2 > max => {
+                let (line, text) = current.take().unwrap();
+                chunks.push(BodyChunk {
+                    start_line: body_start + line - 1,
+                    text,
+                });
+                current = Some((piece_line, piece));
+            }
+            Some((_, text)) => {
+                text.push_str("\n\n");
+                text.push_str(&piece);
+            }
+            None => current = Some((piece_line, piece)),
+        }
+    }
+    if let Some((line, text)) = current {
+        if !text.trim().is_empty() {
+            chunks.push(BodyChunk {
+                start_line: body_start + line - 1,
+                text,
+            });
+        }
+    }
+    add_overlap(&mut chunks);
+    chunks
+}
+
+/// Prepend a line-snapped tail of the previous chunk to each successor so a
+/// match near a boundary surfaces from both chunks. `start_line` moves back
+/// by the number of lines the tail occupies.
+fn add_overlap(chunks: &mut [BodyChunk]) {
+    for i in 1..chunks.len() {
+        let tail = line_snapped_tail(&chunks[i - 1].text, CHUNK_OVERLAP_CHARS)
+            .trim()
+            .to_string();
+        if tail.is_empty() {
+            continue;
+        }
+        let tail_lines = tail.matches('\n').count() as u32 + 1;
+        let text = chunks[i].text.clone();
+        chunks[i].text = format!("{tail}\n{text}");
+        chunks[i].start_line = chunks[i].start_line.saturating_sub(tail_lines - 1);
+    }
+}
+
+/// Last `max` characters of `text`, cut at a line boundary when one falls
+/// inside the window.
+fn line_snapped_tail(text: &str, max: usize) -> String {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    if chars.len() <= max {
+        return text.to_string();
+    }
+    let cut = chars[chars.len() - max].0;
+    let window = &text[cut..];
+    match window.find('\n') {
+        Some(pos) if pos + 1 < window.len() => window[pos + 1..].to_string(),
+        _ => window.to_string(),
+    }
+}
+
+/// Collector for chunk extraction, so callers do not thread eight separate
+/// mutables through every document extractor.
+struct ChunkContext<'a> {
+    nodes: &'a mut Vec<ExtractedNode>,
+    edges: &'a mut Vec<ExtractedEdge>,
+    path: &'a Path,
+}
+
+/// Emit chunk nodes for `body` under `parent_id`, linked with `contains`
+/// edges. Labels are each chunk's first line (truncated) so answers stay
+/// readable; the docstring carries the full chunk text that query scoring
+/// and embeddings search. `parent_parts` are the owning node's slug parts
+/// (file id and any section slug), used to build chunk ids.
+fn push_chunk_nodes(
+    ctx: &mut ChunkContext,
+    parent_id: &str,
+    parent_parts: &[&str],
+    first_index: usize,
+    body: &str,
+    body_start: u32,
+) {
+    for (i, chunk) in chunk_body(body, body_start).into_iter().enumerate() {
+        let index_slug = format!("p{}", first_index + i);
+        let id = make_node_id(
+            &parent_parts
+                .iter()
+                .copied()
+                .chain(std::iter::once(index_slug.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        let label = truncate_with_ellipsis(
+            chunk
+                .text
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("body"),
+            80,
+        );
+        ctx.nodes.push(ExtractedNode {
+            id: id.clone(),
+            label,
+            source_file: ctx.path.to_path_buf(),
+            source_line: Some(chunk.start_line),
+            docstring: Some(chunk.text),
+            signature: None,
+            node_type: "chunk".to_string(),
+        });
+        ctx.edges.push(ExtractedEdge {
+            source: parent_id.to_string(),
+            target: id,
+            relation: "contains".to_string(),
+            confidence: "EXTRACTED".to_string(),
+            confidence_score: Some(1.0),
+            source_file: ctx.path.to_path_buf(),
+            source_line: Some(chunk.start_line),
+        });
     }
 }
 
@@ -290,6 +562,22 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
 
     // Track heading nesting: stack of (underline_char, id)
     let mut heading_stack: Vec<(char, String)> = Vec::new();
+    // Body text between headings, same scheme as the markdown extractor.
+    let mut pending: Option<(String, String, u32, String)> = None;
+    let mut pre_body = String::new();
+    let mut pre_body_start = 0u32;
+
+    let flush_pending = |pending: &mut Option<(String, String, u32, String)>,
+                         nodes: &mut Vec<ExtractedNode>,
+                         edges: &mut Vec<ExtractedEdge>| {
+        if let Some((section_id, _slug, start, body)) = pending.take() {
+            if !body.trim().is_empty() {
+                let parts: Vec<&str> = section_id.split("::").collect();
+                let mut ctx = ChunkContext { nodes, edges, path };
+                push_chunk_nodes(&mut ctx, &section_id, &parts, 0, &body, start);
+            }
+        }
+    };
 
     let mut i = 0;
     while i + 1 < lines.len() {
@@ -306,6 +594,7 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
             && under_line.trim().len() >= trimmed_text.len();
 
         if is_heading {
+            flush_pending(&mut pending, &mut nodes, &mut edges);
             let ch = under_line.trim().chars().next().unwrap_or('=');
             let title = trimmed_text.to_string();
             let slug = make_target_id(&title);
@@ -345,11 +634,64 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
                 source_line: Some(i as u32 + 1),
             });
 
-            heading_stack.push((ch, section_id));
+            heading_stack.push((ch, section_id.clone()));
+            pending = Some((section_id, slug, i as u32 + 3, String::new()));
             i += 2;
             continue;
         }
+
+        match &mut pending {
+            Some((_, _, _, body)) => {
+                body.push_str(text_line);
+                body.push('\n');
+            }
+            None => {
+                if !text_line.trim().is_empty() {
+                    if pre_body_start == 0 {
+                        pre_body_start = i as u32 + 1;
+                    }
+                    pre_body.push_str(text_line);
+                    pre_body.push('\n');
+                }
+            }
+        }
         i += 1;
+    }
+    // A trailing line past the last (text, underline) pair still belongs to
+    // the open section or the document preamble.
+    if i < lines.len() {
+        let last = lines[i];
+        match &mut pending {
+            Some((_, _, _, body)) => {
+                body.push_str(last);
+                body.push('\n');
+            }
+            None => {
+                if !last.trim().is_empty() {
+                    if pre_body_start == 0 {
+                        pre_body_start = i as u32 + 1;
+                    }
+                    pre_body.push_str(last);
+                    pre_body.push('\n');
+                }
+            }
+        }
+    }
+    flush_pending(&mut pending, &mut nodes, &mut edges);
+    if !pre_body.trim().is_empty() {
+        let mut ctx = ChunkContext {
+            nodes: &mut nodes,
+            edges: &mut edges,
+            path,
+        };
+        push_chunk_nodes(
+            &mut ctx,
+            &file_id,
+            &[&fid],
+            0,
+            &pre_body,
+            pre_body_start.max(1),
+        );
     }
 
     Ok(Extraction {
@@ -358,4 +700,172 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
         nodes,
         edges,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract_md(content: &str) -> Extraction {
+        extract_markdown_from_string(
+            Path::new("docs/notes.md"),
+            "markdown",
+            content,
+            Path::new("docs/notes.md"),
+        )
+    }
+
+    #[test]
+    fn markdown_section_body_becomes_a_searchable_docstring() {
+        let ex = extract_md(
+            "# Title\n\nintro line\n\n## Setup\nInstall with npm install.\nThen run the build.\n",
+        );
+        let section = ex.nodes.iter().find(|n| n.label == "Setup").unwrap();
+        let chunks: Vec<_> = ex
+            .nodes
+            .iter()
+            .filter(|n| n.docstring.is_some() && n.id.starts_with(&section.id))
+            .collect();
+        assert_eq!(chunks.len(), 1);
+        let doc = chunks[0].docstring.as_deref().unwrap();
+        assert!(doc.contains("Install with npm install."));
+        assert!(doc.contains("Then run the build."));
+        assert_eq!(chunks[0].source_line, Some(6));
+        assert!(chunks[0].id.ends_with("::p0"), "chunk id: {}", chunks[0].id);
+    }
+
+    #[test]
+    fn heading_free_markdown_chunks_under_the_document() {
+        let ex = extract_md("alpha paragraph with content\n\nbeta paragraph also\n");
+        assert!(ex.nodes.iter().any(|n| n.node_type == "document"));
+        let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.node_type == "chunk").collect();
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].docstring.as_deref().unwrap().contains("beta"));
+        assert!(chunks[0].id.ends_with("::p0"));
+    }
+
+    #[test]
+    fn long_bodies_split_at_chunk_boundaries() {
+        let line = "x".repeat(300);
+        let body: String = (0..8).map(|_| format!("{line}\n")).collect();
+        let ex = extract_md(&format!("# Big\n\n{body}\n"));
+        let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.docstring.is_some()).collect();
+        assert!(chunks.len() >= 2, "expected multiple chunks");
+        for c in &chunks {
+            assert!(
+                c.docstring.as_deref().unwrap().chars().count() <= CHUNK_MAX_CHARS,
+                "chunk exceeded the cap"
+            );
+        }
+        let mut ids: Vec<_> = ex.nodes.iter().map(|n| n.id.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), ex.nodes.len(), "chunk ids must stay unique");
+    }
+
+    #[test]
+    fn text_paragraphs_keep_full_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("conv.txt");
+        std::fs::write(
+            &p,
+            "first line has sunrise\nsecond line more sunrise\n\nother para\n",
+        )
+        .unwrap();
+        let ex = extract_text_file(p.as_path(), "text", p.as_path()).unwrap();
+        let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.node_type == "chunk").collect();
+        assert_eq!(chunks.len(), 2);
+        let doc = chunks[0].docstring.as_deref().unwrap();
+        assert!(doc.contains("first line has sunrise"));
+        assert!(doc.contains("second line more sunrise"));
+        assert_eq!(chunks[0].label, "first line has sunrise");
+        assert!(chunks[0].id.ends_with("::p0"));
+    }
+
+    #[test]
+    fn rst_section_body_is_captured() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("guide.rst");
+        std::fs::write(
+            &p,
+            "Title\n=====\n\nSetup text here\nMore setup\n\nNext\n=====\n",
+        )
+        .unwrap();
+        let ex = extract_rst(p.as_path(), p.as_path()).unwrap();
+        let title = ex.nodes.iter().find(|n| n.label == "Title").unwrap();
+        let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.docstring.is_some()).collect();
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0]
+            .docstring
+            .as_deref()
+            .unwrap()
+            .contains("Setup text here"));
+        assert!(chunks[0].id.starts_with(&title.id));
+    }
+
+    #[test]
+    fn chunks_overlap_across_boundaries() {
+        let line = "x".repeat(300);
+        let body: String = (0..8).map(|_| format!("{line}\n")).collect();
+        let ex = extract_md(&format!("# Big\n\n{body}\n"));
+        let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.node_type == "chunk").collect();
+        assert!(chunks.len() >= 2);
+        // Each successor starts with the tail of its predecessor, so a match
+        // spanning the boundary surfaces from either side.
+        let first_text = chunks[0].docstring.as_deref().unwrap();
+        let tail_of_first: String = first_text[first_text.len() - 40..].to_string();
+        assert!(
+            chunks[1]
+                .docstring
+                .as_deref()
+                .unwrap()
+                .contains(&tail_of_first),
+            "successor chunk must carry the predecessor tail"
+        );
+        // The overlap shifts the reported start line back accordingly.
+        assert!(chunks[1].source_line.unwrap() < chunks[0].source_line.unwrap() + 4);
+        for c in &chunks {
+            assert!(
+                c.docstring.as_deref().unwrap().chars().count()
+                    <= CHUNK_MAX_CHARS + CHUNK_OVERLAP_CHARS + 2,
+                "chunk exceeded the cap including overlap"
+            );
+        }
+    }
+
+    #[test]
+    fn overlap_tails_never_produce_empty_labels() {
+        // Bodies whose paragraphs are separated by blank lines can snap an
+        // overlap tail to a blank line; labels must still come from real
+        // content or extraction validation fails.
+        let body = "first paragraph line one".repeat(30)
+            + "
+
+" + &"second paragraph line".repeat(30)
+            + "
+
+" + &"third paragraph line".repeat(30)
+            + "
+";
+        let ex = extract_md(&format!(
+            "# Gap
+
+{}
+",
+            body
+        ));
+        assert!(
+            ex.nodes.iter().all(|n| !n.label.trim().is_empty()),
+            "no chunk may carry an empty label"
+        );
+    }
+
+    #[test]
+    fn chunk_size_override_is_parsed_and_clamped() {
+        assert_eq!(chunk_max_chars_value(None), CHUNK_MAX_CHARS);
+        assert_eq!(chunk_max_chars_value(Some(" 2000 ")), 2000);
+        assert_eq!(chunk_max_chars_value(Some("junk")), CHUNK_MAX_CHARS);
+        assert_eq!(chunk_max_chars_value(Some("10")), 400, "clamped low");
+        assert_eq!(chunk_max_chars_value(Some("999999")), 8000, "clamped high");
+    }
 }

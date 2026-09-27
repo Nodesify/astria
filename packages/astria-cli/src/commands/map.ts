@@ -4,10 +4,15 @@ export async function mapCommand(opts: {
   graph: string;
   budget: string;
   detail?: string;
+  json?: boolean;
 }) {
   try {
     const budget = parseInt(opts.budget || '2000', 10);
     const result = repoMap(opts.graph, budget, opts.detail);
+    if (opts.json) {
+      console.log(JSON.stringify({ filesShown: result.filesShown, text: result.text }, null, 2));
+      return;
+    }
     console.log(result.text);
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);

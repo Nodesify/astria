@@ -37,6 +37,16 @@ Builds also pick up, automatically:
 ## Querying
 
 ```bash
+astria explain <node> [--graph .] [--json]      # Explain a node and its connections
+astria query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--no-embed] [--json] [--graph .]  # BFS/DFS traversal
+astria path <A> <B> [--directed] [--detail high] [--json] [--graph .]   # Shortest path between two concepts
+astria affected <node> [--depth 2] [--relation R] [--json] [--graph .]  # Blast radius - what breaks if you change this node
+astria map [--budget 2000] [--detail high] [--json] [--graph .]  # PageRank-ranked repo map with top symbols
+astria stats [--graph .] [--json]               # Node/edge/community counts
+astria god-nodes [--graph .] [--json]           # Highest-degree hub nodes (MCP god_nodes parity)
+astria communities [--graph .] [--json]         # Communities with labels, size, cohesion (MCP list_communities parity)
+astria neighbors <node> [--relation R] [--json] [--graph .]  # A node's neighbors, optionally one relation (MCP get_neighbors parity)
+astria status [--graph .] [--json]              # Graph freshness, staleness, and build provenance
 astria explain <node> [--graph .]              # Explain a node and its connections
 astria query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--graph .]  # BFS/DFS traversal
 astria path <A> <B> [--directed] [--detail high] [--graph .]   # Shortest path between two concepts
@@ -44,6 +54,7 @@ astria affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - 
 astria map [--budget 2000] [--detail high] [--graph .]  # PageRank-ranked repo map with top symbols
 astria stats [--graph .]                       # Node/edge/community counts
 astria status [--graph .]                      # Graph freshness and status
+>>>>>>> origin/main
 astria callflow <node> [--depth 2] [--direction out|in|both] [--out flow.md] [--graph .]  # Mermaid call graph
 astria history [--limit 20] [--graph .]        # Show recent query history
 ```
@@ -56,6 +67,12 @@ astria history [--limit 20] [--graph .]        # Show recent query history
 - `--directed` — follow edge direction instead of treating the graph as undirected
 - `--detail high` — fidelity tier: only declared (`EXTRACTED`) facts, regardless of usage-adjusted confidence scores
 - `--cursor N` — continuation cursor for truncated traversals; use the returned value, which advances through node and edge records
+- `--no-embed` — skip auto-merged embedding seeds even when the graph carries vectors (same switch as `ASTRIA_EMBED=off`; see [Environment variables](./env-vars))
+- `--json` — machine-readable output instead of prose: `query` reports counts, the continuation cursor, build provenance, and the answer text; `explain`/`neighbors` return the full neighbor lists; `affected` returns every hit with depth and relation; `stats` returns counts and type breakdown
+
+`god-nodes`, `communities`, and `neighbors` give the CLI the same answers the [MCP tools](./mcp-tools) expose, so scripts and non-MCP agents can reach them too.
+
+`status` judges freshness from the graph itself, not just file timestamps: every `run`/`update` stamps the npm CLI version and the extraction-rules version into the graph, and `status --json` exposes them (`astriaVersion`, `extractionHashVersion`, `currentExtractionHashVersion`, `extractionOutdated`) so tooling can detect a graph that predates the installed binary's extraction rules. Graphs built before stamping report nulls.
 
 CLI and MCP share hybrid retrieval and load a fresh SQLite graph snapshot for each request. Query output reports when the graph was last built, so agents can judge freshness. Repeated queries promote recurring node pairs into `learned` edges — see [learning from usage](#learning-from-usage).
 

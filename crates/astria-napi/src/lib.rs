@@ -453,6 +453,56 @@ pub struct GraphStatsJs {
     pub type_counts: HashMap<String, i64>,
 }
 
+/// Build provenance read from the graph's `_meta` table, so callers can
+/// judge freshness without filesystem timestamps.
+#[napi(object)]
+pub struct GraphBuildInfoJs {
+    /// Finished-at timestamp of the most recent completed pipeline run.
+    pub graph_published_at: Option<String>,
+    /// npm CLI version of the driver that built the graph; None means an
+    /// internal caller ran the pipeline without one.
+    pub astria_version: Option<String>,
+    /// Rust pipeline version that built the graph.
+    pub pipeline_version: Option<String>,
+    /// Extraction rules version the graph was produced by; None means the
+    /// graph predates version stamping.
+    pub extraction_hash_version: Option<String>,
+    /// Semantic configuration signature of the last build.
+    pub build_configuration: Option<String>,
+    /// Extraction rules version compiled into this binary; a graph whose
+    /// `extraction_hash_version` differs predates current rules.
+    pub current_extraction_hash_version: String,
+}
+
+/// One hub node from `astria god-nodes` (MCP `god_nodes` parity).
+#[napi(object)]
+pub struct GodNodeJs {
+    pub id: String,
+    pub label: String,
+    pub degree: i64,
+    /// Community label when named, else the numeric id; None when the node
+    /// has no community.
+    pub community: Option<String>,
+}
+
+/// One community from `astria communities` (MCP `list_communities` parity).
+#[napi(object)]
+pub struct CommunityJs {
+    pub id: i64,
+    pub label: String,
+    pub summary: Option<String>,
+    /// `llm` (thematic label) or `hub` (label derived from hub nodes).
+    pub label_source: String,
+    pub cohesion: Option<f64>,
+    pub size: i64,
+}
+
+#[napi(object)]
+pub struct CommunitiesJs {
+    pub modularity: Option<f64>,
+    pub communities: Vec<CommunityJs>,
+}
+
 #[napi(object)]
 pub struct QueryResultJs {
     pub text: String,
@@ -553,6 +603,7 @@ pub fn run_pipeline(
     embed: Option<bool>,
     label_communities: Option<bool>,
     deep: Option<bool>,
+    cli_version: Option<String>,
 ) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
     let result = pipeline::run_pipeline_with(
@@ -561,6 +612,7 @@ pub fn run_pipeline(
         embed.unwrap_or(false),
         label_communities.unwrap_or(false),
         deep.unwrap_or(false),
+        cli_version.as_deref(),
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     Ok(pipeline_result_js(&result))
@@ -575,6 +627,7 @@ pub fn update_pipeline(
     embed: Option<bool>,
     label_communities: Option<bool>,
     deep: Option<bool>,
+    cli_version: Option<String>,
 ) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
     let result = pipeline::run_pipeline_with(
@@ -583,6 +636,7 @@ pub fn update_pipeline(
         embed.unwrap_or(false),
         label_communities.unwrap_or(false),
         deep.unwrap_or(false),
+        cli_version.as_deref(),
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     Ok(pipeline_result_js(&result))
@@ -653,6 +707,115 @@ pub fn graph_stats(root: String) -> napi::Result<GraphStatsJs> {
         community_count,
         file_count,
         type_counts,
+    })
+}
+
+/// Read one `_meta` value from a graph database, None when the key (or the
+/// table) is absent.
+fn meta_value(db: &rusqlite::Connection, key: &str) -> Option<String> {
+    db.query_row("SELECT value FROM _meta WHERE key = ?1", [key], |r| {
+        r.get(0)
+    })
+    .ok()
+}
+
+/// Community id -> hub label, so god-node output names communities instead
+/// of printing raw numbers (mirrors the astria-mcp helper).
+fn community_label_map(db: &rusqlite::Connection) -> HashMap<i64, String> {
+    let mut stmt = match db.prepare("SELECT id, label FROM communities") {
+        Ok(s) => s,
+        Err(_) => return Default::default(),
+    };
+    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+}
+
+#[napi]
+pub fn graph_build_info(root: String) -> napi::Result<GraphBuildInfoJs> {
+    let db = pipeline::load_graph_db(&PathBuf::from(&root))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(GraphBuildInfoJs {
+        graph_published_at: meta_value(&db, "graph_published_at"),
+        astria_version: meta_value(&db, "astria_version"),
+        pipeline_version: meta_value(&db, "pipeline_version"),
+        extraction_hash_version: meta_value(&db, "extraction_hash_version"),
+        build_configuration: meta_value(&db, "build_configuration"),
+        current_extraction_hash_version: astria_core::EXTRACTION_HASH_VERSION.to_string(),
+    })
+}
+
+#[napi]
+pub fn god_nodes(root: String) -> napi::Result<Vec<GodNodeJs>> {
+    let db = pipeline::load_graph_db(&PathBuf::from(&root))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let analysis =
+        astria_analyze::analyze(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let labels = community_label_map(&db);
+    Ok(analysis
+        .god_nodes
+        .into_iter()
+        .map(|n| GodNodeJs {
+            id: n.id,
+            label: n.label,
+            degree: n.degree as i64,
+            community: n.community.map(|c| {
+                labels
+                    .get(&(c as i64))
+                    .cloned()
+                    .unwrap_or_else(|| c.to_string())
+            }),
+        })
+        .collect())
+}
+
+#[napi]
+pub fn list_communities(root: String) -> napi::Result<CommunitiesJs> {
+    let db = pipeline::load_graph_db(&PathBuf::from(&root))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let mut stmt = db
+        .prepare(
+            "SELECT id, label, summary, label_source, cohesion, size
+             FROM communities ORDER BY size DESC",
+        )
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(i64, String, Option<String>, String, Option<f64>, i64)> = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let modularity = db
+        .query_row(
+            "SELECT CAST(value AS REAL) FROM _meta WHERE key = 'last_modularity'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    Ok(CommunitiesJs {
+        modularity,
+        communities: rows
+            .into_iter()
+            .map(
+                |(id, label, summary, label_source, cohesion, size)| CommunityJs {
+                    id,
+                    label,
+                    summary,
+                    label_source,
+                    cohesion,
+                    size,
+                },
+            )
+            .collect(),
     })
 }
 
@@ -1056,7 +1219,7 @@ pub fn ingest_url(
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     // Incremental update picks the new file up (hash manifest sees it as new)
-    pipeline::run_pipeline_with(&root_pb, true, false, false, false)
+    pipeline::run_pipeline_with(&root_pb, true, false, false, false, None)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(IngestResultJs {

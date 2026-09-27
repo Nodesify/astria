@@ -4,11 +4,18 @@ export async function pathCommand(source: string, target: string, opts: {
   graph: string;
   directed?: boolean;
   detail?: string;
+  json?: boolean;
 }) {
   try {
     const result = findPath(opts.graph, source, target, opts.directed ?? false, opts.detail);
-    if (!result.found) {
-      console.log(result.text);
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          { source, target, found: result.found, hops: result.hops, text: result.text },
+          null,
+          2,
+        ),
+      );
       return;
     }
     console.log(result.text);

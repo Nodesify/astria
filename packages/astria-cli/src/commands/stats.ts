@@ -1,8 +1,12 @@
 import { graphStats } from '../native';
 
-export async function statsCommand(opts: { graph: string }) {
+export async function statsCommand(opts: { graph: string; json?: boolean }) {
   try {
     const stats = graphStats(opts.graph);
+    if (opts.json) {
+      console.log(JSON.stringify(stats, null, 2));
+      return;
+    }
     console.log(`Nodes: ${stats.nodeCount}`);
     console.log(`Edges: ${stats.edgeCount}`);
     console.log(`Communities: ${stats.communityCount}`);

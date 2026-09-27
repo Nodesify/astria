@@ -35,7 +35,7 @@ function assert(condition: boolean, message: string) {
 const commandNames = program.commands.map((c: Command) => c.name());
 const allCommands = [
   'run', 'update', 'watch', 'explain', 'query', 'path', 'map', 'affected',
-  'stats', 'export', 'cluster-only', 'merge', 'diff', 'history', 'mcp',
+  'stats', 'god-nodes', 'communities', 'neighbors', 'export', 'cluster-only', 'merge', 'diff', 'history', 'mcp',
   'tree', 'wiki', 'prs', 'add', 'status', 'install', 'uninstall', 'hook',
 ];
 for (const cmd of allCommands) {
@@ -115,6 +115,21 @@ for (const opt of ['--out', '--max-nodes', '--format', '--graph']) {
 }
 assert(optsOf('prs').includes('--conflicts'), 'prs should have --conflicts');
 assert(optsOf('status').includes('--graph'), 'status should have --graph');
+
+// The query family carries --json so callers get machine-readable results
+// (counts, cursors, build provenance) instead of parsing prose.
+for (const cmd of ['query', 'map', 'explain', 'path', 'affected', 'stats', 'status']) {
+  assert(optsOf(cmd).includes('--json'), `${cmd} should have --json`);
+}
+// MCP-parity commands: god_nodes / list_communities / get_neighbors.
+for (const opt of ['--graph', '--json']) {
+  assert(optsOf('god-nodes').includes(opt), `god-nodes should have ${opt}`);
+  assert(optsOf('communities').includes(opt), `communities should have ${opt}`);
+  assert(optsOf('neighbors').includes(opt), `neighbors should have ${opt}`);
+}
+for (const opt of ['--relation', '--graph']) {
+  assert(optsOf('neighbors').includes(opt), `neighbors should have ${opt}`);
+}
 
 // Test 4: the compiled entrypoint parses --help (catches duplicate-flag
 // registration and native-loading regressions that source imports mask)
