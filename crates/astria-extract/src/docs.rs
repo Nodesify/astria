@@ -66,7 +66,8 @@ pub(crate) fn extract_markdown_from_string(
         if let Some((section_id, _slug, start, body)) = pending.take() {
             if !body.trim().is_empty() {
                 let parts: Vec<&str> = section_id.split("::").collect();
-                push_chunk_nodes(nodes, edges, &section_id, &parts, 0, &body, start, path);
+                let mut ctx = ChunkContext { nodes, edges, path };
+                push_chunk_nodes(&mut ctx, &section_id, &parts, 0, &body, start);
             }
         }
     };
@@ -185,16 +186,8 @@ pub(crate) fn extract_markdown_from_string(
     }
     flush_pending(&mut pending, &mut nodes, &mut edges);
     if !pre_body.trim().is_empty() {
-        push_chunk_nodes(
-            &mut nodes,
-            &mut edges,
-            &file_id,
-            &[&fid],
-            0,
-            &pre_body,
-            pre_body_start.max(1),
-            path,
-        );
+        let mut ctx = ChunkContext { nodes: &mut nodes, edges: &mut edges, path };
+        push_chunk_nodes(&mut ctx, &file_id, &[&fid], 0, &pre_body, pre_body_start.max(1));
     }
 
     Extraction {
@@ -251,16 +244,8 @@ pub(crate) fn extract_text_file(
             return;
         }
         let before = nodes.len();
-        push_chunk_nodes(
-            nodes,
-            edges,
-            &file_id,
-            &[&fid],
-            *chunk_index,
-            &para,
-            para_start,
-            path,
-        );
+        let mut ctx = ChunkContext { nodes, edges, path };
+        push_chunk_nodes(&mut ctx, &file_id, &[&fid], *chunk_index, &para, para_start);
         *chunk_index += nodes.len() - before;
     };
 
@@ -478,20 +463,26 @@ fn line_snapped_tail(text: &str, max: usize) -> String {
     }
 }
 
+/// Collector for chunk extraction, so callers do not thread eight separate
+/// mutables through every document extractor.
+struct ChunkContext<'a> {
+    nodes: &'a mut Vec<ExtractedNode>,
+    edges: &'a mut Vec<ExtractedEdge>,
+    path: &'a Path,
+}
+
 /// Emit chunk nodes for `body` under `parent_id`, linked with `contains`
 /// edges. Labels are each chunk's first line (truncated) so answers stay
 /// readable; the docstring carries the full chunk text that query scoring
-/// and embeddings search. `parent` is the owning node's slug parts (file id
-/// and any section slug), used to build chunk ids.
+/// and embeddings search. `parent_parts` are the owning node's slug parts
+/// (file id and any section slug), used to build chunk ids.
 fn push_chunk_nodes(
-    nodes: &mut Vec<ExtractedNode>,
-    edges: &mut Vec<ExtractedEdge>,
+    ctx: &mut ChunkContext,
     parent_id: &str,
     parent_parts: &[&str],
     first_index: usize,
     body: &str,
     body_start: u32,
-    path: &Path,
 ) {
     for (i, chunk) in chunk_body(body, body_start).into_iter().enumerate() {
         let index_slug = format!("p{}", first_index + i);
@@ -510,22 +501,22 @@ fn push_chunk_nodes(
                 .unwrap_or("body"),
             80,
         );
-        nodes.push(ExtractedNode {
+        ctx.nodes.push(ExtractedNode {
             id: id.clone(),
             label,
-            source_file: path.to_path_buf(),
+            source_file: ctx.path.to_path_buf(),
             source_line: Some(chunk.start_line),
             docstring: Some(chunk.text),
             signature: None,
             node_type: "chunk".to_string(),
         });
-        edges.push(ExtractedEdge {
+        ctx.edges.push(ExtractedEdge {
             source: parent_id.to_string(),
             target: id,
             relation: "contains".to_string(),
             confidence: "EXTRACTED".to_string(),
             confidence_score: Some(1.0),
-            source_file: path.to_path_buf(),
+            source_file: ctx.path.to_path_buf(),
             source_line: Some(chunk.start_line),
         });
     }
@@ -571,7 +562,8 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
         if let Some((section_id, _slug, start, body)) = pending.take() {
             if !body.trim().is_empty() {
                 let parts: Vec<&str> = section_id.split("::").collect();
-                push_chunk_nodes(nodes, edges, &section_id, &parts, 0, &body, start, path);
+                let mut ctx = ChunkContext { nodes, edges, path };
+                push_chunk_nodes(&mut ctx, &section_id, &parts, 0, &body, start);
             }
         }
     };
@@ -676,16 +668,8 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
     }
     flush_pending(&mut pending, &mut nodes, &mut edges);
     if !pre_body.trim().is_empty() {
-        push_chunk_nodes(
-            &mut nodes,
-            &mut edges,
-            &file_id,
-            &[&fid],
-            0,
-            &pre_body,
-            pre_body_start.max(1),
-            path,
-        );
+        let mut ctx = ChunkContext { nodes: &mut nodes, edges: &mut edges, path };
+        push_chunk_nodes(&mut ctx, &file_id, &[&fid], 0, &pre_body, pre_body_start.max(1));
     }
 
     Ok(Extraction {
