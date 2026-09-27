@@ -44,7 +44,23 @@ this file is the per-version summary.
 - **Same-named files in different directories are separate entities**:
   dedup no longer merges file-shaped nodes at all (transitive union chains
   had merged `src/index.ts` into `install/index.ts`, erasing the CLI entry
-  file — fixes the q17 CLI-entry-point miss).
+  file). The guard prevents future merges; healing the already-scarred
+  store additionally required a full rebuild, because the incremental
+  pipeline only re-extracts changed files and never restored the deleted
+  entry node on its own.
+- **IDF-weighted seed scoring**: a term that matches a large share of node
+  labels ("index" hits every index.* file) is scaled down, while rare terms
+  ("scip") keep full strength — previously the generic matches won by
+  alphabetical tie-break and flooded the seed set (fixes the q26 SCIP miss).
+- **Entry-point intent**: questions asking for the entry point are answered
+  structurally — a file that imports many modules and is imported by none
+  (tests excluded) is the program's front door, whatever its filename —
+  because no lexical hook can find an entry file named `index.ts` (fixes
+  the q17 CLI-entry-point miss). Measured on the golden set after the
+  rebuild + scoring work: MRR 0.592 -> 0.690, recall@1 45.7% -> 57.1%,
+  recall@5 80.0% -> 88.6%; one question remains a full miss (q07, the MCP
+  server crate sits across a prose-to-code layer gap the traversal does
+  not bridge).
 - **Benchmark re-pinned to upstream graphify v0.9.69** (first release with
   a query-capable CLI): the blind answer-quality comparison now compares
   against answers instead of errors. The speed/density corpus changes
