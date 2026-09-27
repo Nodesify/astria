@@ -1,5 +1,6 @@
-// astria-cluster: label propagation clustering with hub-based community
-// labels and oversized-community splitting (ported from upstream astria v8).
+// astria-cluster: label propagation clustering with thematic community
+// labels (distinctive-term naming, hub fallback) and oversized-community
+// splitting (ported from upstream astria v8).
 
 use petgraph::graph::NodeIndex;
 use petgraph::graph::UnGraph;
@@ -14,8 +15,9 @@ const OVERSIZED_MIN: usize = 10;
 #[derive(Debug)]
 pub struct ClusterResult {
     pub communities: HashMap<u32, usize>,
-    /// Hub-based, LLM-free labels: each community is named after its
-    /// highest-degree member.
+    /// Thematic, LLM-free labels: each community is named after its most
+    /// distinctive term ("Extraction", "Similarity") when one concentrates
+    /// inside it, falling back to the highest-degree member's name.
     pub labels: HashMap<u32, String>,
     pub iterations: u32,
     /// Newman modularity of the final partition in [-1, 1].
@@ -221,21 +223,87 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
             .sum()
     };
 
+    let final_labels = thematic_labels(&node_ids, &labels, &node_labels, &hub_labels);
+
+    // LLM enrichment from the previous build: a community whose membership
+    // is unchanged keeps its `--label-communities` name/summary across
+    // rebuilds; a changed membership falls back to the fresh thematic/hub
+    // label (a stale LLM name for a different group would be a lie).
+    let previous_enrichment: HashMap<i64, (String, Option<String>, String, Option<String>)> = db
+        .prepare("SELECT id, label, summary, label_source, member_hash FROM communities")
+        .map(|mut stmt| {
+            stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map(|rows| {
+                rows.filter_map(|r| r.ok())
+                    .map(|(id, label, summary, source, hash)| (id, (label, summary, source, hash)))
+                    .collect()
+            })
+            .unwrap_or_default()
+        })
+        .unwrap_or_default();
+
+    // Membership hash per (new) community id, written alongside the label so
+    // the labeling stage can skip unchanged communities without a call.
+    let mut member_hashes: HashMap<u32, String> = HashMap::new();
+    for &c in communities.keys() {
+        let mut ids: Vec<&str> = node_ids
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| labels[*i] == c)
+            .map(|(_, id)| id.as_str())
+            .collect();
+        ids.sort_unstable();
+        member_hashes.insert(c, astria_core::db::community_member_hash(&ids));
+    }
+
     db.execute("DELETE FROM communities", [])?;
     {
         let mut stmt = db.prepare(
-            "INSERT OR REPLACE INTO communities (id, label, cohesion, size) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO communities (id, label, summary, label_source, cohesion, size, member_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
         for (&c, &size) in &communities {
-            let label = hub_labels
-                .get(&c)
-                .cloned()
-                .unwrap_or_else(|| format!("Community {c}"));
+            let hash = member_hashes.get(&c).map(|s| s.as_str());
+            // Carry the previous LLM name over only when the membership is
+            // byte-identical; everything else gets the deterministic label.
+            let preserved = hash.and_then(|h| {
+                previous_enrichment.get(&(c as i64)).and_then(
+                    |(label, summary, source, old_hash)| {
+                        if source == "llm" && old_hash.as_deref() == Some(h) {
+                            Some((label.clone(), summary.clone()))
+                        } else {
+                            None
+                        }
+                    },
+                )
+            });
+            let (label, summary, label_source) = match preserved {
+                Some((label, summary)) => (label, summary, "llm".to_string()),
+                None => (
+                    final_labels
+                        .get(&c)
+                        .cloned()
+                        .unwrap_or_else(|| format!("Community {c}")),
+                    None,
+                    "hub".to_string(),
+                ),
+            };
             stmt.execute(rusqlite::params![
                 c as i64,
                 label,
+                summary,
+                label_source,
                 cohesion.get(&c).copied(),
-                size as i64
+                size as i64,
+                hash,
             ])?;
         }
     }
@@ -244,12 +312,158 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
         rusqlite::params![format!("{modularity:.6}")],
     )?;
 
+    // The DB is the single source of truth for labels: re-read so the
+    // returned map reflects preserved LLM names, not just the fresh
+    // thematic ones.
+    let labels: HashMap<u32, String> = {
+        let mut stmt = db.prepare("SELECT id, label FROM communities")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect::<Vec<(i64, String)>>();
+        rows.into_iter()
+            .map(|(id, label)| (id as u32, label))
+            .collect()
+    };
+
     Ok(ClusterResult {
         communities,
-        labels: hub_labels,
+        labels,
         iterations,
         modularity,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Thematic community labels
+// ---------------------------------------------------------------------------
+
+/// Terms shorter/longer than this never name a community.
+const MIN_TERM_LEN: usize = 3;
+const MAX_TERM_LEN: usize = 24;
+/// A term must appear on at least this many members to be a label candidate.
+const MIN_TERM_SUPPORT: usize = 3;
+/// And at least this share of its uses graph-wide must sit in the community.
+const MIN_CONCENTRATION: f64 = 0.5;
+/// Generic code/structure tokens that appear everywhere and never theme a
+/// community; concentration alone would mostly handle these, this trims the
+/// obvious noise cheaply.
+const STOPWORDS: &[&str] = &[
+    "the", "and", "for", "with", "from", "this", "that", "into", "not", "are", "test", "tests",
+    "spec", "src", "lib", "main", "index", "new", "get", "set", "std", "self", "impl", "pub", "fn",
+    "let", "mut", "some", "none", "true", "false", "http", "https", "www", "sample", "example",
+    "unknown",
+];
+
+/// Split a label into lowercase word terms: non-alphanumeric separators and
+/// camelCase boundaries both break words ("export_wiki" → [export, wiki],
+/// "buildPayload" → [build, payload]).
+fn tokenize_label(label: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut current = String::new();
+    let mut prev_lower = false;
+    for ch in label.chars() {
+        if ch.is_alphanumeric() {
+            let upper = ch.is_uppercase();
+            if !current.is_empty() && upper && prev_lower {
+                terms.push(std::mem::take(&mut current));
+            }
+            current.push(ch);
+            prev_lower = !upper;
+        } else if !current.is_empty() {
+            terms.push(std::mem::take(&mut current));
+            prev_lower = false;
+        }
+    }
+    if !current.is_empty() {
+        terms.push(current);
+    }
+    terms
+        .into_iter()
+        .map(|t| t.to_lowercase())
+        .filter(|t| (MIN_TERM_LEN..=MAX_TERM_LEN).contains(&t.len()))
+        .filter(|t| !STOPWORDS.contains(&t.as_str()))
+        .collect()
+}
+
+/// Name each community after its most distinctive term — the word that
+/// concentrates inside it relative to the whole graph — instead of the
+/// highest-degree member's name ("get()", "lib.rs"). Communities without a
+/// qualifying term keep their deterministic hub label. Pure function of the
+/// graph, so labels stay deterministic across runs.
+fn thematic_labels(
+    node_ids: &[String],
+    labels: &[u32],
+    node_labels: &HashMap<String, String>,
+    hub_labels: &HashMap<u32, String>,
+) -> HashMap<u32, String> {
+    let mut by_community: HashMap<u32, HashMap<String, usize>> = HashMap::new();
+    let mut community_sizes: HashMap<u32, usize> = HashMap::new();
+    let mut global: HashMap<String, usize> = HashMap::new();
+    for (i, id) in node_ids.iter().enumerate() {
+        let c = labels[i];
+        *community_sizes.entry(c).or_insert(0) += 1;
+        if let Some(label) = node_labels.get(id) {
+            for term in tokenize_label(label) {
+                *by_community
+                    .entry(c)
+                    .or_default()
+                    .entry(term.clone())
+                    .or_insert(0) += 1;
+                *global.entry(term).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let mut out: HashMap<u32, String> = HashMap::new();
+    let mut community_ids: Vec<u32> = community_sizes.keys().copied().collect();
+    community_ids.sort_unstable();
+    for c in community_ids {
+        let size = community_sizes[&c];
+        // Minimum support scales with community size so the label describes
+        // the community, not a pair of members sharing a helper name.
+        let support_floor = (size / 20).clamp(MIN_TERM_SUPPORT, 10);
+        let mut best: Option<(usize, f64, String)> = None;
+        if let Some(terms) = by_community.get(&c) {
+            for (term, &count) in terms {
+                if count < support_floor {
+                    continue;
+                }
+                let concentration = count as f64 / global[term].max(1) as f64;
+                if concentration < MIN_CONCENTRATION {
+                    continue;
+                }
+                let score = count as f64 * concentration;
+                let candidate = (count, score, term.clone());
+                let better = match &best {
+                    None => true,
+                    Some((b_count, b_score, b_term)) => {
+                        score > *b_score
+                            || (score == *b_score
+                                && (count > *b_count || (count == *b_count && term < b_term)))
+                    }
+                };
+                if better {
+                    best = Some(candidate);
+                }
+            }
+        }
+        let label = match best {
+            Some((_, _, term)) => {
+                let mut chars = term.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => term,
+                }
+            }
+            None => hub_labels
+                .get(&c)
+                .cloned()
+                .unwrap_or_else(|| format!("Community {c}")),
+        };
+        out.insert(c, label);
+    }
+    out
 }
 
 /// One full label-propagation pass loop. Returns iterations used.
@@ -436,6 +650,77 @@ mod tests {
     }
 
     #[test]
+    fn thematic_label_from_distinctive_term() {
+        let db = open_db_in_memory().unwrap();
+        // One connected community whose labels share the term "extract",
+        // plus two singletons sharing "query" — 2 uses is below the support
+        // floor, so the singletons must keep their hub labels.
+        let mut sql = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('e1','extract_file()','code','f.py'),('e2','extract_dir()','code','f.py'),
+                ('e3','extract_root()','code','f.py'),('e4','extract_module()','code','f.py'),
+                ('e5','extract_single()','code','f.py'),('e6','walker()','code','f.py'),
+                ('e7','parser()','code','f.py'),('e8','reader()','code','f.py'),
+                ('q1','query_parse()','code','f.py'),('q2','query_plan()','code','f.py');\n",
+        );
+        for i in 1..8 {
+            sql.push_str(&format!(
+                "INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('e{i}', 'e{}', 'calls', 'EXTRACTED', 'f.py');\n",
+                i + 1
+            ));
+        }
+        db.execute_batch(&sql).unwrap();
+        cluster(&db).unwrap();
+
+        let (big_label, big_size): (String, i64) = db
+            .query_row(
+                "SELECT label, size FROM communities ORDER BY size DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(big_size, 8);
+        assert_eq!(
+            big_label, "Extract",
+            "distinctive term should name the community"
+        );
+
+        let singleton_labels: Vec<String> = db
+            .prepare("SELECT label FROM communities WHERE size = 1")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(
+            singleton_labels.len(),
+            2,
+            "both singletons should form their own community"
+        );
+        for label in singleton_labels {
+            assert_ne!(
+                label, "Query",
+                "shared term below the support floor must not name the community"
+            );
+        }
+    }
+
+    #[test]
+    fn no_candidates_is_noop_fallback_hub_labels() {
+        // Single-letter labels never yield qualifying terms: every community
+        // must fall back to its hub member's name (the pre-thematic behavior).
+        let db = open_db_in_memory().unwrap();
+        seed_graph(&db);
+        let result = cluster(&db).unwrap();
+        for label in result.labels.values() {
+            assert!(
+                ["A", "B", "C", "D"].contains(&label.as_str()),
+                "fallback must be the hub label, got {label}"
+            );
+        }
+    }
+
+    #[test]
     fn clustering_is_deterministic_across_runs() {
         // Two identically-seeded databases must produce identical
         // assignments — label propagation must not depend on HashMap
@@ -522,5 +807,61 @@ mod tests {
             "two disconnected cliques should score high modularity, got {}",
             result.modularity
         );
+    }
+    #[test]
+    fn llm_labels_survive_unchanged_recluster_and_drop_on_change() {
+        use astria_core::db::community_member_hash;
+        let db = open_db_in_memory().unwrap();
+        seed_graph(&db);
+        cluster(&db).unwrap();
+
+        // Simulate a prior --label-communities run on community 0.
+        let mut ids: Vec<String> = db
+            .prepare("SELECT id FROM nodes WHERE community = 0 ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        ids.sort();
+        let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+        let hash = community_member_hash(&refs);
+        db.execute(
+            "UPDATE communities SET label = 'Config & Settings', summary = 'Loads settings.', label_source = 'llm', member_hash = ?1 WHERE id = 0",
+            rusqlite::params![hash],
+        )
+        .unwrap();
+
+        // Rebuild with identical membership: the LLM label survives.
+        cluster(&db).unwrap();
+        let (label, source): (String, String) = db
+            .query_row(
+                "SELECT label, label_source FROM communities WHERE id = 0",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (label.as_str(), source.as_str()),
+            ("Config & Settings", "llm")
+        );
+
+        // Membership drifts (stale hash): the label falls back to the
+        // deterministic one and provenance returns to 'hub'.
+        db.execute(
+            "UPDATE communities SET member_hash = 'stale' WHERE id = 0",
+            [],
+        )
+        .unwrap();
+        cluster(&db).unwrap();
+        let (label, source): (String, String) = db
+            .query_row(
+                "SELECT label, label_source FROM communities WHERE id = 0",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(source, "hub", "stale membership must not keep an LLM label");
+        assert_ne!(label, "Config & Settings");
     }
 }

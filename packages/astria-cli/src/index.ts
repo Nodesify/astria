@@ -45,6 +45,8 @@ program
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
   .option('--wiki', 'Also export a markdown wiki to .astria/wiki')
   .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
+  .option('--label-communities', 'Name communities thematically with one LLM call per changed community (requires a semantic backend)')
+  .option('--deep', 'Second extraction tier: LLM-linked cross-file concept edges, cached per file (requires a semantic backend)')
   .option('--global', 'After building, merge this repo into the cross-repo global graph')
   .option('--as <tag>', 'Repo tag for --global (defaults to the directory name)')
   .action((path, opts) => runCommand(path, { ...opts, global: opts.global, as: opts.as }));
@@ -57,6 +59,8 @@ program
   .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), or gemini')
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
   .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
+  .option('--label-communities', 'Name communities thematically with one LLM call per changed community (requires a semantic backend)')
+  .option('--deep', 'Second extraction tier: LLM-linked cross-file concept edges, cached per file (requires a semantic backend)')
   .action(updateCommand);
 
 program

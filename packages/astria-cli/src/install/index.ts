@@ -187,7 +187,7 @@ export function installPlatform(platform: string, projectDir: string): string[] 
   }
 
   const projectMd = path.join(projectDir, 'CLAUDE.md');
-  if (cfg.claudeMd || cfg.agentsMd || cfg.geminiMd) {
+  if (cfg.claudeMd || cfg.agentsMd || cfg.geminiMd || cfg.copilotMd) {
     if (cfg.claudeMd) {
       const result = injectSection(projectMd, PROJECT_MD_SECTION);
       messages.push(
@@ -222,6 +222,21 @@ export function installPlatform(platform: string, projectDir: string): string[] 
           'Project GEMINI.md: astria section added',
           'Project GEMINI.md: astria section updated',
           'Project GEMINI.md: astria section unchanged'
+        )
+      );
+    }
+
+    if (cfg.copilotMd) {
+      // Copilot's custom-instructions file — same managed section, so a
+      // later install refreshes it in place and uninstall removes it.
+      const copilotMd = path.join(projectDir, '.github', 'copilot-instructions.md');
+      const result = injectSection(copilotMd, PROJECT_MD_SECTION);
+      messages.push(
+        sectionMessage(
+          result,
+          'Copilot instructions -> .github/copilot-instructions.md',
+          'Copilot instructions: section updated',
+          'Copilot instructions: already up to date'
         )
       );
     }
@@ -337,6 +352,10 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
   if (cfg.geminiMd) {
     removeSection(path.join(projectDir, 'GEMINI.md'));
     messages.push('Project GEMINI.md: astria section removed');
+  }
+  if (cfg.copilotMd) {
+    removeSection(path.join(projectDir, '.github', 'copilot-instructions.md'));
+    messages.push('Copilot instructions: astria section removed');
   }
 
   switch (cfg.settingsHook) {

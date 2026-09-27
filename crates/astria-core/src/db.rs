@@ -260,9 +260,39 @@ pub fn prefer_non_stub_id(conn: &Connection, bare: &str) -> Option<String> {
     .ok()
 }
 
+/// Canonical membership fingerprint of a community: SHA-256 over the
+/// member ids, sorted and newline-terminated. Both `cluster` (which
+/// preserves LLM labels across rebuilds) and the `--label-communities`
+/// stage (which skips unchanged communities) key their caches on this, so
+/// the hash function lives here, once. Sorting happens inside: a caller
+/// that forgets to sort must not be able to poison the cache.
+pub fn community_member_hash(member_ids: &[&str]) -> String {
+    use sha2::Digest;
+    let mut sorted: Vec<&str> = member_ids.to_vec();
+    sorted.sort_unstable();
+    let mut hasher = sha2::Sha256::new();
+    for id in &sorted {
+        hasher.update(id.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn community_member_hash_is_order_independent_and_stable() {
+        let a = community_member_hash(&["b", "a", "c"]);
+        let b = community_member_hash(&["a", "b", "c"]);
+        let c = community_member_hash(&["a", "b"]);
+        assert_eq!(
+            a, b,
+            "caller sorts, but the hash must not depend on order anyway"
+        );
+        assert_ne!(a, c, "membership change must change the hash");
+    }
 
     #[test]
     fn open_in_memory_creates_tables() {
@@ -392,5 +422,49 @@ mod tests {
             )
             .unwrap();
         assert_eq!(line, Some(7));
+    }
+
+    #[test]
+    fn schema_v9_has_community_enrichment_and_run_usage() {
+        let conn = open_db_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('a', 'A', 'code', 'f.rs')",
+            [],
+        )
+        .unwrap();
+        // Hub defaults; LLM labeling overwrites label_source.
+        conn.execute(
+            "INSERT INTO communities (id, label, size) VALUES (0, 'A', 1)",
+            [],
+        )
+        .unwrap();
+        let (source, summary): (String, Option<String>) = conn
+            .query_row(
+                "SELECT label_source, summary FROM communities WHERE id = 0",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(source, "hub");
+        assert_eq!(summary, None);
+        conn.execute(
+            "UPDATE communities SET label = 'Auth & Sessions', summary = 'Login flow.', label_source = 'llm', member_hash = 'abc' WHERE id = 0",
+            [],
+        )
+        .unwrap();
+        // Per-run token accounting columns accept values.
+        conn.execute(
+            "INSERT INTO pipeline_runs (started_at, status, llm_input_tokens, llm_output_tokens, llm_api_calls) VALUES ('0', 'running', 100, 20, 2)",
+            [],
+        )
+        .unwrap();
+        let (input, calls): (i64, i64) = conn
+            .query_row(
+                "SELECT llm_input_tokens, llm_api_calls FROM pipeline_runs WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((input, calls), (100, 2));
     }
 }

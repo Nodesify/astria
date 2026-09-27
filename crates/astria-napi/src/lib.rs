@@ -231,6 +231,18 @@ pub struct PipelineResultJs {
     pub edges_added: i64,
     pub communities: i64,
     pub report: String,
+    /// Files whose semantic extraction came from the content-hash cache.
+    pub semantic_cached: i64,
+    /// Measured LLM spend of this run's semantic passes.
+    pub llm_input_tokens: i64,
+    pub llm_output_tokens: i64,
+    pub llm_api_calls: i64,
+    /// Communities (re)named by the LLM (`--label-communities`), or -1 when
+    /// the stage did not run.
+    pub communities_labeled: i64,
+    pub communities_reused: i64,
+    /// INFERRED concept edges written by `--deep`, or -1 when it did not run.
+    pub deep_links: i64,
 }
 
 #[napi(object)]
@@ -340,6 +352,8 @@ pub fn run_pipeline(
     root: String,
     no_dedup: Option<bool>,
     embed: Option<bool>,
+    label_communities: Option<bool>,
+    deep: Option<bool>,
 ) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
     let db_path_str = astria_paths::normalize(&astria_paths::db_path(
@@ -347,16 +361,16 @@ pub fn run_pipeline(
             .canonicalize()
             .map_err(|e| napi::Error::from_reason(e.to_string()))?,
     )?);
-    let result =
-        pipeline::run_pipeline_with(&root_pb, !no_dedup.unwrap_or(false), embed.unwrap_or(false))
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let result = pipeline::run_pipeline_with(
+        &root_pb,
+        !no_dedup.unwrap_or(false),
+        embed.unwrap_or(false),
+        label_communities.unwrap_or(false),
+        deep.unwrap_or(false),
+    )
+    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     query::invalidate_graph_cache(&db_path_str);
-    Ok(PipelineResultJs {
-        nodes_added: result.build_result.nodes_added as i64,
-        edges_added: result.build_result.edges_added as i64,
-        communities: result.cluster_result.communities.len() as i64,
-        report: result.report,
-    })
+    Ok(pipeline_result_js(&result))
 }
 
 /// Incremental rebuild — intentionally reuses run_pipeline because the pipeline
@@ -366,6 +380,8 @@ pub fn update_pipeline(
     root: String,
     no_dedup: Option<bool>,
     embed: Option<bool>,
+    label_communities: Option<bool>,
+    deep: Option<bool>,
 ) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
     let db_path_str = astria_paths::normalize(&astria_paths::db_path(
@@ -373,16 +389,43 @@ pub fn update_pipeline(
             .canonicalize()
             .map_err(|e| napi::Error::from_reason(e.to_string()))?,
     )?);
-    let result =
-        pipeline::run_pipeline_with(&root_pb, !no_dedup.unwrap_or(false), embed.unwrap_or(false))
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let result = pipeline::run_pipeline_with(
+        &root_pb,
+        !no_dedup.unwrap_or(false),
+        embed.unwrap_or(false),
+        label_communities.unwrap_or(false),
+        deep.unwrap_or(false),
+    )
+    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     query::invalidate_graph_cache(&db_path_str);
-    Ok(PipelineResultJs {
+    Ok(pipeline_result_js(&result))
+}
+
+/// Flatten a pipeline result for JS. Stats that did not run report -1 so
+/// "ran and produced zero" stays distinguishable from "not requested".
+fn pipeline_result_js(result: &pipeline::PipelineResult) -> PipelineResultJs {
+    PipelineResultJs {
         nodes_added: result.build_result.nodes_added as i64,
         edges_added: result.build_result.edges_added as i64,
         communities: result.cluster_result.communities.len() as i64,
-        report: result.report,
-    })
+        report: result.report.clone(),
+        semantic_cached: result.semantic_cached as i64,
+        llm_input_tokens: result.llm_usage.input as i64,
+        llm_output_tokens: result.llm_usage.output as i64,
+        llm_api_calls: result.llm_usage.calls as i64,
+        communities_labeled: result
+            .community_labels
+            .map(|s| s.labeled as i64)
+            .unwrap_or(-1),
+        communities_reused: result
+            .community_labels
+            .map(|s| s.reused as i64)
+            .unwrap_or(-1),
+        deep_links: result
+            .deep_links
+            .map(|s| s.links_added as i64)
+            .unwrap_or(-1),
+    }
 }
 
 #[napi]
@@ -831,7 +874,7 @@ pub fn ingest_url(
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     // Incremental update picks the new file up (hash manifest sees it as new)
-    pipeline::run_pipeline_with(&root_pb, true, false)
+    pipeline::run_pipeline_with(&root_pb, true, false, false, false)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     query::invalidate_graph_cache(&db_path_str);
 
@@ -893,6 +936,13 @@ pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
         edges_added: 0,
         communities: cluster_result.communities.len() as i64,
         report,
+        semantic_cached: 0,
+        llm_input_tokens: 0,
+        llm_output_tokens: 0,
+        llm_api_calls: 0,
+        communities_labeled: -1,
+        communities_reused: -1,
+        deep_links: -1,
     })
 }
 
@@ -913,6 +963,13 @@ pub fn merge_graphs(
         edges_added: result.edges_added,
         communities: result.communities as i64,
         report: result.report,
+        semantic_cached: 0,
+        llm_input_tokens: 0,
+        llm_output_tokens: 0,
+        llm_api_calls: 0,
+        communities_labeled: -1,
+        communities_reused: -1,
+        deep_links: -1,
     })
 }
 
