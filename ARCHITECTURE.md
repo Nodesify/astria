@@ -4,7 +4,7 @@ astria turns source code into a queryable knowledge graph. It uses AST-based ext
 
 ## Overview
 
-The project is structured as a Rust workspace with 14 domain-specific crates and a Node.js CLI.
+The project is structured as a Rust workspace with 16 domain-specific crates and a Node.js CLI.
 
 **Language**: Rust 2021
 **Build system**: Cargo + npm
@@ -19,7 +19,7 @@ detect() → extract() → enrich_with_semantics() → build() → dedup_nodes()
 The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 
 1.  **detect()** (`astria-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run.
-2.  **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Supports 21 languages with per-language configurations in `src/langs/`.
+2.  **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Supports 25 languages with per-language configurations in `src/langs/`.
 3.  **enrich_with_semantics()** (`astria-semantic`, optional): When an LLM backend is configured, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results.
 4.  **build()** (`astria-build`): Merges extracted nodes and edges into the SQLite graph database, handles deduplication and cross-file reference resolution.
 5.  **embed()** (`astria-embed`, optional `--embed`): Computes local node embeddings (fastembed/ONNX, no API key), adds `similar_to` edges, and triggers a community refresh so semantic similarity consolidates clusters.
@@ -31,6 +31,7 @@ The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 
 | Crate | Responsibility |
 | :--- | :--- |
+| `astria-bolt` | Minimal hand-rolled Bolt client (PackStream, chunked framing, HELLO/RUN/PULL) for live Neo4j pushes — no driver dependency. |
 | `astria-core` | Shared types (`FileType`, `GraphStats`), `AstriaError`, SQLite schema + migrations, path validation, sanitization, sensitive-path denylist. |
 | `astria-paths` | Path normalization and `.astria` directory management. |
 | `astria-detect` | File system scanning, `.astriaignore` support, and incremental change detection via SHA-256 hashes. |
@@ -38,14 +39,14 @@ The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 | `astria-embed` | Local semantic embeddings (fastembed/ONNX, no API key): `similar_to` edges and embedding-backed query recall. Optional (`--embed`). |
 | `astria-build` | Persistent graph assembly; entity dedup (MinHash/LSH blocking + Jaro-Winkler verify) in `dedup.rs`. |
 | `astria-cluster` | Deterministic community detection (stable labels, cohesion, modularity) using `petgraph`. |
-| `astria-analyze` | God nodes, ranked surprising cross-community connections, blast radius (`affected.rs`, reverse reachability). |
+| `astria-analyze` | God nodes, ranked surprising cross-community connections, blast radius (`affected.rs`, reverse reachability), code-health report (`health.rs`). |
 | `astria-query` | Query engine: BFS/DFS (optionally directed), shortest path, explain, token-based node scoring, per-path graph cache. |
 | `astria-mcp` | MCP stdio server exposing the graph to AI agents. |
 | `astria-report` | Markdown generation for the final user-facing report. |
 | `astria-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. |
 | `astria-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection. |
 | `astria-pdf` | PDF text extraction. |
-| `astria-napi` | The bridge between Rust and Node.js: pipeline orchestration, query surface, merge/diff, JSON/HTML/GraphML/tree export. |
+| `astria-napi` | The bridge between Rust and Node.js: pipeline orchestration (semantic enrichment, community labeling, deep linking), query surface, merge/diff, JSON/HTML/GraphML/SVG/tree/Cypher export, live Neo4j push, health and risk reports. |
 | `astria-cli` | The Node.js-based user interface, responsible for argument parsing and installing AI skills. |
 
 ## Data Models

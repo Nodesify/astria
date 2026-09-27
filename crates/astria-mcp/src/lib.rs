@@ -55,6 +55,8 @@ fn tools() -> Value {
         {"name": "list_communities", "description": "All communities with labels, sizes, and cohesion. Labels are LLM-thematic when a semantic backend ran with --label-communities, else deterministic thematic/hub terms.",
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "graph_stats", "description": "Node/edge/community/file counts for the graph.",
+         "inputSchema": {"type": "object", "properties": {}}},
+        {"name": "health", "description": "Code-health report: unreachable-symbol candidates, circular file dependencies, hub concentration, graph staleness — one heuristic score (0-100).",
          "inputSchema": {"type": "object", "properties": {}}}
     ])
 }
@@ -334,6 +336,15 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 "nodes: {nodes}, edges: {edges}, communities: {communities}, files tracked: {files}{modularity_txt}"
             )))
         }
+        "health" => astria_analyze::health::health(db).map(|report| {
+            // Stored paths are absolute; show them relative to the project
+            // root so lines stay short.
+            let root = std::path::Path::new(db_path)
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"));
+            text_result(astria_analyze::health::render(&report, root.as_deref()))
+        }),
         other => Ok(error_result(format!("unknown tool: {other}"))),
     }));
 
@@ -475,6 +486,7 @@ mod tests {
             "god_nodes",
             "list_communities",
             "graph_stats",
+            "health",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }

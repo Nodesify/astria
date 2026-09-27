@@ -10,14 +10,18 @@ pub mod java;
 pub mod javascript;
 pub mod kotlin;
 pub mod lua;
+pub mod metal;
 pub mod php;
+pub mod powershell;
 pub mod python;
 pub mod ruby;
 pub mod rust;
 pub mod scala;
 pub mod shell;
 pub mod swift;
+pub mod terraform;
 pub mod typescript;
+pub mod verilog;
 pub mod zig;
 
 pub use config::LanguageConfig;
@@ -56,6 +60,10 @@ pub fn all_languages() -> Vec<&'static LanguageConfig> {
         shell::config(),
         dart::config(),
         zig::config(),
+        terraform::config(),
+        powershell::config(),
+        verilog::config(),
+        metal::config(),
         css::config(),
     ]
 }

@@ -56,6 +56,32 @@ cypher-shell -u neo4j -p <password> -f astria.cypher
 
 The Neo4j export writes an idempotent import script (`MERGE` statements — safe to re-run). JSON and GraphML exports are unaffected by `--mode`.
 
+### Live Neo4j push
+
+Skip the file entirely and push straight into a running Neo4j over Bolt:
+
+```bash
+astria export --graph . --format cypher --neo4j-push bolt://localhost:7687   --neo4j-user neo4j --neo4j-pass <password>   # or NEO4J_USERNAME / NEO4J_PASSWORD env
+```
+
+The push is the same idempotent MERGE graph, delivered in parameterized
+UNWIND batches (500 rows each): `Symbol` nodes, typed relationships
+(`CALLS`, `IMPORTS`, ...), and `Community` nodes carrying labels, summaries,
+and `labelSource`. The Bolt client is hand-rolled in Rust (`astria-bolt`):
+no driver dependency, mock-server tested.
+
+## SVG
+
+```bash
+astria export --graph . --format svg --out graph.svg
+```
+
+A standalone dark-theme SVG with a deterministic community-arc layout:
+communities sit on a ring, members spread around each center, hub symbols
+labeled. No physics, no JS — byte-identical on every run, so it diffs
+cleanly and embeds anywhere (GitHub READMEs render it natively). Graphs
+beyond 2,000 nodes / 6,000 edges degrade gracefully with a `(capped)` note.
+
 ## Hyperedges in exports
 
 Hyperedges are n-ary node groups produced deterministically at build time (no LLM): one per community (`participate_in`, top-degree members) and one per identifier-shaped literal referenced from ≥ 3 distinct files (`shares_reference`). Every export surface shows them:

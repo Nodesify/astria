@@ -74,6 +74,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "astria-bolt"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "tempfile",
+]
+
+[[package]]
 name = "astria-build"
 version = "1.0.0"
 dependencies = [
@@ -155,16 +163,19 @@ dependencies = [
  "tree-sitter-elixir",
  "tree-sitter-go",
  "tree-sitter-haskell",
+ "tree-sitter-hcl",
  "tree-sitter-java",
  "tree-sitter-javascript",
  "tree-sitter-kotlin-ng",
  "tree-sitter-lua",
  "tree-sitter-php",
+ "tree-sitter-powershell",
  "tree-sitter-python",
  "tree-sitter-ruby",
  "tree-sitter-rust",
  "tree-sitter-scala",
  "tree-sitter-swift",
+ "tree-sitter-systemverilog",
  "tree-sitter-typescript",
  "tree-sitter-zig",
 ]
@@ -202,6 +213,7 @@ name = "astria-napi"
 version = "1.0.0"
 dependencies = [
  "astria-analyze",
+ "astria-bolt",
  "astria-build",
  "astria-cluster",
  "astria-core",
@@ -2822,6 +2834,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-hcl"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a7b2cc3d7121553b84309fab9d11b3ff3d420403eef9ae50f9fd1cd9d9cf012"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-java"
 version = "0.23.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2878,6 +2900,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-powershell"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3faf304d44b9ddd4a7d97804bb8de7daf564336dd5a526dc6de5b39238243022"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-python"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2922,6 +2954,16 @@ name = "tree-sitter-swift"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ef216011c3e3df4fa864736f347cb8d509b1066cf0c8549fb1fd81ac9832e59"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-systemverilog"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d9f02d7fd20691acb5edf44a782f0b9fa278d9987befb1ae597c768707b95e6"
 dependencies = [
  "cc",
  "tree-sitter-language",

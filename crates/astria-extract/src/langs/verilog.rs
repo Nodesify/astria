@@ -1,0 +1,26 @@
+use super::config::LanguageConfig;
+
+pub fn config() -> &'static LanguageConfig {
+    static CONFIG: LanguageConfig = LanguageConfig {
+        name: "Verilog/SystemVerilog",
+        extensions: &[".v", ".sv", ".svh", ".vh"],
+        language_fn: || tree_sitter_systemverilog::LANGUAGE.into(),
+        class_types: &[
+            "module_declaration",
+            "interface_declaration",
+            "program_declaration",
+            "class_declaration",
+        ],
+        function_types: &["function_declaration", "task_declaration"],
+        import_types: &["import_declaration"],
+        call_type: "call",
+        name_field: "instance_identifier",
+        body_field: Some("module_item"),
+        body_fallback_types: &[],
+        class_call_names: &[],
+        function_call_names: &[],
+        import_call_names: &[],
+        closure_types: &[],
+    };
+    &CONFIG
+}

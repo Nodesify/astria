@@ -11,7 +11,46 @@ export interface PipelineResultJs {
   llmApiCalls: number;
   communitiesLabeled: number;
   communitiesReused: number;
+  communitiesFailed: number;
   deepLinks: number;
+}
+
+export interface HealthReportJs {
+  score: number;
+  grade: string;
+  deadCode: Array<string>;
+  cycles: Array<string>;
+  hubs: Array<string>;
+  ageDays: number | null;
+  nodeCount: number;
+  edgeCount: number;
+  text: string;
+}
+
+export interface RiskReportJs {
+  score: number;
+  level: string;
+  changedFiles: Array<string>;
+  filesWithSymbols: number;
+  impacted: number;
+  byDepth: Array<string>;
+  communities: Array<string>;
+  entries: Array<string>;
+  text: string;
+}
+
+export interface SvgCountsJs {
+  nodes: number;
+  edges: number;
+  communities: number;
+  truncated: boolean;
+}
+
+export interface Neo4jPushCountsJs {
+  nodes: number;
+  edges: number;
+  communities: number;
+  statements: number;
 }
 
 export interface GraphStatsJs {
@@ -86,6 +125,10 @@ export function exportHtmlCmd(root: string, outPath: string, mode?: string): voi
 export function exportGraphmlCmd(root: string, outPath: string): void;
 export function exportCypherCmd(root: string, outPath: string): number;
 export function exportWiki(root: string, outDir: string, maxKeyNodes?: number): number;
+export function exportSvgCmd(root: string, outPath: string): SvgCountsJs;
+export function neo4jPushCmd(root: string, url: string, user?: string | null, pass?: string | null): Neo4jPushCountsJs;
+export function healthReport(root: string): HealthReportJs;
+export function riskReport(root: string, staged?: boolean | null): RiskReportJs;
 export function exportObsidian(root: string, outDir: string): number;
 export function exportTree(root: string, out: string, maxChildren?: number): number;
 export function tokenBenchmark(root: string): string;

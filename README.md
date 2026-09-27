@@ -76,10 +76,11 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 - **Optional LLM enrichment, measured and cached** — Claude, any OpenAI-compatible endpoint, or Gemini; vision included for images; per-run with `--backend`/`--model` or env vars. Thematic community naming (`run --label-communities`, one call per *changed* community) and a `--deep` concept-linking tier (one call per changed file) are content-hash cached, so an unchanged tree re-runs for free. Every response's usage block is counted — the run summary prints API calls and input/output tokens, and `ASTRIA_LLM_BUDGET` caps the spend ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
 - **Cross-repo global graph** — merge many repos into one queryable store at `~/.astria/global.db` ([global graph guide](https://nodesify.github.io/astria/docs/guides/global-graph))
 - **The graph compounds with use** — repeated queries become `learned` edges; curated Q/A memory via `save-result`/`reflect` ([memory and learning](https://nodesify.github.io/astria/docs/guides/memory-and-learning))
-- **Interactive HTML viewer + Neo4j export** — physics-free large-graph mode beyond the 5,000-node safety cap, idempotent Cypher script ([wiki and exports](https://nodesify.github.io/astria/docs/guides/wiki-and-exports))
+- **Interactive HTML viewer, SVG, and live Neo4j** — physics-free large-graph HTML mode, deterministic community-arc SVG for Notion/GitHub embedding, an idempotent Cypher script, or a direct Bolt push into a running Neo4j — hand-rolled protocol client, zero driver dependencies ([wiki and exports](https://nodesify.github.io/astria/docs/guides/wiki-and-exports))
+- **The analyst built in** — `astria health` scores unreachable-symbol candidates, circular file dependencies, hub concentration, and staleness into one 0-100 report (also an MCP tool); `astria risk` maps the current git diff onto the graph and renders the blast radius as a PR-ready risk report ([guides](https://nodesify.github.io/astria/docs/guides/mcp-and-agents))
 - **Honest token math** — every run prints measured corpus-vs-query tokens: 110× on this repo. The printed estimate names its heuristic; the published snapshot also counts both tools with one shared tokenizer so absolute numbers are directly comparable ([benchmarks](https://nodesify.github.io/astria/docs/explanation/benchmarks))
 - **Measured quality, not just cost** — a golden-QA harness scores recall@k / MRR of real query answers, a blind LLM judge grades astria against the original on the same corpus, and a LoCoMo adapter runs the memory-retrieval protocol the original publishes ([benchmarks](https://nodesify.github.io/astria/docs/explanation/benchmarks), [harness](scripts/bench/))
-- **9 MCP tools** — query_graph, repo_map, explain, get_neighbors, shortest_path, affected, god_nodes, list_communities, graph_stats ([MCP tools reference](https://nodesify.github.io/astria/docs/reference/mcp-tools))
+- **10 MCP tools** — query_graph, repo_map, explain, get_neighbors, shortest_path, affected, god_nodes, list_communities, graph_stats, health ([MCP tools reference](https://nodesify.github.io/astria/docs/reference/mcp-tools))
 
 - **Agent skill on skills.sh** - `npx skills add Nodesify/astria` installs the graph-first skill on its own; it detects the CLI and guides install on first use ([skill file](https://github.com/Nodesify/astria/blob/main/skills/astria/SKILL.md))
 
@@ -104,7 +105,7 @@ crates/
   astria-core/      Types, error, SQLite schema + migrations, path validation, sensitive-path denylist
   astria-paths/     Path normalization, .astria directory management
   astria-detect/    File discovery, classification, incremental change detection
-  astria-extract/   Tree-sitter AST extraction (21 languages)
+  astria-extract/   Tree-sitter AST extraction (25 languages)
   astria-embed/     Local embeddings (fastembed/ONNX) — similar_to edges, semantic query recall
   astria-build/     Merge extractions into SQLite graph, entity dedup (MinHash + Jaro-Winkler)
   astria-cluster/   Deterministic label propagation community detection
@@ -147,7 +148,7 @@ Rust crates have unit tests using in-memory SQLite (`open_db_in_memory()`) and `
 
 ## Language support
 
-Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, CSS — via tree-sitter grammars.
+Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, CSS, Terraform/HCL, PowerShell, Verilog/SystemVerilog, Metal — via tree-sitter grammars.
 
 Each language has its own config module in `crates/astria-extract/src/langs/`. Adding a new language means adding a new file there and registering it in `langs/mod.rs` — [language support docs](https://nodesify.github.io/astria/docs/reference/language-support).
 
