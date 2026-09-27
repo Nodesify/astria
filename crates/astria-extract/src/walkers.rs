@@ -471,8 +471,13 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
             // the impl type instead of colliding at file level when several impls
             // define the same method name.
             let type_field_node = node.child_by_field_name("type");
+            let positional = state
+                .cfg
+                .name_child
+                .and_then(|i| node.child(i));
             let name_node = node
                 .child_by_field_name(state.cfg.name_field)
+                .or(positional)
                 .or(type_field_node);
             let name_node = match name_node {
                 Some(n) => Some(n),

@@ -9,6 +9,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &[],        // CSS has no functions in the traditional sense
         import_types: &["import_statement"], // @import
         call_type: "call_expression", // CSS functions like calc(), var()
+        name_child: None,
         name_field: "name",         // not heavily used for CSS but consistent with API
         body_field: Some("block"),
         body_fallback_types: &[],

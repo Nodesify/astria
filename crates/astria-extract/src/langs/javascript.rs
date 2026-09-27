@@ -13,6 +13,7 @@ pub fn config() -> &'static LanguageConfig {
         ],
         import_types: &["import_statement", "import_declaration"],
         call_type: "call_expression",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["statement_block"],

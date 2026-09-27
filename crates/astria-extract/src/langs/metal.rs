@@ -5,6 +5,7 @@ use super::config::LanguageConfig;
 pub fn config() -> &'static LanguageConfig {
     static CONFIG: LanguageConfig = LanguageConfig {
         name: "Metal",
+        name_child: None,
         extensions: &[".metal"],
         language_fn: || tree_sitter_cpp::LANGUAGE.into(),
         class_types: &["struct_specifier", "class_specifier"],

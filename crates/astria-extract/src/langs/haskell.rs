@@ -9,6 +9,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &["decl", "signature"],
         import_types: &["import"],
         call_type: "apply",
+        name_child: None,
         name_field: "name",
         body_field: None,
         body_fallback_types: &["exp", "bind", "guard"], // Haskell bodies are expressions

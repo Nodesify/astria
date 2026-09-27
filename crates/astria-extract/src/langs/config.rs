@@ -4,6 +4,10 @@ pub struct LanguageConfig {
     pub name: &'static str,
     pub extensions: &'static [&'static str],
     pub language_fn: fn() -> Language,
+    /// Positional name fallback for grammars without named fields (HCL):
+    /// the name is the nth child of the declaration node. Takes precedence
+    /// over `name_field` when `name_field` is empty.
+    pub name_child: Option<usize>,
     pub class_types: &'static [&'static str],
     pub function_types: &'static [&'static str],
     pub import_types: &'static [&'static str],

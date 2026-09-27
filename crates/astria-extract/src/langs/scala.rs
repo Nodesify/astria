@@ -14,6 +14,7 @@ pub fn config() -> &'static LanguageConfig {
         function_types: &["function_definition", "function_declaration"],
         import_types: &["import_declaration"],
         call_type: "call_expression",
+        name_child: None,
         name_field: "name",
         body_field: Some("body"),
         body_fallback_types: &["indented_block"],
