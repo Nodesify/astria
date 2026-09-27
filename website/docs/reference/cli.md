@@ -47,6 +47,14 @@ astria god-nodes [--graph .] [--json]           # Highest-degree hub nodes (MCP 
 astria communities [--graph .] [--json]         # Communities with labels, size, cohesion (MCP list_communities parity)
 astria neighbors <node> [--relation R] [--json] [--graph .]  # A node's neighbors, optionally one relation (MCP get_neighbors parity)
 astria status [--graph .] [--json]              # Graph freshness, staleness, and build provenance
+astria explain <node> [--graph .]              # Explain a node and its connections
+astria query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--graph .]  # BFS/DFS traversal
+astria path <A> <B> [--directed] [--detail high] [--graph .]   # Shortest path between two concepts
+astria affected <node> [--depth 2] [--relation R] [--graph .]  # Blast radius - what breaks if you change this node
+astria map [--budget 2000] [--detail high] [--graph .]  # PageRank-ranked repo map with top symbols
+astria stats [--graph .]                       # Node/edge/community counts
+astria status [--graph .]                      # Graph freshness and status
+>>>>>>> origin/main
 astria callflow <node> [--depth 2] [--direction out|in|both] [--out flow.md] [--graph .]  # Mermaid call graph
 astria history [--limit 20] [--graph .]        # Show recent query history
 ```

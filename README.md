@@ -90,13 +90,14 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 
 ## What's new in 1.0.6
 
-- **Chunked document retrieval** — document bodies become searchable section chunks with overlap tails and cited line spans; chunks rank under code on code-majority graphs and carry doc-only corpora on their own. `--no-embed` opts out of query-time embedding seeds. Measured on LoCoMo: recall@1 16% → 54%, recall@10 53% → 81%, MRR 0.308 → 0.637.
+- **Chunked document retrieval** — document bodies become searchable section chunks with overlap tails and cited line spans; chunks rank under code on code-majority graphs and carry doc-only corpora on their own. `--no-embed` opts out of query-time embedding seeds. Measured on LoCoMo: recall@10 0.2% → 84.5%, recall@1 63.5%, MRR 0.717.
 - **MCP parity on the CLI** — `god-nodes`, `communities`, and `neighbors` expose the hub, community, and neighbor answers previously reachable only through the MCP tools.
 - **`--json` everywhere it counts** — the query family (`query`, `map`, `explain`, `path`, `affected`, `stats`, `status`) emits machine-readable results with counts, cursors, and hit lists.
 - **True freshness probe** — builds stamp the CLI and extraction-rules versions into the graph; `astria status` reports who built it and flags a graph that predates the installed binary's extraction rules.
 
 See the [1.0.6 changelog](CHANGELOG.md) for behavior, measurements, and limitations.
 
+>>>>>>> origin/main
 ## What's new in 1.0.5
 
 - **More complete code retrieval** — preserve scoped definitions, extract assigned JavaScript/TypeScript functions, prefer concrete Python implementations over overloads, and rank complete identifiers. Queries now enforce exact text budgets; restart pagination after upgrading.
