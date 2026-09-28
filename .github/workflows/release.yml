@@ -33,6 +33,12 @@ jobs:
             echo "::error::Tag ${GITHUB_REF_NAME} does not match packages/astria-cli/package.json version ${pkg_version}"
             exit 1
           fi
+      - name: Verify changelog section exists for the tag
+        # Same fail-fast rationale: a tag whose [Unreleased] entries were
+        # never promoted to a dated "## [X.Y.Z]" heading would publish a
+        # release without curated notes. The publish job feeds the extracted
+        # section to the GitHub Release body.
+        run: node scripts/extract-changelog.mjs "${GITHUB_REF_NAME#v}" --check
 
   build:
     runs-on: ${{ matrix.os }}
@@ -217,7 +223,13 @@ jobs:
           ls -t /home/runner/.npm/_logs/ 2>/dev/null | head -3
           L=$(ls -t /home/runner/.npm/_logs/* 2>/dev/null | head -1)
           [ -n "$L" ] && { echo "--- latest npm debug log ($L):"; cat "$L"; } || echo "none"
+      - name: Extract release notes from CHANGELOG.md
+        # The tag's "## [X.Y.Z]" section becomes the release body; relative
+        # links are rewritten to the tag by the script. generate_release_notes
+        # appends the PR list and compare link below the curated notes.
+        run: node scripts/extract-changelog.mjs "${GITHUB_REF_NAME#v}" > release-notes.md
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          body_path: release-notes.md
           generate_release_notes: true

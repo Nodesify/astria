@@ -12,7 +12,7 @@
 [![Node](https://img.shields.io/badge/node-22-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Nodesify/astria)
 
-[Docs](https://nodesify.github.io/astria/) | [Getting started](https://nodesify.github.io/astria/docs/getting-started) | [CLI Reference](https://nodesify.github.io/astria/docs/reference/cli) | [Architecture](ARCHITECTURE.md) | [Worked examples](worked/)
+[Docs](https://nodesify.github.io/astria/) | [Getting started](https://nodesify.github.io/astria/docs/getting-started) | [CLI Reference](https://nodesify.github.io/astria/docs/reference/cli) | [Architecture](ARCHITECTURE.md) | [Worked examples](worked/) | [Changelog](CHANGELOG.md) | [Release notes](https://nodesify.github.io/astria/blog)
 
 </div>
 
@@ -87,36 +87,6 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 - **10 MCP tools** — query_graph, repo_map, explain, get_neighbors, shortest_path, affected, god_nodes, list_communities, graph_stats, health ([MCP tools reference](https://nodesify.github.io/astria/docs/reference/mcp-tools))
 
 - **Agent skill on skills.sh** - `npx skills add Nodesify/astria` installs the graph-first skill on its own; it detects the CLI and guides install on first use ([skill file](https://github.com/Nodesify/astria/blob/main/skills/astria/SKILL.md))
-
-## What's new in 1.0.6
-
-- **Chunked document retrieval** — document bodies become searchable section chunks with overlap tails and cited line spans; chunks rank under code on code-majority graphs and carry doc-only corpora on their own. `--no-embed` opts out of query-time embedding seeds. Measured on LoCoMo: recall@10 0.2% → 84.5%, recall@1 63.5%, MRR 0.717.
-- **MCP parity on the CLI** — `god-nodes`, `communities`, and `neighbors` expose the hub, community, and neighbor answers previously reachable only through the MCP tools.
-- **`--json` everywhere it counts** — the query family (`query`, `map`, `explain`, `path`, `affected`, `stats`, `status`) emits machine-readable results with counts, cursors, and hit lists.
-- **True freshness probe** — builds stamp the CLI and extraction-rules versions into the graph; `astria status` reports who built it and flags a graph that predates the installed binary's extraction rules.
-
-See the [1.0.6 changelog](CHANGELOG.md) for behavior, measurements, and limitations.
-
-## What's new in 1.0.5
-
-- **More complete code retrieval** — preserve scoped definitions, extract assigned JavaScript/TypeScript functions, prefer concrete Python implementations over overloads, and rank complete identifiers. Queries now enforce exact text budgets; restart pagination after upgrading.
-- **More ways to inspect changes** — `callflow` renders a Mermaid call graph, `health` scores code-health heuristics, and `risk` maps the current git diff onto impacted graph nodes.
-- **More export targets** — static SVG and FalkorDB openCypher join JSON, GraphML, HTML, and Neo4j.
-- **Broader language support** — Terraform/HCL, PowerShell, Verilog/SystemVerilog, and Metal bring the registry to 25 configurations.
-
-See the [1.0.5 changelog](CHANGELOG.md) and [retrieval validation](website/docs/explanation/retrieval-validation.md) for behavior, measurements, and limitations.
-
-### The 1.0 rebrand
-
-The rebrand release — everything is now astria: the binary, the npm package, the `.astria/` graph directory, `ASTRIA_*` env vars, and the installed skill files. `astria migrate` moves pre-1.0 layouts.
-
-- **Hypergraph, deterministically** — n-ary `hyperedges` (community `participate_in` groups, `shares_reference` literal groups) produced without an LLM; consumed by graph.json, report, wiki, HTML hulls, and `explain`. Graphify's hyperedges are LLM-produced; ours are local and reproducible.
-- **Cross-repo global graph** — `~/.astria/global.db`: `global add/remove/list/path`, repo-tag prefixed merging that unifies external symbols across repos, `same_type_as` type edges, cross-repo call resolution (fail closed on ambiguity), `run --global --as <tag>`, and `query/explain/path --graph` against the merged store.
-- **Graph health + feedback loop** — `diagnose` (read-only health report, `--json`), `save-result`/`reflect` curated memory (`.astria/memory/` → graph nodes → `LESSONS.md`) alongside automatic learned edges, build-time validation, JSONL query log (`ASTRIA_QUERY_LOG`), and always-on instruction blocks in `AGENTS.md`/`CLAUDE.md`.
-- **Ingest breadth (offline-first)** — Cargo workspace + path-dep topology (auto), `.mcp.json`/`mcp_servers.json`/`claude_desktop_config.json` (env names only, never values), `add --scip <index.json>`, `add --postgres <dsn>` (read-only introspection, requires `psql`), and transcript sidecars (`.astria/transcripts/*.txt|md`).
-- **SSRF-hardened URL ingestion** — `add <url>` validates every redirect hop (auto-follow is off), DNS-resolves each host and blocks loopback/private/CGNAT/link-local addresses (IPv4 and IPv6, incl. mapped forms), and slugifies downloaded filenames so a hostile URL segment cannot write outside `raw/`. The HTML export renders labels as text (no HTML interpolation), a plain-`http` LLM base URL with an API key warns, and CI audits npm dependencies alongside the existing Rust advisory check.
-
-Full release history: [release notes](https://nodesify.github.io/astria/blog).
 
 ## Architecture
 
