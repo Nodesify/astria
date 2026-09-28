@@ -177,6 +177,11 @@ pub fn export_tree(db: &Connection, out_path: &Path, max_children: usize) -> Res
     update_counts(&mut root);
 
     let data = serde_json::to_string(&root)?;
+    // Keep the embedded JSON from terminating the surrounding <script> block
+    // (\u003c is valid in both JSON and JS string literals).
+    let data = data
+        .replace("</script", "\\u003c/script")
+        .replace("<!--", "\\u003c!--");
     let html = render_html(&data, symbol_count);
     std::fs::write(out_path, html)?;
     Ok(symbol_count)
@@ -253,14 +258,30 @@ function nodeRow(n) {{
 }}
 
 function inspect(n) {{
-  let html = '<b>' + n.label + '</b><br><small>' + n.name + ' · ' + (n.file_type || '') + '</small>';
+  // Labels come from repo content: reach them only via textContent, never
+  // markup concatenation (same labels-as-text rule as the bubble viewer).
+  inspEl.replaceChildren();
+  const title = document.createElement('b');
+  title.textContent = n.label;
+  const sub = document.createElement('small');
+  sub.textContent = n.name + ' · ' + (n.file_type || '');
+  inspEl.append(title, document.createElement('br'), sub,
+      document.createElement('br'), document.createElement('br'));
   if (n.edges && n.edges.length) {{
-    html += '<br><br>Top connections:';
-    for (const [rel, target] of n.edges) html += '<div class="edge">--' + rel + '--&gt; ' + target + '</div>';
+    const head = document.createElement('div');
+    head.textContent = 'Top connections:';
+    inspEl.appendChild(head);
+    for (const [rel, target] of n.edges) {{
+      const row = document.createElement('div');
+      row.className = 'edge';
+      row.textContent = '--' + rel + '--> ' + target;
+      inspEl.appendChild(row);
+    }}
   }} else {{
-    html += '<br><br><small>(no edges)</small>';
+    const none = document.createElement('small');
+    none.textContent = '(no edges)';
+    inspEl.appendChild(none);
   }}
-  inspEl.innerHTML = html;
 }}
 
 const rootUl = document.createElement('ul');
@@ -343,5 +364,36 @@ mod tests {
         assert_eq!(count, 10);
         let html = std::fs::read_to_string(&out).unwrap();
         assert!(html.contains("(+7 more)"));
+    }
+
+    #[test]
+    fn escapes_script_breaking_sequences_in_data() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES
+              ('a', '</script><script>alert(1)</script>', 'html', 'a<!--b.html');
+        ",
+        )
+        .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("tree.html");
+        export_tree(&db, &out, 40).unwrap();
+
+        let html = std::fs::read_to_string(&out).unwrap();
+        assert!(html.contains(r#"\u003c/script"#));
+        assert!(html.contains(r#"\u003c!--"#));
+    }
+
+    #[test]
+    fn viewer_never_builds_markup_from_labels() {
+        // Labels come from repo content; the inspector must reach them via
+        // DOM textContent, never innerHTML (bubble-viewer safety property).
+        let html = render_html("{}", 0);
+        assert!(
+            !html.contains("innerHTML"),
+            "tree viewer must not concatenate data into markup via innerHTML"
+        );
     }
 }
