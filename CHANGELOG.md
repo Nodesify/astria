@@ -4,7 +4,7 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## [Unreleased]
+## [1.0.7] — 2026-09-28
 
 ### Jev judge layer — calibrated second opinion over any backend
 - New `--judge jev` flag (run/update) layers TypeSafe's Jev — a System One decision model that returns typed judgments with calibrated probabilities, not generated text — on top of the selected `--backend` (claude, openai-compatible, or gemini). The engine still generates every extraction; the judge re-judges it. `--backend jev` is not accepted and errors with a pointer to `--judge` (`ASTRIA_LLM_JUDGE=jev` selects it via env).
