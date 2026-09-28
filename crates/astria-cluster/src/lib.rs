@@ -671,9 +671,7 @@ mod tests {
         ").unwrap();
         let result = cluster(&db).unwrap();
         let community: HashMap<String, i64> = {
-            let mut stmt = db
-                .prepare("SELECT id, community FROM nodes")
-                .unwrap();
+            let mut stmt = db.prepare("SELECT id, community FROM nodes").unwrap();
             stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
                 .unwrap()
                 .filter_map(|r| r.ok())

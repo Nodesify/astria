@@ -84,7 +84,11 @@ pub(crate) fn extract_markdown_from_string(
             // guaranteed duplicate within the extraction.
             let slug = {
                 let s = make_target_id(&title);
-                if s.is_empty() { "section".to_string() } else { s }
+                if s.is_empty() {
+                    "section".to_string()
+                } else {
+                    s
+                }
             };
             let section_id = {
                 let base = make_node_id(&[&fid, &slug]);
@@ -610,7 +614,11 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
             // Same empty-slug guard as the markdown extractor.
             let slug = {
                 let s = make_target_id(&title);
-                if s.is_empty() { "section".to_string() } else { s }
+                if s.is_empty() {
+                    "section".to_string()
+                } else {
+                    s
+                }
             };
             let section_id = {
                 let base = make_node_id(&[&fid, &slug]);
@@ -864,7 +872,9 @@ mod tests {
         // duplicate node id in one extraction.
         let dir = tempfile::tempdir().unwrap();
         let md = dir.path().join("plugins.md");
-        std::fs::write(&md, "# Plugins
+        std::fs::write(
+            &md,
+            "# Plugins
 
 body one
 
@@ -875,16 +885,24 @@ punct body
 # ...
 
 more punct
-").unwrap();
+",
+        )
+        .unwrap();
         let ex = extract_markdown(md.as_path(), md.as_path()).unwrap();
         let ids: Vec<_> = ex.nodes.iter().map(|n| n.id.clone()).collect();
         let mut sorted = ids.clone();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(ids.len(), sorted.len(), "duplicate ids in md extraction: {ids:?}");
+        assert_eq!(
+            ids.len(),
+            sorted.len(),
+            "duplicate ids in md extraction: {ids:?}"
+        );
 
         let rst = dir.path().join("guide.rst");
-        std::fs::write(&rst, "Guide
+        std::fs::write(
+            &rst,
+            "Guide
 =====
 
 intro
@@ -893,13 +911,19 @@ intro
 ~~~~~
 
 punct body
-").unwrap();
+",
+        )
+        .unwrap();
         let ex2 = extract_rst(rst.as_path(), rst.as_path()).unwrap();
         let ids2: Vec<_> = ex2.nodes.iter().map(|n| n.id.clone()).collect();
         let mut s2 = ids2.clone();
         s2.sort();
         s2.dedup();
-        assert_eq!(ids2.len(), s2.len(), "duplicate ids in rst extraction: {ids2:?}");
+        assert_eq!(
+            ids2.len(),
+            s2.len(),
+            "duplicate ids in rst extraction: {ids2:?}"
+        );
     }
 
     #[test]

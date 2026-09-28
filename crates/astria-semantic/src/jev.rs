@@ -231,13 +231,8 @@ impl JevClient {
             .iter()
             .map(|(k, v)| (*k, v.as_str()))
             .collect();
-        let response = crate::post_json(
-            &self.agent,
-            &self.config.endpoint,
-            &headers,
-            &body,
-            "Jev",
-        )?;
+        let response =
+            crate::post_json(&self.agent, &self.config.endpoint, &headers, &body, "Jev")?;
         let json: Value = serde_json::from_str(&response)
             .map_err(|e| AstriaError::Graph(format!("Failed to parse Jev response: {e}")))?;
         crate::enrichment::record_usage(&json);
@@ -281,9 +276,7 @@ impl JevClient {
         let mut keep: Vec<bool> = vec![true; files.len()];
         let mut chunk: Vec<(usize, &PathBuf)> = Vec::new();
         for (i, file) in files.iter().enumerate() {
-            let size = std::fs::metadata(file)
-                .map(|m| m.len())
-                .unwrap_or(u64::MAX);
+            let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(u64::MAX);
             if size > config.gate_max_bytes {
                 continue;
             }
@@ -339,8 +332,7 @@ impl JevClient {
                 }),
             );
         }
-        let response = self
-            .judge(&json!({ "files": files }), &Value::Object(questions))?;
+        let response = self.judge(&json!({ "files": files }), &Value::Object(questions))?;
         let answers = response.get("answers").cloned().unwrap_or(Value::Null);
         let decisions = gate_keeps(&answers, chunk.len(), config.gate_drop_threshold);
         for (j, (i, _)) in chunk.iter().enumerate() {
@@ -372,7 +364,10 @@ impl JevClient {
                 }),
             );
         }
-        let response = self.judge(&json!({ "kind": "suggested-question ranking" }), &Value::Object(qs))?;
+        let response = self.judge(
+            &json!({ "kind": "suggested-question ranking" }),
+            &Value::Object(qs),
+        )?;
         let answers = response.get("answers").cloned().unwrap_or(Value::Null);
         let mut scores: Vec<f64> = vec![0.0; n];
         for (i, _) in questions.iter().take(MAX_RANK_QUESTIONS).enumerate() {
@@ -575,10 +570,12 @@ pub(crate) fn verify_extraction(
 /// without a judgment is kept.
 pub(crate) fn gate_keeps(answers: &Value, count: usize, drop_threshold: f64) -> Vec<bool> {
     (0..count)
-        .map(|j| match answers.get(&format!("g_{j}")).and_then(parse_keep_drop) {
-            Some((_, drop)) => drop <= drop_threshold,
-            None => true,
-        })
+        .map(
+            |j| match answers.get(&format!("g_{j}")).and_then(parse_keep_drop) {
+                Some((_, drop)) => drop <= drop_threshold,
+                None => true,
+            },
+        )
         .collect()
 }
 
@@ -678,7 +675,10 @@ mod tests {
             "e_1": {"choice": "keep", "probabilities": {"keep": 0.2, "drop": 0.8}},
         });
         let verified = verify_extraction(&extraction, &answers, 0.40);
-        assert_eq!(verified.nodes[0].node_type, "module", "valid choice applied");
+        assert_eq!(
+            verified.nodes[0].node_type, "module",
+            "valid choice applied"
+        );
         assert_eq!(
             verified.nodes[1].node_type, "entity",
             "non-allowlist choice keeps the sanitized engine value"
@@ -745,7 +745,10 @@ mod tests {
         let request = build_verify_request(&extraction, None, "markdown");
         assert!(request["state"].get("content").is_none());
         let node = &request["state"]["nodes"][0];
-        assert!(node["summary"].is_string(), "summaries ground type re-choice without content");
+        assert!(
+            node["summary"].is_string(),
+            "summaries ground type re-choice without content"
+        );
         // The content-bearing mode must not carry summaries: the file text
         // is the evidence and summaries would only add tokens.
         let with_content = build_verify_request(&extraction, Some("text"), "markdown");
@@ -856,10 +859,14 @@ mod tests {
         .unwrap();
         let empty = dir.path().join("empty.txt");
         std::fs::write(&empty, "").unwrap();
-        let kept = client.gate_files(&[rich.clone(), empty.clone()], &config).unwrap();
+        let kept = client
+            .gate_files(&[rich.clone(), empty.clone()], &config)
+            .unwrap();
         eprintln!(
             "gate: kept {:?} (empty.txt gated out: {})",
-            kept.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect::<Vec<_>>(),
+            kept.iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+                .collect::<Vec<_>>(),
             !kept.iter().any(|p| p == &empty),
         );
         assert!(kept.len() <= 2, "gate never invents files");
