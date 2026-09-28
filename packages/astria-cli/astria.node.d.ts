@@ -6,6 +6,7 @@ export interface PipelineResultJs {
   communities: number;
   report: string;
   semanticCached: number;
+  semanticGated: number;
   llmInputTokens: number;
   llmOutputTokens: number;
   llmApiCalls: number;

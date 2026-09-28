@@ -13,6 +13,12 @@ use astria_core::Result;
 use base64::Engine as _;
 
 pub mod enrichment;
+pub mod jev;
+
+/// Env-mutating tests (backend resolution, config parsing) must not run
+/// concurrently — shared by every test module in this crate.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Maximum image size sent to vision endpoints (5 MB, matching upstream).
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
@@ -46,6 +52,11 @@ pub struct SemanticEdge {
     pub source: String,
     pub target: String,
     pub relation: String,
+    /// Calibrated existence confidence (0..=1) from the Jev verification
+    /// pass. Absent for engine-only extractions; persisted through the
+    /// merge path into `edges.confidence_score`.
+    #[serde(default)]
+    pub confidence_score: Option<f64>,
 }
 
 /// The result of semantic extraction on a single piece of content.
@@ -98,6 +109,20 @@ pub trait SemanticBackend {
             "this backend does not support auxiliary completions".into(),
         ))
     }
+
+    /// Optional batch gate: return the subset of `files` worth enriching.
+    /// The default keeps everything; decision backends (Jev) may drop files
+    /// they judge trivial so no engine call is ever spent on them.
+    fn gate_files(&self, files: &[PathBuf]) -> Vec<PathBuf> {
+        files.to_vec()
+    }
+
+    /// Optional suggested-question ranking: a permutation of
+    /// `0..questions.len()` in preferred (most useful first) order. The
+    /// default keeps the generated order.
+    fn rank_questions(&self, questions: &[String]) -> Vec<usize> {
+        (0..questions.len()).collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -147,9 +172,9 @@ fn parse_extraction_text(text: &str) -> SemanticExtraction {
 }
 
 /// node_type values the schema allows; anything else is clamped.
-const ALLOWED_NODE_TYPES: &[&str] = &["concept", "entity", "pattern", "module", "function"];
+pub(crate) const ALLOWED_NODE_TYPES: &[&str] = &["concept", "entity", "pattern", "module", "function"];
 /// relation values the schema allows; anything else is clamped.
-const ALLOWED_RELATIONS: &[&str] = &["depends_on", "implements", "relates_to", "contains", "uses"];
+pub(crate) const ALLOWED_RELATIONS: &[&str] = &["depends_on", "implements", "relates_to", "contains", "uses"];
 
 /// Enforce output discipline on model responses: drop empty/duplicate
 /// nodes, clamp node_type/relation to the schema enums, and drop edges
@@ -248,7 +273,7 @@ where
 
 /// POST with exponential backoff on 429/5xx (honoring Retry-After when the
 /// server sends one), shared by all backends.
-fn post_json(
+pub(crate) fn post_json(
     agent: &ureq::Agent,
     url: &str,
     headers: &[(&str, &str)],
@@ -300,7 +325,7 @@ fn post_json(
     Err(AstriaError::Graph(last_err.unwrap()))
 }
 
-fn build_agent() -> ureq::Agent {
+pub(crate) fn build_agent() -> ureq::Agent {
     ureq::config::Config::builder()
         .timeout_global(Some(Duration::from_secs(60)))
         .build()
@@ -824,6 +849,145 @@ impl SemanticBackend for GeminiBackend {
 }
 
 // ---------------------------------------------------------------------------
+// JevBackend (TypeSafe System One decision layer over a completion engine)
+// ---------------------------------------------------------------------------
+
+/// A decision layer that wraps a completion engine. Jev cannot generate the
+/// node/edge JSON itself — it returns typed judgments with calibrated
+/// probabilities — so this backend first runs the configured engine backend
+/// (Claude / OpenAI-compatible / Gemini), then re-judges the extraction:
+/// node types and relations are re-chosen from the schema allowlists, every
+/// edge gets a keep/drop existence verdict, and the winning probability
+/// becomes the edge's `confidence_score`. The engine also handles the
+/// auxiliary `complete()` passes unchanged, and the Jev batch gate may skip
+/// trivial files before their first extraction.
+pub struct JevBackend {
+    engine: Box<dyn SemanticBackend>,
+    client: jev::JevClient,
+    config: jev::JevConfig,
+}
+
+impl JevBackend {
+    /// - `ASTRIA_LLM_JEV_API_KEY` (or `TYPESAFE_API_KEY`) — required.
+    /// - `ASTRIA_LLM_JEV_MODEL` — optional, defaults to `jev-latest`.
+    /// - `ASTRIA_LLM_JEV_ENGINE` — the completion engine: `claude`,
+    ///   `openai` (any OpenAI-compatible endpoint, default), or `gemini`;
+    ///   configured by the usual per-backend env vars.
+    /// - `ASTRIA_LLM_JEV_VERIFY` / `ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY` —
+    ///   verification pass controls (see `jev::JevConfig`).
+    /// - `ASTRIA_LLM_JEV_GATE` / `ASTRIA_LLM_JEV_GATE_*` — gate controls.
+    pub fn from_env() -> Result<Self> {
+        let config = jev::JevConfig::from_env()?;
+        let engine_name =
+            astria_core::env_var("LLM_JEV_ENGINE").unwrap_or_else(|| "openai".into());
+        let engine: Box<dyn SemanticBackend> = match engine_name.trim().to_lowercase().as_str() {
+            "claude" | "anthropic" => Box::new(ClaudeBackend::from_env()?),
+            "gemini" | "google" => Box::new(GeminiBackend::from_env()?),
+            "openai" | "openai-compatible" | "openai_compatible" => Box::new(
+                OpenAiBackend::from_env().map_err(|e| {
+                    AstriaError::Graph(format!(
+                        "{e} (ASTRIA_LLM_JEV_ENGINE selects the extraction engine behind Jev; \
+                         the default 'openai' needs ASTRIA_LLM_API_KEY or OPENAI_API_KEY)"
+                    ))
+                })?,
+            ),
+            other => {
+                return Err(AstriaError::Graph(format!(
+                    "unknown ASTRIA_LLM_JEV_ENGINE '{other}' (expected claude, openai, or gemini)"
+                )))
+            }
+        };
+        Ok(Self::new(engine, config))
+    }
+
+    pub fn new(engine: Box<dyn SemanticBackend>, config: jev::JevConfig) -> Self {
+        Self {
+            client: jev::JevClient::new(config.clone()),
+            engine,
+            config,
+        }
+    }
+}
+
+impl SemanticBackend for JevBackend {
+    fn cache_identity(&self) -> String {
+        format!("jev:{}:{}", self.engine.cache_identity(), self.config.identity())
+    }
+
+    fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
+        let extraction = self.engine.extract_semantic(content, file_type)?;
+        if !self.config.verify_enabled || (extraction.nodes.is_empty() && extraction.edges.is_empty())
+        {
+            return Ok(extraction);
+        }
+        match self.client.verify(&extraction, content, file_type) {
+            Ok(verified) => Ok(verified),
+            Err(e) => {
+                // The engine already produced an extraction; a failed
+                // verification must not lose it.
+                eprintln!(
+                    "warning: Jev verification unavailable ({e}); keeping the engine extraction unverified"
+                );
+                Ok(extraction)
+            }
+        }
+    }
+
+    fn extract_semantic_from_image(
+        &self,
+        image_bytes: &[u8],
+        media_type: &str,
+    ) -> Result<SemanticExtraction> {
+        let extraction = self.engine.extract_semantic_from_image(image_bytes, media_type)?;
+        if !self.config.verify_enabled || (extraction.nodes.is_empty() && extraction.edges.is_empty())
+        {
+            return Ok(extraction);
+        }
+        match self.client.verify(&extraction, "", media_type) {
+            Ok(verified) => Ok(verified),
+            Err(e) => {
+                eprintln!(
+                    "warning: Jev verification unavailable ({e}); keeping the engine extraction unverified"
+                );
+                Ok(extraction)
+            }
+        }
+    }
+
+    fn complete(&self, system: &str, user: &str) -> Result<String> {
+        self.engine.complete(system, user)
+    }
+
+    fn gate_files(&self, files: &[PathBuf]) -> Vec<PathBuf> {
+        if !self.config.gate_enabled {
+            return files.to_vec();
+        }
+        match self.client.gate_files(files, &self.config) {
+            Ok(kept) => kept,
+            Err(e) => {
+                // The gate may only save calls, never lose facts.
+                eprintln!(
+                    "warning: Jev gate unavailable ({e}); enriching all candidate files"
+                );
+                files.to_vec()
+            }
+        }
+    }
+
+    fn rank_questions(&self, questions: &[String]) -> Vec<usize> {
+        match self.client.rank_questions(questions) {
+            Ok(permutation) => permutation,
+            Err(e) => {
+                eprintln!(
+                    "warning: Jev question ranking unavailable ({e}); keeping the generated order"
+                );
+                (0..questions.len()).collect()
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Backend resolution
 // ---------------------------------------------------------------------------
 
@@ -840,14 +1004,15 @@ pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
             Ok(Box::new(OpenAiBackend::from_env()?))
         }
         "gemini" | "google" => Ok(Box::new(GeminiBackend::from_env()?)),
+        "jev" | "typesafe" => Ok(Box::new(JevBackend::from_env()?)),
         "" | "none" => {
             Err(AstriaError::Graph(
-                "semantic enrichment is disabled; select --backend claude|openai|gemini or ASTRIA_LLM_BACKEND explicitly".into(),
+                "semantic enrichment is disabled; select --backend claude|openai|gemini|jev or ASTRIA_LLM_BACKEND explicitly".into(),
             ))
         }
         other => {
             Err(AstriaError::Graph(format!(
-                "unknown ASTRIA_LLM_BACKEND '{other}' (expected claude, openai, or gemini)"
+                "unknown ASTRIA_LLM_BACKEND '{other}' (expected claude, openai, gemini, or jev)"
             )))
         }
     }
@@ -1186,9 +1351,6 @@ mod tests {
 
     // -- Resolution --
 
-    /// Env-mutating tests must not run concurrently.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn backend_resolution_unknown_name_errors() {
         let _guard = ENV_LOCK.lock().unwrap();
@@ -1238,6 +1400,69 @@ mod tests {
         assert_eq!(astria_core::env_var("LLM_MODEL"), None);
     }
 
+    // -- Jev (decision layer) --
+
+    #[test]
+    fn backend_resolution_jev_with_keys() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "jev");
+        std::env::set_var("TYPESAFE_API_KEY", "k");
+        std::env::set_var("OPENAI_API_KEY", "k");
+        assert!(backend_from_env().is_ok());
+        std::env::remove_var("ASTRIA_LLM_BACKEND");
+        std::env::remove_var("TYPESAFE_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn backend_resolution_jev_unknown_engine_errors() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "jev");
+        std::env::set_var("TYPESAFE_API_KEY", "k");
+        std::env::set_var("ASTRIA_LLM_JEV_ENGINE", "llama");
+        let err = backend_from_env()
+            .err()
+            .expect("unknown engine must error");
+        assert!(err.to_string().contains("ASTRIA_LLM_JEV_ENGINE"));
+        std::env::remove_var("ASTRIA_LLM_BACKEND");
+        std::env::remove_var("TYPESAFE_API_KEY");
+        std::env::remove_var("ASTRIA_LLM_JEV_ENGINE");
+    }
+
+    #[test]
+    fn jev_backend_cache_identity_includes_engine_and_config() {
+        let config = jev::JevConfig {
+            api_key: "k".into(),
+            model: "jev-1.13.0".into(),
+            endpoint: "https://api.typesafe.ai/v1/systemone".into(),
+            verify_enabled: true,
+            min_edge_probability: 0.4,
+            gate_enabled: true,
+            gate_max_bytes: 1024,
+            gate_drop_threshold: 0.4,
+            gate_batch: 50,
+        };
+        let identity = JevBackend::new(Box::new(NoopBackend), config.clone()).cache_identity();
+        assert!(identity.contains("jev:"), "engine identity included");
+        assert!(identity.contains("NoopBackend"));
+        assert!(identity.contains("model=jev-1.13.0"));
+        assert!(identity.contains("gate_bytes=1024"));
+        let mut toggled = config.clone();
+        toggled.verify_enabled = false;
+        let identity2 =
+            JevBackend::new(Box::new(NoopBackend), toggled).cache_identity();
+        assert_ne!(identity, identity2, "toggling verify invalidates the cache");
+    }
+
+    #[test]
+    fn default_gate_and_rank_keep_everything() {
+        let backend = NoopBackend;
+        let files = vec![PathBuf::from("a.rs"), PathBuf::from("b.py")];
+        assert_eq!(backend.gate_files(&files), files);
+        let questions = vec!["q1".to_string(), "q2".to_string()];
+        assert_eq!(backend.rank_questions(&questions), vec![0, 1]);
+    }
+
     // -- Parsing --
 
     #[test]
@@ -1284,16 +1509,19 @@ mod tests {
                     source: "a".into(),
                     target: "ghost".into(),
                     relation: "uses".into(),
+                    confidence_score: None,
                 },
                 SemanticEdge {
                     source: "a".into(),
                     target: "b".into(),
                     relation: "forks".into(),
+                    confidence_score: None,
                 },
                 SemanticEdge {
                     source: "a".into(),
                     target: "a".into(),
                     relation: "uses".into(),
+                    confidence_score: None,
                 },
             ],
         };
@@ -1357,6 +1585,7 @@ mod tests {
                 source: "b".into(),
                 target: "a".into(),
                 relation: "uses".into(),
+                confidence_score: None,
             }],
         };
         let merged = sanitize_extraction(merge_extractions(vec![part1, part2]));
@@ -1449,6 +1678,7 @@ mod tests {
                 source: "graph_algo".into(),
                 target: "bfs".into(),
                 relation: "contains".into(),
+                confidence_score: None,
             }],
         };
         let json = serde_json::to_string(&ext).unwrap();

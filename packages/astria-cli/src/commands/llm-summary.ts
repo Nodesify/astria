@@ -3,6 +3,7 @@
 /// opt-in enrichment stages. Printed only when there is something to say.
 interface PipelineResultSummary {
   semanticCached: number;
+  semanticGated: number;
   llmInputTokens: number;
   llmOutputTokens: number;
   llmApiCalls: number;
@@ -13,10 +14,11 @@ interface PipelineResultSummary {
 }
 
 export function printLlmSummary(result: PipelineResultSummary): void {
-  if (result.llmApiCalls > 0) {
+  if (result.llmApiCalls > 0 || result.semanticGated > 0) {
     const cached = result.semanticCached > 0 ? `, ${result.semanticCached} files from cache` : '';
+    const gated = result.semanticGated > 0 ? `, ${result.semanticGated} files gated by Jev` : '';
     console.log(
-      `LLM usage: ${result.llmApiCalls} API calls, ${result.llmInputTokens} in / ${result.llmOutputTokens} out tokens${cached}`,
+      `LLM usage: ${result.llmApiCalls} API calls, ${result.llmInputTokens} in / ${result.llmOutputTokens} out tokens${cached}${gated}`,
     );
   }
   if (result.communitiesLabeled >= 0) {
