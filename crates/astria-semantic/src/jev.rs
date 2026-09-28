@@ -223,7 +223,7 @@ impl JevClient {
             "state": state,
             "questions": questions,
         }))?;
-        let owned_headers = vec![
+        let owned_headers = [
             ("Content-Type", "application/json".to_string()),
             ("Authorization", format!("Bearer {}", self.config.api_key)),
         ];
@@ -299,7 +299,7 @@ impl JevClient {
 
     fn gate_chunk(
         &self,
-        keep: &mut Vec<bool>,
+        keep: &mut [bool],
         chunk: &[(usize, &PathBuf)],
         config: &JevConfig,
     ) -> Result<()> {
@@ -371,7 +371,7 @@ impl JevClient {
         let answers = response.get("answers").cloned().unwrap_or(Value::Null);
         let mut scores: Vec<f64> = vec![0.0; n];
         for (i, _) in questions.iter().take(MAX_RANK_QUESTIONS).enumerate() {
-            if let Some((keep, _)) = answers.get(&format!("q_{i}")).and_then(parse_keep_drop) {
+            if let Some((keep, _)) = answers.get(format!("q_{i}")).and_then(parse_keep_drop) {
                 scores[i] = keep;
             }
         }
@@ -571,7 +571,7 @@ pub(crate) fn verify_extraction(
 pub(crate) fn gate_keeps(answers: &Value, count: usize, drop_threshold: f64) -> Vec<bool> {
     (0..count)
         .map(
-            |j| match answers.get(&format!("g_{j}")).and_then(parse_keep_drop) {
+            |j| match answers.get(format!("g_{j}")).and_then(parse_keep_drop) {
                 Some((_, drop)) => drop <= drop_threshold,
                 None => true,
             },
