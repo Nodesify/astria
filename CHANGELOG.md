@@ -30,6 +30,10 @@ this file is the per-version summary.
 - Blind answer-correctness judging finally ran (TypeSafe System One judge, `scripts/bench/quality/blind-judge.mjs`): both tools answered the same 35 rubric-grounded questions, graded without tool identity — astria 100% PASS, Graphify 77.1% PASS / 20% FAIL. First generated-answer-correctness measurement in the project.
 - Held-out evidence grew: `scripts/bench/paired/*.heldout-v2.jsonl` adds 14 separately authored, line-exact grounded cases (5 Click, 5 Express, 4 ripgrep); current runtime retrieves 5/5, 5/5, 2/4 files and 11/13 v2 definitions in the top five.
 
+### Jev decision backend for semantic enrichment
+- `--backend jev` wraps a completion engine (Claude / OpenAI-compatible / Gemini) with a TypeSafe System One decision layer: the engine still produces the node/edge JSON, and Jev returns typed judgments that improve it in three places — batched keep/drop file gating before a file's first extraction call (`ASTRIA_LLM_JEV_GATE`), per-file re-judging of relations and node types from the schema allowlists with the edge-keep probability stored as a calibrated `confidence_score` (`ASTRIA_LLM_JEV_VERIFY`, `ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY`), and suggested-question ranking in the report.
+- Credentials: `ASTRIA_LLM_JEV_API_KEY` (or `TYPESAFE_API_KEY`); model defaults to `jev-latest`. Gate/verify are on by default with bounded batch sizes, so spend stays counted under `ASTRIA_LLM_BUDGET`; the run summary reports gated-file counts.
+
 ## [1.0.6] — 2026-09-27
 
 ### Chunked document retrieval

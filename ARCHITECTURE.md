@@ -53,7 +53,7 @@ CLI and MCP queries use the same hybrid retrieval path. Each request loads a fre
 | `astria-query` | Query engine: BFS/DFS (optionally directed), shortest path, explain, token-based node scoring, fresh SQLite snapshot per request (no process-global graph cache). |
 | `astria-mcp` | MCP stdio server exposing the graph to AI agents. |
 | `astria-report` | Markdown generation for the final user-facing report. |
-| `astria-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. |
+| `astria-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. `--backend jev` wraps any of those engines with a TypeSafe System One decision layer: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking. |
 | `astria-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection. |
 | `astria-pdf` | PDF text extraction. |
 | `astria-napi` | The bridge between Rust and Node.js: pipeline orchestration (semantic enrichment, community labeling, deep linking), query surface, merge/diff, JSON/HTML/GraphML/SVG/tree/Cypher export, live Neo4j push, health and risk reports. |
@@ -101,7 +101,7 @@ Cross-layer (deterministic post-build passes; edges carry context `crosslayer` a
 Semantic & learned (opt-in):
 
 *   `similar_to`: Local embedding similarity (`--embed`); powers semantic query recall.
-*   `implements`, `depends_on`, `relates_to`, `uses`: LLM semantic extraction (validated against an allowlist).
+*   `implements`, `depends_on`, `relates_to`, `uses`: LLM semantic extraction (validated against an allowlist). Under `--backend jev`, the TypeSafe decision layer re-chooses these relations from the allowlist and stores a calibrated existence probability in `edges.confidence_score`.
 *   `learned`: Promoted from recurring query pairs (the memory feedback loop).
 
 Hyperedges (n-ary, stored in the `hyperedges` table):

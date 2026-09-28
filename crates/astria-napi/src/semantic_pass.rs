@@ -91,6 +91,8 @@ fn save_semantic_cache(
 pub(super) struct SemanticPassStats {
     pub enriched: usize,
     pub cached: usize,
+    /// Files the backend's gate dropped before extraction (not failures).
+    pub gated: usize,
 }
 
 pub(super) fn enrich_with_semantics(
@@ -105,9 +107,10 @@ pub(super) fn enrich_with_semantics(
         return Ok(SemanticPassStats {
             enriched: 0,
             cached: 0,
+            gated: 0,
         });
     }
-    backend_factory()?;
+    let backend = backend_factory()?;
 
     let mut file_to_idx: HashMap<PathBuf, usize> = HashMap::new();
     for (i, ext) in extractions.iter().enumerate() {
@@ -162,8 +165,14 @@ pub(super) fn enrich_with_semantics(
     }
     let cached = ready.len();
 
+    // The backend may gate candidate files (Jev's batch keep/drop
+    // judgments): files it drops never cost an engine call. The gate can
+    // only save calls — gated files simply keep their AST-only extraction.
+    let all_pending_paths: Vec<PathBuf> = pending.iter().map(|p| p.path.clone()).collect();
+    let pending_paths = backend.gate_files(&all_pending_paths);
+    let gated = all_pending_paths.len() - pending_paths.len();
+
     // Batch-extract cache misses in parallel.
-    let pending_paths: Vec<PathBuf> = pending.iter().map(|p| p.path.clone()).collect();
     let results = astria_semantic::extract_semantic_for_files_parallel(
         &pending_paths,
         backend_factory,
@@ -190,7 +199,7 @@ pub(super) fn enrich_with_semantics(
         })
         .collect();
 
-    let failed = pending.len() - extraction_by_path.len();
+    let failed = pending_paths.len() - extraction_by_path.len();
     if failed > 0 {
         return Err(astria_core::AstriaError::Graph(format!(
             "semantic extraction failed for {failed} file(s); graph and manifest were not advanced; retry to reuse successful cached results"
@@ -222,14 +231,15 @@ pub(super) fn enrich_with_semantics(
                 target: sem_edge.target.clone(),
                 relation: sem_edge.relation.clone(),
                 confidence: "SEMANTIC".to_string(),
-                confidence_score: None,
+                confidence_score: sem_edge.confidence_score,
                 source_file: path.clone(),
                 source_line: None,
             });
         }
     }
     Ok(SemanticPassStats {
-        enriched: pending.len(),
+        enriched: pending_paths.len(),
         cached,
+        gated,
     })
 }
