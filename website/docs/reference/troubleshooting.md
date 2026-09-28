@@ -27,6 +27,7 @@ Every `query` output reports when the graph was last built, so you can judge fre
 ```bash
 astria update <path>          # incremental — only changed files
 astria watch <path>           # or keep it fresh automatically
+astria hook install           # or refresh quietly after every commit (throttled)
 ```
 
 ## `export --format html` refuses on a large repo

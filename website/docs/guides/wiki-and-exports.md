@@ -84,6 +84,14 @@ labeled. No physics, no JS — byte-identical on every run, so it diffs
 cleanly and embeds anywhere (GitHub READMEs render it natively). Graphs
 beyond 2,000 nodes / 6,000 edges degrade gracefully with a `(capped)` note.
 
+## Symbol tree
+
+```bash
+astria tree --graph . --out tree.html
+```
+
+A self-contained collapsible HTML tree of every graph symbol, grouped by source-file path: directories show descendant counts and expand to their symbols (`--max-children` caps how many each directory lists, default 40), and hovering a symbol opens an inspector with its file type and top edges — each labeled with its relation (`calls`, `imports`, …). Like the bubble viewer it is one file with no external dependencies, so it opens anywhere and shares the same safety property: labels are rendered strictly as text.
+
 ## FalkorDB
 
 ```bash
