@@ -30,6 +30,22 @@ Keys and endpoint variables do not activate enrichment. Without explicit backend
 
 Keys are sent in request headers (the Gemini key never goes in the URL, where it would leak into logs and history). When `ASTRIA_LLM_BASE_URL` points at a plain-`http` endpoint that is not local (localhost, `127.0.0.1`, `[::1]` — Ollama/LM Studio setups are silent), a warning is printed because the API key travels unencrypted.
 
+## Jev judge layer
+
+Optional decision layer over the selected backend (`--judge jev` / `ASTRIA_LLM_JUDGE=jev`). Requires an explicit backend; judge calls count toward `ASTRIA_LLM_BUDGET` and fingerprint into the extraction cache. See [Semantic enrichment](../guides/semantic-enrichment#jev-judge-layer----judge-jev).
+
+| Variable | Purpose |
+|---|---|
+| `ASTRIA_LLM_JUDGE` | Judge selection: `jev` (TypeSafe System One). Requires `ASTRIA_LLM_BACKEND`; the judge wraps an engine and cannot generate extractions on its own |
+| `ASTRIA_LLM_JUDGE_API_KEY` | Judge API key (falls back to `TYPESAFE_API_KEY`) |
+| `ASTRIA_LLM_JUDGE_MODEL` | Judge model (default `jev-latest`) |
+| `ASTRIA_LLM_JEV_VERIFY` | `off` disables the per-file verification pass (relation/node-type re-choice + edge existence) |
+| `ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY` | Edges whose existence probability is below this are dropped (default `0.40`) |
+| `ASTRIA_LLM_JEV_GATE` | `off` disables the batched trivial-file gate |
+| `ASTRIA_LLM_JEV_GATE_MAX_BYTES` | Files larger than this skip the gate and are always enriched (default `65536`) |
+| `ASTRIA_LLM_JEV_GATE_DROP_THRESHOLD` | Gate drop probability above this skips the file (default `0.40`) |
+| `ASTRIA_LLM_JEV_GATE_BATCH` | Files judged per gate request (default `50`) |
+
 ## Local embeddings
 
 | Variable | Purpose |

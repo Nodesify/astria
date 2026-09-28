@@ -24,7 +24,7 @@ astria merge <pathA> <pathB> <outPath>  # Merge two graphs
 astria diff <pathA> <pathB>       # Compare two graphs
 ```
 
-`run` and `update` accept `--backend <claude|openai|gemini|none>` and `--model <name>` (per-run LLM enrichment without env vars) and `--no-dedup` (skip near-duplicate semantic entity merging). `update` additionally accepts `--quiet` (suppress progress lines and the token benchmark, used by git hooks) and `--if-stale <minutes>` (skip when the graph was published less than N minutes ago). Code definitions retain their identities even when labels match across classes or files.
+`run` and `update` accept `--backend <claude|openai|gemini|none>`, `--model <name>`, and `--judge <name>` (per-run LLM enrichment without env vars; `--judge jev` layers the TypeSafe judge over the backend) and `--no-dedup` (skip near-duplicate semantic entity merging). `--judge` requires `--backend`. `update` additionally accepts `--quiet` (suppress progress lines and the token benchmark, used by git hooks) and `--if-stale <minutes>` (skip when the graph was published less than N minutes ago). Code definitions retain their identities even when labels match across classes or files.
 
 Backend selection must be explicit through `--backend` or `ASTRIA_LLM_BACKEND`; credentials alone do not activate it. `none` disables enrichment. Cached ASTs avoid reparsing unchanged files, while references are reconciled across the current corpus. Graph facts and the manifest commit together after successful extraction; derived passes rerun after that commit and can be retried on the next update.
 

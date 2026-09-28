@@ -849,57 +849,36 @@ impl SemanticBackend for GeminiBackend {
 }
 
 // ---------------------------------------------------------------------------
-// JevBackend (TypeSafe System One decision layer over a completion engine)
+// JevJudgeBackend (TypeSafe System One judge layer over a completion engine)
 // ---------------------------------------------------------------------------
 
-/// A decision layer that wraps a completion engine. Jev cannot generate the
-/// node/edge JSON itself — it returns typed judgments with calibrated
-/// probabilities — so this backend first runs the configured engine backend
-/// (Claude / OpenAI-compatible / Gemini), then re-judges the extraction:
-/// node types and relations are re-chosen from the schema allowlists, every
-/// edge gets a keep/drop existence verdict, and the winning probability
-/// becomes the edge's `confidence_score`. The engine also handles the
-/// auxiliary `complete()` passes unchanged, and the Jev batch gate may skip
-/// trivial files before their first extraction.
-pub struct JevBackend {
+/// A judge layer that wraps the selected engine backend (Claude /
+/// OpenAI-compatible / Gemini). Jev cannot generate the node/edge JSON
+/// itself — it returns typed judgments with calibrated probabilities — so
+/// this backend first runs the engine, then re-judges the extraction: node
+/// types and relations are re-chosen from the schema allowlists, every edge
+/// gets a keep/drop existence verdict, and the winning probability becomes
+/// the edge's `confidence_score`. The engine also handles the auxiliary
+/// `complete()` passes unchanged, and the Jev batch gate may skip trivial
+/// files before their first extraction.
+///
+/// Selected with `--judge jev` / `ASTRIA_LLM_JUDGE=jev` on top of an
+/// explicit `--backend`; it is never a backend itself.
+pub struct JevJudgeBackend {
     engine: Box<dyn SemanticBackend>,
     client: jev::JevClient,
     config: jev::JevConfig,
 }
 
-impl JevBackend {
-    /// - `ASTRIA_LLM_JEV_API_KEY` (or `TYPESAFE_API_KEY`) — required.
-    /// - `ASTRIA_LLM_JEV_MODEL` — optional, defaults to `jev-latest`.
-    /// - `ASTRIA_LLM_JEV_ENGINE` — the completion engine: `claude`,
-    ///   `openai` (any OpenAI-compatible endpoint, default), or `gemini`;
-    ///   configured by the usual per-backend env vars.
+impl JevJudgeBackend {
+    /// Wrap an already-resolved engine backend. Judge configuration comes
+    /// from the environment:
+    ///
+    /// - `ASTRIA_LLM_JUDGE_API_KEY` (or `TYPESAFE_API_KEY`) — required.
+    /// - `ASTRIA_LLM_JUDGE_MODEL` — optional, defaults to `jev-latest`.
     /// - `ASTRIA_LLM_JEV_VERIFY` / `ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY` —
     ///   verification pass controls (see `jev::JevConfig`).
     /// - `ASTRIA_LLM_JEV_GATE` / `ASTRIA_LLM_JEV_GATE_*` — gate controls.
-    pub fn from_env() -> Result<Self> {
-        let config = jev::JevConfig::from_env()?;
-        let engine_name =
-            astria_core::env_var("LLM_JEV_ENGINE").unwrap_or_else(|| "openai".into());
-        let engine: Box<dyn SemanticBackend> = match engine_name.trim().to_lowercase().as_str() {
-            "claude" | "anthropic" => Box::new(ClaudeBackend::from_env()?),
-            "gemini" | "google" => Box::new(GeminiBackend::from_env()?),
-            "openai" | "openai-compatible" | "openai_compatible" => Box::new(
-                OpenAiBackend::from_env().map_err(|e| {
-                    AstriaError::Graph(format!(
-                        "{e} (ASTRIA_LLM_JEV_ENGINE selects the extraction engine behind Jev; \
-                         the default 'openai' needs ASTRIA_LLM_API_KEY or OPENAI_API_KEY)"
-                    ))
-                })?,
-            ),
-            other => {
-                return Err(AstriaError::Graph(format!(
-                    "unknown ASTRIA_LLM_JEV_ENGINE '{other}' (expected claude, openai, or gemini)"
-                )))
-            }
-        };
-        Ok(Self::new(engine, config))
-    }
-
     pub fn new(engine: Box<dyn SemanticBackend>, config: jev::JevConfig) -> Self {
         Self {
             client: jev::JevClient::new(config.clone()),
@@ -909,7 +888,7 @@ impl JevBackend {
     }
 }
 
-impl SemanticBackend for JevBackend {
+impl SemanticBackend for JevJudgeBackend {
     fn cache_identity(&self) -> String {
         format!("jev:{}:{}", self.engine.cache_identity(), self.config.identity())
     }
@@ -991,30 +970,58 @@ impl SemanticBackend for JevBackend {
 // Backend resolution
 // ---------------------------------------------------------------------------
 
+/// The judge layer selected via `--judge` / `ASTRIA_LLM_JUDGE`, if any.
+/// Judges wrap an engine backend (see `backend_from_env`); they are never
+/// backends themselves because Jev cannot generate extractions.
+pub fn judge_from_env() -> Option<String> {
+    std::env::var("ASTRIA_LLM_JUDGE")
+        .ok()
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+}
+
 /// Resolve the semantic backend from the environment.
 ///
 /// Network enrichment requires explicit `ASTRIA_LLM_BACKEND` selection.
 /// Credentials configure a selected backend; they never activate one.
+/// When `ASTRIA_LLM_JUDGE` names a judge layer, the resolved engine is
+/// wrapped: the engine still generates, the judge re-judges.
 pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
     let explicit = std::env::var("ASTRIA_LLM_BACKEND").unwrap_or_default();
     let explicit = explicit.trim().to_lowercase();
-    match explicit.as_str() {
-        "claude" | "anthropic" => Ok(Box::new(ClaudeBackend::from_env()?)),
+    let engine: Box<dyn SemanticBackend> = match explicit.as_str() {
+                "claude" | "anthropic" => Box::new(ClaudeBackend::from_env()?),
         "openai" | "openai-compatible" | "openai_compatible" => {
-            Ok(Box::new(OpenAiBackend::from_env()?))
+            Box::new(OpenAiBackend::from_env()?)
         }
-        "gemini" | "google" => Ok(Box::new(GeminiBackend::from_env()?)),
-        "jev" | "typesafe" => Ok(Box::new(JevBackend::from_env()?)),
+        "gemini" | "google" => Box::new(GeminiBackend::from_env()?),
+        "jev" | "typesafe" => {
+            return Err(AstriaError::Graph(
+                "Jev is a judge, not a generator — it cannot produce extractions on its own; \
+                 select an engine with --backend/ASTRIA_LLM_BACKEND and add --judge jev \
+                 (ASTRIA_LLM_JUDGE=jev)"
+                    .into(),
+            ))
+        }
         "" | "none" => {
-            Err(AstriaError::Graph(
-                "semantic enrichment is disabled; select --backend claude|openai|gemini|jev or ASTRIA_LLM_BACKEND explicitly".into(),
+            return Err(AstriaError::Graph(
+                "semantic enrichment is disabled; select --backend claude|openai|gemini or ASTRIA_LLM_BACKEND explicitly".into(),
             ))
         }
         other => {
-            Err(AstriaError::Graph(format!(
-                "unknown ASTRIA_LLM_BACKEND '{other}' (expected claude, openai, gemini, or jev)"
+            return Err(AstriaError::Graph(format!(
+                "unknown ASTRIA_LLM_BACKEND '{other}' (expected claude, openai, or gemini)"
             )))
         }
+    };
+    match judge_from_env() {
+        None => Ok(engine),
+        Some(name) if name == "jev" => {
+            Ok(Box::new(JevJudgeBackend::new(engine, jev::JevConfig::from_env()?)))
+        }
+        Some(other) => Err(AstriaError::Graph(format!(
+            "unknown ASTRIA_LLM_JUDGE '{other}' (expected jev)"
+        ))),
     }
 }
 
@@ -1400,37 +1407,48 @@ mod tests {
         assert_eq!(astria_core::env_var("LLM_MODEL"), None);
     }
 
-    // -- Jev (decision layer) --
+// -- Jev judge layer --
 
     #[test]
-    fn backend_resolution_jev_with_keys() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("ASTRIA_LLM_BACKEND", "jev");
-        std::env::set_var("TYPESAFE_API_KEY", "k");
+    fn backend_resolution_engine_with_jev_judge() {
+        let _guard = crate::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "openai");
+        std::env::set_var("ASTRIA_LLM_JUDGE", "jev");
         std::env::set_var("OPENAI_API_KEY", "k");
+        std::env::set_var("TYPESAFE_API_KEY", "k");
         assert!(backend_from_env().is_ok());
         std::env::remove_var("ASTRIA_LLM_BACKEND");
+        std::env::remove_var("ASTRIA_LLM_JUDGE");
+        std::env::remove_var("OPENAI_API_KEY");
         std::env::remove_var("TYPESAFE_API_KEY");
+    }
+
+    #[test]
+    fn backend_resolution_jev_backend_redirects_to_judge() {
+        let _guard = crate::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "jev");
+        std::env::set_var("TYPESAFE_API_KEY", "k");
+        let err = backend_from_env().err().expect("jev backend must redirect");
+        assert!(err.to_string().contains("judge, not a generator"));
+        std::env::remove_var("ASTRIA_LLM_BACKEND");
+        std::env::remove_var("TYPESAFE_API_KEY");
+    }
+
+    #[test]
+    fn backend_resolution_unknown_judge_errors() {
+        let _guard = crate::ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "openai");
+        std::env::set_var("ASTRIA_LLM_JUDGE", "llama");
+        std::env::set_var("OPENAI_API_KEY", "k");
+        let err = backend_from_env().err().expect("unknown judge must error");
+        assert!(err.to_string().contains("unknown ASTRIA_LLM_JUDGE"));
+        std::env::remove_var("ASTRIA_LLM_BACKEND");
+        std::env::remove_var("ASTRIA_LLM_JUDGE");
         std::env::remove_var("OPENAI_API_KEY");
     }
 
     #[test]
-    fn backend_resolution_jev_unknown_engine_errors() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("ASTRIA_LLM_BACKEND", "jev");
-        std::env::set_var("TYPESAFE_API_KEY", "k");
-        std::env::set_var("ASTRIA_LLM_JEV_ENGINE", "llama");
-        let err = backend_from_env()
-            .err()
-            .expect("unknown engine must error");
-        assert!(err.to_string().contains("ASTRIA_LLM_JEV_ENGINE"));
-        std::env::remove_var("ASTRIA_LLM_BACKEND");
-        std::env::remove_var("TYPESAFE_API_KEY");
-        std::env::remove_var("ASTRIA_LLM_JEV_ENGINE");
-    }
-
-    #[test]
-    fn jev_backend_cache_identity_includes_engine_and_config() {
+    fn jev_judge_cache_identity_includes_engine_and_config() {
         let config = jev::JevConfig {
             api_key: "k".into(),
             model: "jev-1.13.0".into(),
@@ -1442,7 +1460,8 @@ mod tests {
             gate_drop_threshold: 0.4,
             gate_batch: 50,
         };
-        let identity = JevBackend::new(Box::new(NoopBackend), config.clone()).cache_identity();
+        let identity =
+            JevJudgeBackend::new(Box::new(NoopBackend), config.clone()).cache_identity();
         assert!(identity.contains("jev:"), "engine identity included");
         assert!(identity.contains("NoopBackend"));
         assert!(identity.contains("model=jev-1.13.0"));
@@ -1450,7 +1469,7 @@ mod tests {
         let mut toggled = config.clone();
         toggled.verify_enabled = false;
         let identity2 =
-            JevBackend::new(Box::new(NoopBackend), toggled).cache_identity();
+            JevJudgeBackend::new(Box::new(NoopBackend), toggled).cache_identity();
         assert_ne!(identity, identity2, "toggling verify invalidates the cache");
     }
 

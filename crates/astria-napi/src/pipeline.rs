@@ -613,6 +613,15 @@ fn run_pipeline_inner(
                 .into(),
         ));
     }
+    // A judge layers decisions on top of an engine; without an engine
+    // there is nothing to judge.
+    if astria_semantic::judge_from_env().is_some() && !astria_semantic::enrichment_enabled() {
+        return Err(astria_core::AstriaError::Graph(
+            "ASTRIA_LLM_JUDGE requires an explicit --backend or ASTRIA_LLM_BACKEND \
+             (the judge wraps an engine; it cannot generate extractions)"
+                .into(),
+        ));
+    }
     let detected = graph_update::detect(root, db)?;
     let configuration = semantic_pass::configuration()?;
     let build_configuration = format!("{configuration}:dedup={}", options.dedup);

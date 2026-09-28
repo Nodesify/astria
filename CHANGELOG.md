@@ -6,6 +6,14 @@ this file is the per-version summary.
 
 ## [Unreleased]
 
+### Jev judge layer — calibrated second opinion over any backend
+- New `--judge jev` flag (run/update) layers TypeSafe's Jev — a System One decision model that returns typed judgments with calibrated probabilities, not generated text — on top of the selected `--backend` (claude, openai-compatible, or gemini). The engine still generates every extraction; the judge re-judges it. `--backend jev` is not accepted and errors with a pointer to `--judge` (`ASTRIA_LLM_JUDGE=jev` selects it via env).
+- **Trivial-file gate** — before a file's first extraction, batched keep/drop judgments (≈1 billed request per 50 files, files >64 KB presumed rich) skip files the judge finds empty or trivial, so they never cost an engine call. Gated files keep their structural extraction; the run summary reports them ("N files gated by Jev").
+- **Per-file verification** — one request per file re-chooses node types and relations from the schema allowlists (replacing the lossy `relates_to`/`concept` clamps) and gets a keep/drop existence verdict per edge. Spurious edges are dropped (`ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY`, default 0.40); kept edges carry the judge's keep probability as a calibrated `confidence_score` in the `edges` table — semantic edges previously left it null.
+- **Suggested-question ranking** — on runs that rebuilt the graph, the report's suggested questions are re-ordered by judge keep-scores so the most useful one leads. Best-effort: any judge failure keeps the generated order.
+- Judge calls count toward `ASTRIA_LLM_BUDGET` like every other response, and the judge configuration (model, thresholds, gate settings, prompt text) fingerprints into the semantic extraction cache — changing it invalidates cached extractions. `--judge` without `--backend` errors: the judge wraps an engine, it cannot generate extractions.
+- Configuration: `ASTRIA_LLM_JUDGE_API_KEY` (or `TYPESAFE_API_KEY`) and `ASTRIA_LLM_JUDGE_MODEL` (default `jev-latest`) are vendor-generic; behavior knobs keep the honest `ASTRIA_LLM_JEV_*` names (`_VERIFY`, `_MIN_EDGE_PROBABILITY`, `_GATE`, `_GATE_MAX_BYTES`, `_GATE_DROP_THRESHOLD`, `_GATE_BATCH`).
+
 ### HTML visualization rewritten around drill-down
 - `astria export --format html` now ships a self-contained canvas viewer (no vis-network, no network access required) that opens as community bubbles — one per community, sized by membership, with edge-weighted links between bubbles. Click a bubble to expand it into member nodes, click a member to focus its 1-hop neighborhood, and search to jump straight to any symbol; "All nodes" expands everything with level-of-detail labels.
 - The exported layout stays fully precomputed (physics-free), and the viewer draws only what is on screen, so large graphs open and zoom instantly even in sandboxed HTML previewers.
@@ -30,9 +38,9 @@ this file is the per-version summary.
 - Blind answer-correctness judging finally ran (TypeSafe System One judge, `scripts/bench/quality/blind-judge.mjs`): both tools answered the same 35 rubric-grounded questions, graded without tool identity — astria 100% PASS, Graphify 77.1% PASS / 20% FAIL. First generated-answer-correctness measurement in the project.
 - Held-out evidence grew: `scripts/bench/paired/*.heldout-v2.jsonl` adds 14 separately authored, line-exact grounded cases (5 Click, 5 Express, 4 ripgrep); current runtime retrieves 5/5, 5/5, 2/4 files and 11/13 v2 definitions in the top five.
 
-### Jev decision backend for semantic enrichment
-- `--backend jev` wraps a completion engine (Claude / OpenAI-compatible / Gemini) with a TypeSafe System One decision layer: the engine still produces the node/edge JSON, and Jev returns typed judgments that improve it in three places — batched keep/drop file gating before a file's first extraction call (`ASTRIA_LLM_JEV_GATE`), per-file re-judging of relations and node types from the schema allowlists with the edge-keep probability stored as a calibrated `confidence_score` (`ASTRIA_LLM_JEV_VERIFY`, `ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY`), and suggested-question ranking in the report.
-- Credentials: `ASTRIA_LLM_JEV_API_KEY` (or `TYPESAFE_API_KEY`); model defaults to `jev-latest`. Gate/verify are on by default with bounded batch sizes, so spend stays counted under `ASTRIA_LLM_BUDGET`; the run summary reports gated-file counts.
+### Jev judge layer for semantic enrichment
+- `--judge jev` (or `ASTRIA_LLM_JUDGE=jev`) layers TypeSafe System One decisions on top of an explicit semantic backend (Claude / OpenAI-compatible / Gemini): the engine still produces the node/edge JSON, and Jev returns typed judgments that improve it in three places — batched keep/drop file gating before a file's first extraction call (`ASTRIA_LLM_JEV_GATE`), per-file re-judging of relations and node types from the schema allowlists with the edge-keep probability stored as a calibrated `confidence_score` (`ASTRIA_LLM_JEV_VERIFY`, `ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY`), and suggested-question ranking in the report. The judge wraps an engine and never generates extractions itself; requiring only a judge without a backend errors.
+- Credentials: `ASTRIA_LLM_JUDGE_API_KEY` (or `TYPESAFE_API_KEY`); model defaults to `jev-latest`. Gate/verify are on by default with bounded batch sizes, so spend stays counted under `ASTRIA_LLM_BUDGET`; the run summary reports gated-file counts.
 
 ## [1.0.6] — 2026-09-27
 
