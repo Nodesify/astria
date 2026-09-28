@@ -56,6 +56,8 @@ Every edge is labeled with one of three provenance values, plus a numeric `confi
 
 You can always tell what was found versus deduced. High-fidelity traversals (`query --detail high`, `path --detail high`, `map --detail high`, MCP `repo_map`/`query_graph` fidelity tiers) keep only declared facts. Every `EDGE` line in query output is anchored with `@file:line` and every `NODE` with `src=file:line`.
 
+Semantic edges are `AMBIGUOUS` with a null score by default; under the [Jev judge layer](../guides/semantic-enrichment#jev-judge-layer) they carry the judge's calibrated existence probability (0–1) in `confidence_score`, and edges the judge rejects are dropped instead of published.
+
 ## Hyperedges
 
 N-ary node groups, produced deterministically at build time (no LLM):
