@@ -770,7 +770,7 @@ mod tests {
     #[test]
     fn config_requires_key() {
         let _guard = crate::ENV_LOCK.lock().unwrap();
-        std::env::remove_var("ASTRIA_LLM_JEV_API_KEY");
+        std::env::remove_var("ASTRIA_LLM_JUDGE_API_KEY");
         std::env::remove_var("TYPESAFE_API_KEY");
         assert!(JevConfig::from_env().is_err());
     }
@@ -812,7 +812,7 @@ mod tests {
     #[ignore = "billed live API call; set TYPESAFE_API_KEY and run with --ignored"]
     fn jev_live_roundtrip() {
         let Ok(config) = JevConfig::from_env() else {
-            eprintln!("skipping: TYPESAFE_API_KEY / ASTRIA_LLM_JEV_API_KEY not set");
+            eprintln!("skipping: TYPESAFE_API_KEY / ASTRIA_LLM_JUDGE_API_KEY not set");
             return;
         };
         let client = JevClient::new(config.clone());

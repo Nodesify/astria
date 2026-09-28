@@ -20,7 +20,7 @@ The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 
 1.  **detect()** (`astria-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run.
 2.  **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Uses 25 registered language configurations; discovery and parser selection share `astria-core/src/languages.rs`, with AST rules in `src/langs/`.
-3.  **enrich_with_semantics()** (`astria-semantic`, optional): When `--backend` or `ASTRIA_LLM_BACKEND` explicitly selects a backend, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results.
+3.  **enrich_with_semantics()** (`astria-semantic`, optional): When `--backend` or `ASTRIA_LLM_BACKEND` explicitly selects a backend, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results. With `--judge jev`, a TypeSafe System One judge layer wraps the engine: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking.
 4.  **build()** (`astria-build`): Publishes extracted nodes and edges into SQLite. The extraction reference pass reconciles cross-file references before publication; semantic entity deduplication runs as a derived pass. Code and test definitions, packages, rationale nodes and file identities are excluded from fuzzy merging: identical method names in different scopes remain separate definitions.
 5.  **embed()** (`astria-embed`, optional `--embed`): Computes local node embeddings (fastembed/ONNX, no API key), adds `similar_to` edges, and triggers a community refresh so semantic similarity consolidates clusters.
 6.  **cluster()** (`astria-cluster`): Performs community detection using the deterministic label propagation algorithm (via `petgraph`) and updates the `community` attribute on nodes.
@@ -33,7 +33,7 @@ AST parsing is incremental: unchanged source reuses its versioned extraction cac
 
 Validated file-owned graph facts, the file manifest, and `_meta.graph_published_at` commit in one SQLite transaction. Query freshness (`graph_built_at`) uses that publication timestamp, so a failed later stage does not hide a successful core publication. The build configuration fingerprint includes deduplication options; changing those options triggers reconciliation. Extraction or semantic extraction errors leave that core graph and manifest unadvanced. Derived passes run after the core commit and rerun on subsequent updates, including unchanged updates, so a failed derived pass can be retried. These later passes and exported files are not part of the core transaction.
 
-Semantic caches include source inputs and non-secret effective backend, endpoint, model, and prompt configuration. Cached and fresh semantic results use the same merge path. Community labels and deep links also fingerprint their effective inputs and configuration. Source changes invalidate deep edges; restoring them requires another run with `--deep`, which replays matching cache entries or generates fresh links.
+Semantic caches include source inputs and non-secret effective backend, endpoint, model, judge, and prompt configuration. Cached and fresh semantic results use the same merge path. Community labels and deep links also fingerprint their effective inputs and configuration. Source changes invalidate deep edges; restoring them requires another run with `--deep`, which replays matching cache entries or generates fresh links.
 
 CLI and MCP queries use the same hybrid retrieval path. Each request loads a fresh SQLite graph snapshot in O(V + E) time and memory instead of reusing a process-global graph cache. `--detail high` filters on evidence kind (`EXTRACTED`), independent of usage-adjusted scores; learned, name-resolved, and semantic edges remain inferred.
 
@@ -53,7 +53,7 @@ CLI and MCP queries use the same hybrid retrieval path. Each request loads a fre
 | `astria-query` | Query engine: BFS/DFS (optionally directed), shortest path, explain, token-based node scoring, fresh SQLite snapshot per request (no process-global graph cache). |
 | `astria-mcp` | MCP stdio server exposing the graph to AI agents. |
 | `astria-report` | Markdown generation for the final user-facing report. |
-| `astria-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. `--backend jev` wraps any of those engines with a TypeSafe System One decision layer: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking. |
+| `astria-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. `--judge jev` wraps the selected engine with a TypeSafe System One judge layer: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking. |
 | `astria-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection. |
 | `astria-pdf` | PDF text extraction. |
 | `astria-napi` | The bridge between Rust and Node.js: pipeline orchestration (semantic enrichment, community labeling, deep linking), query surface, merge/diff, JSON/HTML/GraphML/SVG/tree/Cypher export, live Neo4j push, health and risk reports. |
@@ -101,7 +101,7 @@ Cross-layer (deterministic post-build passes; edges carry context `crosslayer` a
 Semantic & learned (opt-in):
 
 *   `similar_to`: Local embedding similarity (`--embed`); powers semantic query recall.
-*   `implements`, `depends_on`, `relates_to`, `uses`: LLM semantic extraction (validated against an allowlist). Under `--backend jev`, the TypeSafe decision layer re-chooses these relations from the allowlist and stores a calibrated existence probability in `edges.confidence_score`.
+*   `implements`, `depends_on`, `relates_to`, `uses`: LLM semantic extraction (validated against an allowlist). Under `--judge jev`, the TypeSafe judge layer re-chooses these relations from the allowlist and stores a calibrated existence probability in `edges.confidence_score`.
 *   `learned`: Promoted from recurring query pairs (the memory feedback loop).
 
 Hyperedges (n-ary, stored in the `hyperedges` table):

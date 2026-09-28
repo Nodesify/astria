@@ -140,6 +140,11 @@ Optional enrichment (each needs a semantic backend: `ASTRIA_LLM_API_KEY` /
   symbols to concept nodes from other files as INFERRED edges
   (`context='deep'`). Cached per file content hash — an unchanged file is
   never re-billed.
+- `--judge jev` — TypeSafe decision layer over the backend: gates trivial
+  files before they cost engine calls, re-judges relations/node types from
+  the allowlists, drops spurious edges, and stores a calibrated
+  `confidence_score` on semantic edges. Needs an explicit backend (Jev
+  cannot generate extractions itself); judge calls count toward the budget.
 - `ASTRIA_LLM_BUDGET` caps total tokens for a run; every backend response's
   usage block is counted and printed after the run.
 
@@ -152,6 +157,7 @@ Much faster than `run` for existing projects.
 Options (all also available on `run`, except `--quiet`/`--if-stale`):
 - `--no-dedup` — skip near-duplicate node merging
 - `--backend <name>` / `--model <name>` — semantic LLM backend (claude, openai, gemini) and model
+- `--judge jev` — optional decision layer over the backend (gate, verify, calibrated edge confidence)
 - `--embed` — compute local embeddings: `similar_to` edges + semantic query recall
 - `--label-communities` — name changed communities thematically (one LLM call per changed community)
 - `--deep` — second extraction tier: LLM-linked cross-file concept edges
