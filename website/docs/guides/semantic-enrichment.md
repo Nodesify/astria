@@ -2,7 +2,7 @@
 sidebar_position: 2
 title: Semantic enrichment
 description: Two optional semantic layers — local embeddings (no API key) and LLM enrichment — that add similar_to edges and concept nodes to the graph.
-keywords: [embeddings, llm, semantic, claude, openai, gemini, similar_to]
+keywords: [embeddings, llm, semantic, claude, openai, gemini, jev, judge, similar_to]
 ---
 
 # Semantic enrichment
@@ -42,7 +42,7 @@ Select an LLM backend explicitly with `--backend` or `ASTRIA_LLM_BACKEND` to enr
 
 Once selected, a backend reads its configured credentials, including the generic provider environment variables listed above. Without explicit selection, the structural pipeline does not invoke an LLM. `--label-communities` and `--deep` also require explicit backend selection.
 
-### Jev judge layer — `--judge jev`
+### Jev judge layer
 
 `astria run . --backend openai --judge jev` keeps the engine backend as the generator and layers TypeSafe's Jev on top of it. Jev is a System One decision model — typed judgments with calibrated probabilities, not a text generator — so it never writes the extraction itself; it re-judges what the engine produced:
 
@@ -54,7 +54,7 @@ Judge decisions are cheap and batched, count toward `ASTRIA_LLM_BUDGET` like eve
 
 ### Cost: measured, capped, and cached
 
-Every backend response's usage block is counted across the whole run — extraction, community naming, and deep linking — and the run summary prints it:
+Every response's usage block is counted across the whole run — extraction, gate, verification, community naming, and deep linking — and the run summary prints it:
 
 ```
 LLM usage: 17 API calls, 3366 in / 1675 out tokens

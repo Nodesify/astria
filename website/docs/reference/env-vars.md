@@ -32,7 +32,7 @@ Keys are sent in request headers (the Gemini key never goes in the URL, where it
 
 ## Jev judge layer
 
-Optional decision layer over the selected backend (`--judge jev` / `ASTRIA_LLM_JUDGE=jev`). Requires an explicit backend; judge calls count toward `ASTRIA_LLM_BUDGET` and fingerprint into the extraction cache. See [Semantic enrichment](../guides/semantic-enrichment#jev-judge-layer----judge-jev).
+Optional decision layer over the selected backend (`--judge jev` / `ASTRIA_LLM_JUDGE=jev`). Requires an explicit backend; judge calls count toward `ASTRIA_LLM_BUDGET` and fingerprint into the extraction cache. See [Semantic enrichment](../guides/semantic-enrichment#jev-judge-layer).
 
 | Variable | Purpose |
 |---|---|
