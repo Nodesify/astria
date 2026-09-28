@@ -88,3 +88,12 @@ your agreement to it.** No signature form is required.
 ## Release process (maintainers)
 
 Releases are tagged (`vX.Y.Z`) and published by the `Release` workflow via npm trusted publishing; platform binaries are built as `optionalDependencies`.
+
+`CHANGELOG.md` is the single source of truth for what changed; release notes are *derived* from it, never restated elsewhere:
+
+1. As work lands, pull requests add user-facing changes under `## [Unreleased]`.
+2. Before tagging, promote `[Unreleased]` to a dated `## [X.Y.Z] — YYYY-MM-DD` heading and add its compare-link reference to the file tail (`[X.Y.Z]: https://github.com/Nodesify/astria/compare/vW.X.Y...vX.Y.Z`).
+3. Tag `vX.Y.Z`. The workflow's verify job fails fast when the section is missing (`scripts/extract-changelog.mjs --check`), and the publish job uses that same section as the GitHub Release body — relative links are rewritten to the tag so the notes render on the release page.
+4. The narrative release post goes to the docs-site blog (`website/blog/`); cut a versioned docs copy (`cd website && npm run docusaurus docs:version X.Y.Z`) when the release becomes the documented default.
+
+The README deliberately carries no per-version "What's new" sections — it links to the changelog and blog instead, so release notes have exactly one home per audience: the GitHub Release (curated), the blog (narrative), and `CHANGELOG.md` (the record).
