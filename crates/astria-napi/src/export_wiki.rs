@@ -191,8 +191,9 @@ impl Wiki {
 
         let mut edges = Vec::new();
         {
-            let mut stmt = db
-                .prepare("SELECT source, target, relation, confidence, confidence_score FROM edges")?;
+            let mut stmt = db.prepare(
+                "SELECT source, target, relation, confidence, confidence_score FROM edges",
+            )?;
             let rows = stmt.query_map([], |row| {
                 Ok(EdgeRow {
                     source: row.get(0)?,
@@ -533,10 +534,7 @@ fn god_node_article(wiki: &Wiki, node: &NodeAnalysis) -> String {
                 let conf_tag = if conf.0.is_empty() {
                     String::new()
                 } else {
-                    let score = conf
-                        .1
-                        .map(|s| format!(":{s:.2}"))
-                        .unwrap_or_default();
+                    let score = conf.1.map(|s| format!(":{s:.2}")).unwrap_or_default();
                     format!(" `{}{score}`", conf.0)
                 };
                 lines.push(format!("- {}{conf_tag}", wiki.node_link(&label, "../")));

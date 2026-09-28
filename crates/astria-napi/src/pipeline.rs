@@ -765,8 +765,10 @@ fn run_pipeline_inner(
                     .iter()
                     .all(|&i| i < questions.len() && !std::mem::replace(&mut seen[i], true));
             if valid_permutation {
-                analysis.suggested_questions =
-                    permutation.into_iter().map(|i| questions[i].clone()).collect();
+                analysis.suggested_questions = permutation
+                    .into_iter()
+                    .map(|i| questions[i].clone())
+                    .collect();
             } else {
                 eprintln!(
                     "warning: question ranking returned an invalid permutation; keeping the generated order"

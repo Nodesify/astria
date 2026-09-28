@@ -265,7 +265,8 @@ fn iter_neighbors_filtered<'a>(
     graph
         .edges_directed(idx, Direction::Outgoing)
         .filter(move |e| {
-            e.weight().meets_detail(min_strength) && !below_semantic_floor(e.weight(), semantic_floor)
+            e.weight().meets_detail(min_strength)
+                && !below_semantic_floor(e.weight(), semantic_floor)
         })
         .map(|e| (e.target(), e.id()))
         .chain(
@@ -864,12 +865,12 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         {
             entry_candidates.insert(idx);
         }
-if score > 0.0 || entry_candidates.contains(&idx) {
-                scored.push(((score + phrase_bonus) * prior, idx));
-            }
-            if debug_scores {
-                debug_rows.push((matched_terms, salient_hits));
-            }
+        if score > 0.0 || entry_candidates.contains(&idx) {
+            scored.push(((score + phrase_bonus) * prior, idx));
+        }
+        if debug_scores {
+            debug_rows.push((matched_terms, salient_hits));
+        }
     }
     // Explicit entry intent gives import roots precedence over lexical
     // mentions of "entry point". The tier is derived from this candidate
@@ -900,10 +901,7 @@ if score > 0.0 || entry_candidates.contains(&idx) {
         );
         for (rank, (score, idx)) in scored.iter().take(15).enumerate() {
             let n = &loaded.graph[*idx];
-            let (matched, salient) = debug_rows
-                .get(idx.index())
-                .copied()
-                .unwrap_or((0, 0));
+            let (matched, salient) = debug_rows.get(idx.index()).copied().unwrap_or((0, 0));
             eprintln!(
                 "  #{:<2} score={:<9.3} matched={:<3}/{} salient={:<2}/{} {} [{}]",
                 rank + 1,
@@ -939,13 +937,9 @@ fn bfs_subgraph(
     for depth in 0..max_depth {
         let mut next_frontier = Vec::new();
         for &node in &frontier {
-            for (neighbor, edge_id) in iter_neighbors_filtered(
-                &loaded.graph,
-                node,
-                directed,
-                min_strength,
-                semantic_floor,
-            ) {
+            for (neighbor, edge_id) in
+                iter_neighbors_filtered(&loaded.graph, node, directed, min_strength, semantic_floor)
+            {
                 if !visited.contains(&neighbor) {
                     visited.insert(neighbor);
                     distance.insert(neighbor, depth as u32 + 1);
@@ -1239,9 +1233,13 @@ fn shortest_path_bfs(
     visited.insert(start);
 
     while let Some(current) = queue.pop_front() {
-        for (neighbor, edge_id) in
-            iter_neighbors_filtered(&loaded.graph, current, directed, min_strength, semantic_floor)
-        {
+        for (neighbor, edge_id) in iter_neighbors_filtered(
+            &loaded.graph,
+            current,
+            directed,
+            min_strength,
+            semantic_floor,
+        ) {
             if visited.contains(&neighbor) {
                 continue;
             }
@@ -1463,12 +1461,11 @@ fn query_graph_loaded(
     // Token evidence is snapshotted first so semantic-only candidates (nodes
     // the embeddings surface but no query term touches) stay identifiable —
     // they qualify for the seed reservation below.
-    let token_scores: std::collections::HashMap<NodeIndex, f64> =
-        if semantic.is_empty() {
-            std::collections::HashMap::new()
-        } else {
-            scored.iter().map(|(s, i)| (*i, *s)).collect()
-        };
+    let token_scores: std::collections::HashMap<NodeIndex, f64> = if semantic.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        scored.iter().map(|(s, i)| (*i, *s)).collect()
+    };
     if !semantic.is_empty() {
         let mut by_index: std::collections::HashMap<NodeIndex, f64> =
             scored.iter().map(|(s, i)| (*i, *s)).collect();
@@ -1603,9 +1600,23 @@ fn query_graph_loaded(
         eprintln!("-- seeds ({}): {:?} --", seed_nodes.len(), seeds);
     }
     let (visited, edges_seen, distance) = if mode == "dfs" {
-        dfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength, semantic_floor)
+        dfs_subgraph(
+            &loaded,
+            &seed_nodes,
+            depth,
+            directed,
+            min_strength,
+            semantic_floor,
+        )
     } else {
-        bfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength, semantic_floor)
+        bfs_subgraph(
+            &loaded,
+            &seed_nodes,
+            depth,
+            directed,
+            min_strength,
+            semantic_floor,
+        )
     };
 
     // Weak-tier detection: a visited node whose strongest touching edge is
@@ -1873,7 +1884,14 @@ pub fn find_shortest_path(
         .and_then(|v| v.trim().parse::<f64>().ok())
         .unwrap_or(0.0)
         .clamp(0.0, 1.0);
-    let path = match shortest_path_bfs(&loaded, src_idx, tgt_idx, directed, min_strength, semantic_floor) {
+    let path = match shortest_path_bfs(
+        &loaded,
+        src_idx,
+        tgt_idx,
+        directed,
+        min_strength,
+        semantic_floor,
+    ) {
         Some(p) => p,
         None => return Ok((false, 0, "No path found.".to_string())),
     };
@@ -3025,8 +3043,10 @@ at the lake house');",
         let db = open_db_in_memory().unwrap();
         let mut diluter_body = String::new();
         for i in 0..20 {
-            diluter_body
-                .push_str(&format!("Line {} of the general output input list data. ", i % 5 + 1));
+            diluter_body.push_str(&format!(
+                "Line {} of the general output input list data. ",
+                i % 5 + 1
+            ));
         }
         db.execute_batch(&format!(
             "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
@@ -3048,8 +3068,7 @@ at the lake house');",
         let scored = score_nodes(&g, &terms);
         assert!(!scored.is_empty());
         assert_eq!(
-            scored[0].1,
-            g.id_to_idx["target"],
+            scored[0].1, g.id_to_idx["target"],
             "rare-term matcher must outrank the common-term diluter; got {:?}",
             g.graph[scored[0].1].label
         );
@@ -3184,8 +3203,11 @@ at the lake house');",
         .unwrap();
         let s_pos = text.find("Sprocket").unwrap();
         let w_pos = text.find("Widget").unwrap();
-        assert!(s_pos < w_pos, "weakly-reached node must sort last:
-{text}");
+        assert!(
+            s_pos < w_pos,
+            "weakly-reached node must sort last:
+{text}"
+        );
     }
 
     #[test]
@@ -3199,9 +3221,18 @@ at the lake house');",
         };
         assert!(below_semantic_floor(&edge("SEMANTIC", Some(0.5)), 0.65));
         assert!(!below_semantic_floor(&edge("SEMANTIC", Some(0.9)), 0.65));
-        assert!(below_semantic_floor(&edge("SEMANTIC", None), 0.65), "unscored falls back to label rank 0.6, below the floor");
-        assert!(!below_semantic_floor(&edge("INFERRED", Some(0.4)), 0.65), "structural edges are never floored");
-        assert!(!below_semantic_floor(&edge("SEMANTIC", Some(0.1)), 0.0), "0.0 disables the floor");
+        assert!(
+            below_semantic_floor(&edge("SEMANTIC", None), 0.65),
+            "unscored falls back to label rank 0.6, below the floor"
+        );
+        assert!(
+            !below_semantic_floor(&edge("INFERRED", Some(0.4)), 0.65),
+            "structural edges are never floored"
+        );
+        assert!(
+            !below_semantic_floor(&edge("SEMANTIC", Some(0.1)), 0.0),
+            "0.0 disables the floor"
+        );
     }
 
     #[test]

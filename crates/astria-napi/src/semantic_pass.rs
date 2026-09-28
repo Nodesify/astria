@@ -177,7 +177,12 @@ pub(super) fn enrich_with_semantics(
     // and unchanged files cost no judge calls. `off` restores live gating.
     let all_pending_paths: Vec<PathBuf> = pending.iter().map(|p| p.path.clone()).collect();
     let gate_cache_on = std::env::var("ASTRIA_LLM_JEV_GATE_CACHE")
-        .map(|v| !matches!(v.trim().to_lowercase().as_str(), "0" | "false" | "off" | "no"))
+        .map(|v| {
+            !matches!(
+                v.trim().to_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
         .unwrap_or(true);
     let pending_paths: Vec<PathBuf> = if gate_cache_on {
         let gate_identity = backend.cache_identity();

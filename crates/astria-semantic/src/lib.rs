@@ -172,9 +172,11 @@ fn parse_extraction_text(text: &str) -> SemanticExtraction {
 }
 
 /// node_type values the schema allows; anything else is clamped.
-pub(crate) const ALLOWED_NODE_TYPES: &[&str] = &["concept", "entity", "pattern", "module", "function"];
+pub(crate) const ALLOWED_NODE_TYPES: &[&str] =
+    &["concept", "entity", "pattern", "module", "function"];
 /// relation values the schema allows; anything else is clamped.
-pub(crate) const ALLOWED_RELATIONS: &[&str] = &["depends_on", "implements", "relates_to", "contains", "uses"];
+pub(crate) const ALLOWED_RELATIONS: &[&str] =
+    &["depends_on", "implements", "relates_to", "contains", "uses"];
 
 /// Enforce output discipline on model responses: drop empty/duplicate
 /// nodes, clamp node_type/relation to the schema enums, and drop edges
@@ -890,12 +892,17 @@ impl JevJudgeBackend {
 
 impl SemanticBackend for JevJudgeBackend {
     fn cache_identity(&self) -> String {
-        format!("jev:{}:{}", self.engine.cache_identity(), self.config.identity())
+        format!(
+            "jev:{}:{}",
+            self.engine.cache_identity(),
+            self.config.identity()
+        )
     }
 
     fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
         let extraction = self.engine.extract_semantic(content, file_type)?;
-        if !self.config.verify_enabled || (extraction.nodes.is_empty() && extraction.edges.is_empty())
+        if !self.config.verify_enabled
+            || (extraction.nodes.is_empty() && extraction.edges.is_empty())
         {
             return Ok(extraction);
         }
@@ -925,8 +932,11 @@ impl SemanticBackend for JevJudgeBackend {
         image_bytes: &[u8],
         media_type: &str,
     ) -> Result<SemanticExtraction> {
-        let extraction = self.engine.extract_semantic_from_image(image_bytes, media_type)?;
-        if !self.config.verify_enabled || (extraction.nodes.is_empty() && extraction.edges.is_empty())
+        let extraction = self
+            .engine
+            .extract_semantic_from_image(image_bytes, media_type)?;
+        if !self.config.verify_enabled
+            || (extraction.nodes.is_empty() && extraction.edges.is_empty())
         {
             return Ok(extraction);
         }
@@ -953,9 +963,7 @@ impl SemanticBackend for JevJudgeBackend {
             Ok(kept) => kept,
             Err(e) => {
                 // The gate may only save calls, never lose facts.
-                eprintln!(
-                    "warning: Jev gate unavailable ({e}); enriching all candidate files"
-                );
+                eprintln!("warning: Jev gate unavailable ({e}); enriching all candidate files");
                 files.to_vec()
             }
         }
@@ -1024,9 +1032,10 @@ pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
     };
     match judge_from_env() {
         None => Ok(engine),
-        Some(name) if name == "jev" => {
-            Ok(Box::new(JevJudgeBackend::new(engine, jev::JevConfig::from_env()?)))
-        }
+        Some(name) if name == "jev" => Ok(Box::new(JevJudgeBackend::new(
+            engine,
+            jev::JevConfig::from_env()?,
+        ))),
         Some(other) => Err(AstriaError::Graph(format!(
             "unknown ASTRIA_LLM_JUDGE '{other}' (expected jev)"
         ))),
@@ -1415,7 +1424,7 @@ mod tests {
         assert_eq!(astria_core::env_var("LLM_MODEL"), None);
     }
 
-// -- Jev judge layer --
+    // -- Jev judge layer --
 
     #[test]
     fn backend_resolution_engine_with_jev_judge() {
@@ -1468,16 +1477,14 @@ mod tests {
             gate_drop_threshold: 0.4,
             gate_batch: 50,
         };
-        let identity =
-            JevJudgeBackend::new(Box::new(NoopBackend), config.clone()).cache_identity();
+        let identity = JevJudgeBackend::new(Box::new(NoopBackend), config.clone()).cache_identity();
         assert!(identity.contains("jev:"), "engine identity included");
         assert!(identity.contains("NoopBackend"));
         assert!(identity.contains("model=jev-1.13.0"));
         assert!(identity.contains("gate_bytes=1024"));
         let mut toggled = config.clone();
         toggled.verify_enabled = false;
-        let identity2 =
-            JevJudgeBackend::new(Box::new(NoopBackend), toggled).cache_identity();
+        let identity2 = JevJudgeBackend::new(Box::new(NoopBackend), toggled).cache_identity();
         assert_ne!(identity, identity2, "toggling verify invalidates the cache");
     }
 
