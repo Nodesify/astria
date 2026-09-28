@@ -27,7 +27,7 @@ astria wiki --out docs/wiki  # export into docs/ for GitHub
 astria wiki --format obsidian --out my-vault
 ```
 
-On this repository the vault produced 2,040 notes and 5,000 canvas edges.
+On this repository a v0.8-era run produced 2,040 notes and 5,000 canvas edges (indicative; the count scales with corpus size).
 
 ## HTML visualization
 
@@ -108,7 +108,7 @@ Hyperedges are n-ary node groups produced deterministically at build time (no LL
 - `graph.json` carries a `hyperedges` array (shape-compatible with Graphify's consumer)
 - the HTML viewer shades a convex hull over each hyperedge's member nodes (large mode draws labeled circles)
 - the wiki index lists them; `explain` shows a node's hyperedge memberships
-- the `GRAPH_REPORT.md` gains a hyperedge section
+- the `.astria/graph_report.md` gains a hyperedge section
 
 ## PR impact analysis
 

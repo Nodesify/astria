@@ -63,6 +63,17 @@ impl EdgeData {
     }
 }
 
+/// Nodes whose strongest touching edge falls below this floor are weakly
+/// reached (only via low-confidence SEMANTIC links) and sort after all
+/// strongly-reached nodes in query output. Label ranks for structural
+/// edges start at 0.7 (INFERRED), so plain graphs never produce weak nodes.
+const SEMANTIC_WEAK_FLOOR: f64 = 0.65;
+
+/// Minimum rescaled embedding score for the semantic-only seed reservation
+/// (≈ cosine 0.63 on the rescale): strong enough that the candidate is
+/// genuinely about the question, not a distant neighbor.
+const SEMANTIC_SEED_FLOOR: f64 = 0.12;
+
 /// Fallback strength for edges without a numeric score. Alphabetical
 /// string comparison of confidence labels does NOT order by strength
 /// ("SEMANTIC" > "LLM" lexicographically), so map labels to numbers.
@@ -249,17 +260,33 @@ fn iter_neighbors_filtered<'a>(
     idx: NodeIndex,
     directed: bool,
     min_strength: f64,
+    semantic_floor: f64,
 ) -> impl Iterator<Item = (NodeIndex, EdgeIndex)> + 'a {
     graph
         .edges_directed(idx, Direction::Outgoing)
-        .filter(move |e| e.weight().meets_detail(min_strength))
+        .filter(move |e| {
+            e.weight().meets_detail(min_strength) && !below_semantic_floor(e.weight(), semantic_floor)
+        })
         .map(|e| (e.target(), e.id()))
         .chain(
             graph
                 .edges_directed(idx, Direction::Incoming)
-                .filter(move |e| !directed && e.weight().meets_detail(min_strength))
+                .filter(move |e| {
+                    !directed
+                        && e.weight().meets_detail(min_strength)
+                        && !below_semantic_floor(e.weight(), semantic_floor)
+                })
                 .map(|e| (e.source(), e.id())),
         )
+}
+
+/// Opt-in hard floor (`ASTRIA_QUERY_MIN_SEMANTIC_CONFIDENCE`, 0.0 = off):
+/// SEMANTIC edges whose calibrated keep-probability falls below the floor
+/// are excluded from traversal entirely. Structural and inferred edges are
+/// never touched — this is how graph consumers act on the judge's
+/// existence verdicts at query time.
+fn below_semantic_floor(edge: &EdgeData, floor: f64) -> bool {
+    floor > 0.0 && edge.confidence.eq_ignore_ascii_case("SEMANTIC") && edge.strength() < floor
 }
 
 /// The strongest edge connecting `a` and `b`, in either direction.
@@ -339,6 +366,19 @@ fn nearest_labels(loaded: &LoadedGraph, query: &str, k: usize) -> Vec<String> {
 
 /// Strip a simple English plural suffix so "communities" matches
 /// "community" and "users" matches "user". Cheap morphology for code terms.
+/// Per-query scoring debug (`ASTRIA_QUERY_DEBUG_SCORES=1`): dumps the top
+/// scored nodes with their match components plus the final seed list to
+/// stderr, so a retrieval miss is diagnosable from one query run.
+fn debug_scores_enabled() -> bool {
+    std::env::var("ASTRIA_QUERY_DEBUG_SCORES")
+        .ok()
+        .is_some_and(|v| matches!(v.trim(), "1" | "true" | "on"))
+}
+
+fn truncate_label(s: &str) -> String {
+    s.chars().take(34).collect()
+}
+
 fn stem(token: &str) -> &str {
     if token.len() > 4 && token.ends_with("ies") {
         &token[..token.len() - 3] // "communities" -> "communit" (matches "community" prefix-wise)
@@ -491,6 +531,29 @@ fn is_doc_type(file_type: &str) -> bool {
     matches!(file_type, "document" | "reference" | "paper" | "chunk")
 }
 
+/// Node types written only by semantic (LLM) extraction — concepts, entities,
+/// patterns, and modules derived from prose. Structural graphs never contain
+/// them, so priors and quotas keyed on these types leave plain pipelines
+/// untouched.
+fn is_semantic_type(file_type: &str) -> bool {
+    matches!(file_type, "concept" | "entity" | "pattern" | "module")
+}
+
+/// Share of prose-like nodes: documents plus semantic-derived summaries. On
+/// an LLM-enriched docs-only corpus the concept/code nodes the extractor adds
+/// would otherwise push the document share under the doc-only threshold and
+/// strand the corpus with two prose seeds.
+fn prose_share(loaded: &LoadedGraph) -> f64 {
+    let prose = loaded
+        .graph
+        .node_indices()
+        .filter(|&i| {
+            is_doc_type(&loaded.graph[i].file_type) || is_semantic_type(&loaded.graph[i].file_type)
+        })
+        .count();
+    prose as f64 / loaded.graph.node_count().max(1) as f64
+}
+
 fn wants_docs(terms: &[String]) -> bool {
     terms.iter().flat_map(|t| tokenize(t)).any(|t| {
         matches!(
@@ -509,14 +572,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         .node_indices()
         .map(|idx| loaded.graph[idx].label.to_lowercase())
         .collect();
-    let doc_share = {
-        let docs = loaded
-            .graph
-            .node_indices()
-            .filter(|&i| is_doc_type(&loaded.graph[i].file_type))
-            .count();
-        docs as f64 / loaded.graph.node_count().max(1) as f64
-    };
+    let doc_share = prose_share(loaded);
     let label_components: Vec<Vec<String>> = loaded
         .graph
         .node_indices()
@@ -575,6 +631,26 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
     }
     let idf_weight = |term: &str| -> f64 { idf.get(term).copied().unwrap_or(1.0) };
 
+    // Salient-term coverage: the query's highest-IDF terms are the ones
+    // that identify the answer. A long natural-language description
+    // (RepoQA-style numbered specifications, issue bodies) otherwise lets
+    // nodes that match many WEAK terms ("line", "code", "output") outrank
+    // the node matching the few strong ones — the unnormalized term sum
+    // buried the true function outside the seed set. Nodes are scaled by
+    // how much of the salient set they touch: full salient coverage keeps
+    // the score, zero salient evidence is damped to 60%.
+    let mut salient_terms: Vec<&String> = effective.clone();
+    salient_terms.sort_by(|a, b| {
+        idf_weight(b)
+            .partial_cmp(&idf_weight(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.cmp(b))
+    });
+    let salient_k = (((effective.len() + 3) / 4).max(1)).min(3);
+    salient_terms.truncate(salient_k);
+    let salient_set: std::collections::HashSet<&str> =
+        salient_terms.iter().map(|t| t.as_str()).collect();
+
     // Entry-point intent: detect once, pay for the degree maps only then.
     let joined = terms.join(" ").to_lowercase();
     let wants_tests = terms.iter().flat_map(|t| tokenize(t)).any(|t| {
@@ -604,6 +680,16 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
 
     let mut scored: Vec<(f64, NodeIndex)> = Vec::new();
     let mut entry_candidates = HashSet::new();
+    let debug_scores = debug_scores_enabled();
+    // Per-node (matched_terms, salient_hits) in node-index order, for the dump.
+    let mut debug_rows: Vec<(usize, usize)> = Vec::new();
+    let effective_terms_count = terms
+        .iter()
+        .filter(|t| {
+            let t = t.trim();
+            t.len() > 2 && !STOPWORDS.contains(&t.to_lowercase().as_str())
+        })
+        .count();
     for (i, idx) in loaded.graph.node_indices().enumerate() {
         let node = &loaded.graph[idx];
         // Code answers rank above documentation and speculative stubs on
@@ -644,6 +730,18 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             } else {
                 0.55
             }
+        } else if is_semantic_type(&node.file_type) {
+            // LLM-derived concept/summary nodes keyword-match prose questions
+            // as strongly as the documents they were extracted from, and at
+            // the code prior (1.0) they crowd both code symbols and the
+            // primary document that actually holds the answer. Rank them
+            // just under primary documents on doc-intent questions, under
+            // code otherwise.
+            if wants_docs {
+                1.1
+            } else {
+                0.55
+            }
         } else if node.file_type == "stub" {
             0.4
         } else {
@@ -676,6 +774,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             .unwrap_or_default();
         let mut score = 0.0;
         let mut matched_terms = 0usize;
+        let mut salient_hits = 0usize;
         for term in terms {
             let term = term.trim();
             if term.len() <= 2 {
@@ -734,6 +833,9 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             };
             if label_score + doc_score + path_score + id_score + fuzzy_score > 0.0 {
                 matched_terms += 1;
+                if salient_set.contains(term) {
+                    salient_hits += 1;
+                }
             }
             score += (label_score.max(doc_score) + id_score + path_score + fuzzy_score)
                 * idf_weight(term);
@@ -741,15 +843,14 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         // Questions are multi-term: a node covering most of them outranks a
         // lexically lucky single-term match ("paint" in a speaker line vs
         // the chunk holding melanie + painted + sunrise).
-        let effective_terms = terms
-            .iter()
-            .filter(|t| {
-                let t = t.trim();
-                t.len() > 2 && !STOPWORDS.contains(&t.to_lowercase().as_str())
-            })
-            .count();
-        if effective_terms > 0 {
-            score *= 0.8 + 0.2 * (matched_terms as f64 / effective_terms as f64);
+        if effective_terms_count > 0 {
+            score *= 0.8 + 0.2 * (matched_terms as f64 / effective_terms_count as f64);
+        }
+        // Salient-term coverage scaling (see the salient_terms pre-pass):
+        // matches on the query's rarest terms are worth structurally more
+        // than matches on its common ones.
+        if !salient_terms.is_empty() {
+            score *= 0.6 + 0.4 * (salient_hits as f64 / salient_terms.len() as f64);
         }
         // Entry-point intent: a file that imports many modules and is
         // imported by none is the program's front door, whatever it is
@@ -765,6 +866,9 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         }
 if score > 0.0 || entry_candidates.contains(&idx) {
                 scored.push(((score + phrase_bonus) * prior, idx));
+            }
+            if debug_scores {
+                debug_rows.push((matched_terms, salient_hits));
             }
     }
     // Explicit entry intent gives import roots precedence over lexical
@@ -788,6 +892,31 @@ if score > 0.0 || entry_candidates.contains(&idx) {
             .then_with(|| loaded.graph[a.1].label.cmp(&loaded.graph[b.1].label))
             .then_with(|| loaded.graph[a.1].id.cmp(&loaded.graph[b.1].id))
     });
+    if debug_scores {
+        eprintln!(
+            "-- score dump: top {} of {} scored (matched/effective, salient/k) --",
+            scored.len().min(15),
+            scored.len()
+        );
+        for (rank, (score, idx)) in scored.iter().take(15).enumerate() {
+            let n = &loaded.graph[*idx];
+            let (matched, salient) = debug_rows
+                .get(idx.index())
+                .copied()
+                .unwrap_or((0, 0));
+            eprintln!(
+                "  #{:<2} score={:<9.3} matched={:<3}/{} salient={:<2}/{} {} [{}]",
+                rank + 1,
+                score,
+                matched,
+                effective_terms_count,
+                salient,
+                salient_terms.len(),
+                truncate_label(&n.label),
+                truncate_label(&n.id),
+            );
+        }
+    }
     scored
 }
 
@@ -800,6 +929,7 @@ fn bfs_subgraph(
     max_depth: usize,
     directed: bool,
     min_strength: f64,
+    semantic_floor: f64,
 ) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = start_nodes.iter().copied().collect();
     let mut frontier: Vec<NodeIndex> = start_nodes.to_vec();
@@ -809,9 +939,13 @@ fn bfs_subgraph(
     for depth in 0..max_depth {
         let mut next_frontier = Vec::new();
         for &node in &frontier {
-            for (neighbor, edge_id) in
-                iter_neighbors_filtered(&loaded.graph, node, directed, min_strength)
-            {
+            for (neighbor, edge_id) in iter_neighbors_filtered(
+                &loaded.graph,
+                node,
+                directed,
+                min_strength,
+                semantic_floor,
+            ) {
                 if !visited.contains(&neighbor) {
                     visited.insert(neighbor);
                     distance.insert(neighbor, depth as u32 + 1);
@@ -834,6 +968,7 @@ fn dfs_subgraph(
     max_depth: usize,
     directed: bool,
     min_strength: f64,
+    semantic_floor: f64,
 ) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = HashSet::new();
     let mut edges_seen: Vec<EdgeIndex> = Vec::new();
@@ -848,7 +983,7 @@ fn dfs_subgraph(
             continue;
         }
         for (neighbor, edge_id) in
-            iter_neighbors_filtered(&loaded.graph, node, directed, min_strength)
+            iter_neighbors_filtered(&loaded.graph, node, directed, min_strength, semantic_floor)
         {
             if !visited.contains(&neighbor) {
                 stack.push((neighbor, depth + 1));
@@ -877,6 +1012,7 @@ fn subgraph_to_text(
     edges_seen: &[EdgeIndex],
     relevance: &HashMap<NodeIndex, f64>,
     distance: &HashMap<NodeIndex, u32>,
+    reach_strength: &HashMap<NodeIndex, f64>,
     prefer_files: bool,
     token_budget: i64,
     skip_records: usize,
@@ -894,6 +1030,14 @@ fn subgraph_to_text(
         let sb = relevance.get(&b).copied().unwrap_or(0.0);
         sb.partial_cmp(&sa)
             .unwrap_or(std::cmp::Ordering::Equal)
+            // Weakly-reached nodes (best touching edge below the semantic
+            // floor) come after strongly-reached ones at equal relevance.
+            // Plain graphs hold no such nodes: their edges sit at 0.7+.
+            .then_with(|| {
+                let wa = reach_strength.get(&a).copied().unwrap_or(1.0);
+                let wb = reach_strength.get(&b).copied().unwrap_or(1.0);
+                (wa < SEMANTIC_WEAK_FLOOR).cmp(&(wb < SEMANTIC_WEAK_FLOOR))
+            })
             .then_with(|| {
                 distance
                     .get(&a)
@@ -988,9 +1132,13 @@ fn subgraph_to_text(
                 Some(l) => format!(" @{}:{}", loaded.display_path(&edge.source_file), l),
                 None => String::new(),
             };
+            let score = edge
+                .confidence_score
+                .map(|s| format!(":{s:.2}"))
+                .unwrap_or_default();
             let line = format!(
-                "EDGE {} --{} [{}]--> {}{}\n",
-                src.label, edge.relation, edge.confidence, tgt.label, loc
+                "EDGE {} --{} [{}{}]--> {}{}\n",
+                src.label, edge.relation, edge.confidence, score, tgt.label, loc
             );
             edge_records.push(line);
         }
@@ -1079,6 +1227,7 @@ fn shortest_path_bfs(
     end: NodeIndex,
     directed: bool,
     min_strength: f64,
+    semantic_floor: f64,
 ) -> Option<Vec<EdgeIndex>> {
     if start == end {
         return Some(Vec::new());
@@ -1091,7 +1240,7 @@ fn shortest_path_bfs(
 
     while let Some(current) = queue.pop_front() {
         for (neighbor, edge_id) in
-            iter_neighbors_filtered(&loaded.graph, current, directed, min_strength)
+            iter_neighbors_filtered(&loaded.graph, current, directed, min_strength, semantic_floor)
         {
             if visited.contains(&neighbor) {
                 continue;
@@ -1178,10 +1327,19 @@ pub fn query_graph_with_metadata(
         && astria_embed::has_embeddings(db)
         && astria_embed::model_cached()
     {
-        astria_embed::load_embedder()
-            .ok()
-            .and_then(|mut model| astria_embed::semantic_scores(db, &mut model, question).ok())
-            .unwrap_or_default()
+        match astria_embed::load_embedder() {
+            Ok(mut model) => astria_embed::semantic_scores(db, &mut model, question)
+                .unwrap_or_else(|e| {
+                    // Silent empty seeds made --embed look like a no-op; a
+                    // query-side failure must be visible.
+                    eprintln!("warning: embedding seeds unavailable: {e}");
+                    Vec::new()
+                }),
+            Err(e) => {
+                eprintln!("warning: embedding model unavailable: {e}");
+                Vec::new()
+            }
+        }
     } else {
         Vec::new()
     };
@@ -1292,8 +1450,25 @@ fn query_graph_loaded(
 
     let terms: Vec<String> = question.split_whitespace().map(|s| s.to_string()).collect();
     let mut scored = score_nodes(&loaded, &terms);
+    // Opt-in hard floor for SEMANTIC edges; 0.0 keeps every edge (the
+    // historical behavior). Read per query so agents can retune without
+    // a restart.
+    let semantic_floor = std::env::var("ASTRIA_QUERY_MIN_SEMANTIC_CONFIDENCE")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
 
     // Merge semantic candidates: max(token score, rescaled cosine) per node.
+    // Token evidence is snapshotted first so semantic-only candidates (nodes
+    // the embeddings surface but no query term touches) stay identifiable —
+    // they qualify for the seed reservation below.
+    let token_scores: std::collections::HashMap<NodeIndex, f64> =
+        if semantic.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            scored.iter().map(|(s, i)| (*i, *s)).collect()
+        };
     if !semantic.is_empty() {
         let mut by_index: std::collections::HashMap<NodeIndex, f64> =
             scored.iter().map(|(s, i)| (*i, *s)).collect();
@@ -1363,16 +1538,14 @@ fn query_graph_loaded(
     // doc-only graphs (transcript corpora, docs sites with no code) the
     // quota would leave the traversal nearly seedless — there is no code to
     // protect, so the quota opens up to the full seed limit.
-    let doc_node_count = loaded
-        .graph
-        .node_indices()
-        .filter(|&i| is_doc_type(&loaded.graph[i].file_type))
-        .count();
-    let doc_share = doc_node_count as f64 / loaded.graph.node_count().max(1) as f64;
+    let doc_share = prose_share(&loaded);
     let doc_seed_quota = if doc_share > 0.95 { seed_limit } else { 2 };
     let mut doc_seeds = seed_nodes
         .iter()
-        .filter(|&&idx| is_doc_type(&loaded.graph[idx].file_type))
+        .filter(|&&idx| {
+            is_doc_type(&loaded.graph[idx].file_type)
+                || is_semantic_type(&loaded.graph[idx].file_type)
+        })
         .count();
     for &(_, idx) in scored.iter() {
         if seed_nodes.len() == seed_limit {
@@ -1381,7 +1554,9 @@ fn query_graph_loaded(
         if seed_nodes.contains(&idx) {
             continue;
         }
-        if is_doc_type(&loaded.graph[idx].file_type) {
+        if is_doc_type(&loaded.graph[idx].file_type)
+            || is_semantic_type(&loaded.graph[idx].file_type)
+        {
             if doc_seeds >= doc_seed_quota && !wants_docs(&terms) {
                 continue;
             }
@@ -1389,11 +1564,68 @@ fn query_graph_loaded(
         }
         seed_nodes.push(idx);
     }
+    // Semantic-only reservation: embedding recall must be able to start the
+    // traversal when the question shares no vocabulary with the answer —
+    // its advertised purpose ("conceptual questions with zero string
+    // overlap still find their symbols"). Such a node's rescaled cosine
+    // (~0-0.67) never outranks token matches (2+), so without this slot
+    // --embed is inert exactly where it matters. One slot for the best
+    // qualifying node: embedding evidence above the floor, zero token
+    // evidence, not a stub.
+    if !semantic.is_empty() && seed_limit >= 3 {
+        let best = semantic
+            .iter()
+            .filter_map(|(node_id, cosine)| {
+                let &idx = loaded.id_to_idx.get(node_id)?;
+                if seed_nodes.contains(&idx) || loaded.graph[idx].file_type == "stub" {
+                    return None;
+                }
+                if token_scores.get(&idx).copied().unwrap_or(0.0) > 0.0 {
+                    return None;
+                }
+                let score = semantic_seed_score(*cosine);
+                (score >= SEMANTIC_SEED_FLOOR).then_some((score, idx))
+            })
+            .max_by(|a, b| {
+                a.0.partial_cmp(&b.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| b.1.cmp(&a.1))
+            });
+        if let Some((_, idx)) = best {
+            seed_nodes.push(idx);
+        }
+    }
+    if debug_scores_enabled() {
+        let seeds: Vec<String> = seed_nodes
+            .iter()
+            .map(|&idx| truncate_label(&loaded.graph[idx].id))
+            .collect();
+        eprintln!("-- seeds ({}): {:?} --", seed_nodes.len(), seeds);
+    }
     let (visited, edges_seen, distance) = if mode == "dfs" {
-        dfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength)
+        dfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength, semantic_floor)
     } else {
-        bfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength)
+        bfs_subgraph(&loaded, &seed_nodes, depth, directed, min_strength, semantic_floor)
     };
+
+    // Weak-tier detection: a visited node whose strongest touching edge is
+    // below the floor was reached only through low-confidence SEMANTIC
+    // links (structural and inferred edges sit at 0.7+). Such nodes sort
+    // after every strongly-reached node, so budget truncation drops
+    // speculative links first — the judge's calibrated verdicts shaping
+    // what survives the token budget.
+    let mut reach_strength: HashMap<NodeIndex, f64> = HashMap::new();
+    for &edge_id in &edges_seen {
+        if let Some((s, t)) = loaded.graph.edge_endpoints(edge_id) {
+            let st = loaded.graph[edge_id].strength();
+            for n in [s, t] {
+                let entry = reach_strength.entry(n).or_insert(0.0);
+                if st > *entry {
+                    *entry = st;
+                }
+            }
+        }
+    }
 
     let seed_labels: Vec<String> = seed_nodes
         .iter()
@@ -1418,6 +1650,7 @@ fn query_graph_loaded(
         &edges_seen,
         &relevance,
         &distance,
+        &reach_strength,
         prefer_files,
         budget,
         cursor,
@@ -1635,7 +1868,12 @@ pub fn find_shortest_path(
         }
     };
 
-    let path = match shortest_path_bfs(&loaded, src_idx, tgt_idx, directed, min_strength) {
+    let semantic_floor = std::env::var("ASTRIA_QUERY_MIN_SEMANTIC_CONFIDENCE")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let path = match shortest_path_bfs(&loaded, src_idx, tgt_idx, directed, min_strength, semantic_floor) {
         Some(p) => p,
         None => return Ok((false, 0, "No path found.".to_string())),
     };
@@ -1847,6 +2085,7 @@ pub fn explain_with_neighbors(
             relation: edge.map_or("?".to_string(), |e| e.relation.clone()),
             confidence: edge.map_or("?".to_string(), |e| e.confidence.clone()),
             strength: edge.map_or(0.0, |e| e.strength()),
+            confidence_score: edge.and_then(|e| e.confidence_score),
         });
     }
 
@@ -1899,6 +2138,9 @@ pub struct EdgeInfoResult {
     pub relation: String,
     pub confidence: String,
     pub strength: f64,
+    /// The stored numeric score when one exists (Jev keep-probability on
+    /// verified semantic edges); None means the label rank is all there is.
+    pub confidence_score: Option<f64>,
 }
 
 pub struct ExplainResult {
@@ -2776,6 +3018,193 @@ at the lake house');",
     }
 
     #[test]
+    fn salient_rare_terms_beat_many_common_matches() {
+        // RepoQA dilution shape: one node matches the query's rare terms,
+        // a doc-body node weakly matches many common ones. The unnormalized
+        // sum used to bury the rare-matcher; salient coverage restores it.
+        let db = open_db_in_memory().unwrap();
+        let mut diluter_body = String::new();
+        for i in 0..20 {
+            diluter_body
+                .push_str(&format!("Line {} of the general output input list data. ", i % 5 + 1));
+        }
+        db.execute_batch(&format!(
+            "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
+                ('target', 'merge_string_group', 'code', 'src/t.rs', 'Merges zanzibar adjacent fragment groups.'),
+                ('diluter', 'notes', 'document', 'docs/notes.md', '{diluter_body}'),
+                ('f1', 'alpha_one', 'code', 'src/a.rs', NULL),
+                ('f2', 'beta_two', 'code', 'src/b.rs', NULL),
+                ('f3', 'gamma_three', 'code', 'src/g.rs', NULL),
+                ('f4', 'delta_four', 'code', 'src/d.rs', NULL);"
+        ))
+        .unwrap();
+        let g = loaded(&db, "salient");
+        // zanzibar/fragment/adjacent appear only in the target's docstring;
+        // line/output/input/list/data saturate the diluter's body.
+        let terms: Vec<String> = "zanzibar adjacent fragment general output input list data"
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        let scored = score_nodes(&g, &terms);
+        assert!(!scored.is_empty());
+        assert_eq!(
+            scored[0].1,
+            g.id_to_idx["target"],
+            "rare-term matcher must outrank the common-term diluter; got {:?}",
+            g.graph[scored[0].1].label
+        );
+    }
+
+    #[test]
+    fn semantic_only_candidate_reserves_a_seed_slot() {
+        // Zero string overlap: the question matches only the filler nodes;
+        // the target carries embedding evidence (cosine 0.9) that no query
+        // term touches. The reservation must start the traversal there.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
+                ('filler_1', 'delta_one', 'code', 'src/1.rs', NULL),
+                ('filler_2', 'gamma_two', 'code', 'src/2.rs', NULL),
+                ('filler_3', 'four_three', 'code', 'src/3.rs', NULL),
+                ('filler_4', 'delta_five', 'code', 'src/4.rs', NULL),
+                ('filler_5', 'gamma_six', 'code', 'src/5.rs', NULL),
+                ('filler_6', 'four_seven', 'code', 'src/6.rs', NULL),
+                ('target', 'maybe_install_helper', 'code', 'src/h.rs', 'uses an alternative technology for speed');",
+        )
+        .unwrap();
+        let g = loaded(&db, "semseed");
+        let (text, _, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "delta gamma four",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            &[("target".to_string(), 0.9)],
+            false,
+            None,
+        )
+        .unwrap();
+        assert!(
+            text.contains("maybe_install_helper"),
+            "semantic-only candidate must be seeded and traversed; output:\n{text}"
+        );
+    }
+
+    #[test]
+    fn semantic_only_reservation_requires_meaningful_similarity() {
+        // Below the floor (cosine 0.5 rescales to 0), a distant node must
+        // NOT displace token-matched seeds or claim the reserved slot.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
+                ('filler_1', 'delta_one', 'code', 'src/1.rs', NULL),
+                ('filler_2', 'gamma_two', 'code', 'src/2.rs', NULL),
+                ('filler_3', 'four_three', 'code', 'src/3.rs', NULL),
+                ('filler_4', 'delta_five', 'code', 'src/4.rs', NULL),
+                ('filler_5', 'gamma_six', 'code', 'src/5.rs', NULL),
+                ('filler_6', 'four_seven', 'code', 'src/6.rs', NULL),
+                ('target', 'maybe_install_helper', 'code', 'src/h.rs', 'uses an alternative technology for speed');",
+        )
+        .unwrap();
+        let g = loaded(&db, "semseed-floor");
+        let (text, _, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "delta gamma four",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            &[("target".to_string(), 0.5)],
+            false,
+            None,
+        )
+        .unwrap();
+        assert!(
+            !text.contains("maybe_install_helper"),
+            "below-floor semantic candidate must stay out; output:\n{text}"
+        );
+    }
+
+    #[test]
+    fn semantic_floor_blocks_only_weak_semantic_edges() {
+        let db = open_db_in_memory().unwrap();
+        let key = seed(&db);
+        let g = loaded(&db, &key);
+        let start = g.id_to_idx["a"];
+        // seed(): a -EXTRACTED-> b -SEMANTIC(no score)-> c -INFERRED-> d
+        let (visited_open, _, _) = bfs_subgraph(&g, &[start], 3, true, 0.0, 0.0);
+        assert_eq!(visited_open.len(), 4, "floor off: every edge is crossed");
+        let (visited_floored, _, _) = bfs_subgraph(&g, &[start], 3, true, 0.0, 0.8);
+        assert_eq!(
+            visited_floored.len(),
+            2,
+            "floor 0.8: the unscored SEMANTIC edge (label rank 0.6) is blocked, EXTRACTED is not"
+        );
+    }
+
+    #[test]
+    fn weakly_reached_nodes_sort_behind_strongly_reached() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('w', 'Widget', 'code', 'src/w.rs'),
+                ('s', 'Sprocket', 'code', 'src/s.rs');",
+        )
+        .unwrap();
+        let g = loaded(&db, "weaksort");
+        let w = g.id_to_idx["w"];
+        let s = g.id_to_idx["s"];
+        let mut visited = HashSet::new();
+        visited.insert(w);
+        visited.insert(s);
+        let relevance = [(w, 1.0), (s, 1.0)].into_iter().collect();
+        let distance = [(w, 1u32), (s, 1u32)].into_iter().collect();
+        // w's best touching edge is a below-floor SEMANTIC link; s sits on
+        // structural evidence. Equal relevance and distance: w must yield.
+        let reach: HashMap<NodeIndex, f64> = [(w, 0.5), (s, 0.9)].into_iter().collect();
+        let (text, _) = subgraph_to_text(
+            &g,
+            &visited,
+            &[],
+            &relevance,
+            &distance,
+            &reach,
+            false,
+            10_000,
+            0,
+            "",
+        )
+        .unwrap();
+        let s_pos = text.find("Sprocket").unwrap();
+        let w_pos = text.find("Widget").unwrap();
+        assert!(s_pos < w_pos, "weakly-reached node must sort last:
+{text}");
+    }
+
+    #[test]
+    fn below_semantic_floor_unit() {
+        let edge = |conf: &str, score: Option<f64>| EdgeData {
+            relation: "relates_to".into(),
+            confidence: conf.into(),
+            confidence_score: score,
+            source_file: String::new(),
+            source_line: None,
+        };
+        assert!(below_semantic_floor(&edge("SEMANTIC", Some(0.5)), 0.65));
+        assert!(!below_semantic_floor(&edge("SEMANTIC", Some(0.9)), 0.65));
+        assert!(below_semantic_floor(&edge("SEMANTIC", None), 0.65), "unscored falls back to label rank 0.6, below the floor");
+        assert!(!below_semantic_floor(&edge("INFERRED", Some(0.4)), 0.65), "structural edges are never floored");
+        assert!(!below_semantic_floor(&edge("SEMANTIC", Some(0.1)), 0.0), "0.0 disables the floor");
+    }
+
+    #[test]
     fn directed_bfs_follows_edge_direction_only() {
         let db = open_db_in_memory().unwrap();
         let key = seed(&db);
@@ -2787,10 +3216,10 @@ at the lake house');",
         // 'd' as seed and confirm directed traversal does NOT walk
         // imports backwards to 'c'.
         let d = g.id_to_idx["d"];
-        let (visited_fwd, _, _) = bfs_subgraph(&g, &[d], 2, true, 0.0);
+        let (visited_fwd, _, _) = bfs_subgraph(&g, &[d], 2, true, 0.0, 0.0);
         assert!(!visited_fwd.contains(&g.id_to_idx["c"]));
 
-        let (visited_und, _, _) = bfs_subgraph(&g, &[d], 2, false, 0.0);
+        let (visited_und, _, _) = bfs_subgraph(&g, &[d], 2, false, 0.0, 0.0);
         assert!(visited_und.contains(&g.id_to_idx["c"]));
 
         let _ = a;

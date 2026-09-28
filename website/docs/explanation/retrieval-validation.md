@@ -29,6 +29,19 @@ Exact-symbol top-five recall is weaker than file recall, and the September 28 ra
 
 The validation surface also grew: `scripts/bench/paired/*.heldout-v2.jsonl` adds 14 separately authored cases (5 Click, 5 Express, 4 ripgrep) grounded in the pinned corpora with line-exact definitions. On the current runtime they retrieve at 5/5, 5/5, and 2/4 files respectively (the two ripgrep misses are lexical hijacks by `command`-helper chunks), with 11/13 v2 definitions inside the top five. These cases were exercised during verification and are not untouched held-out evidence.
 
+## Budget-response curve (September 28)
+
+The paired runner's budgets are configurable (`budgets` array in the config; default 1,000/4,000). A four-point curve (250/500/1000/2000) ran over the same seven corpus/split sets as the frozen runs — 50 questions × 4 budgets × 2 tools, same pins, same tokenizer, same clipping rules (`bench-work/budget-curve-20260928`). Aggregated across all sets:
+
+| Budget (tokens) | astria MRR | astria recall@5 | Graphify MRR | Graphify recall@5 | Graphify raw over budget |
+|---:|---:|---:|---:|---:|---:|
+| 250 | 0.680 | 74% | 0.522 | 66% | 48/50 |
+| 500 | 0.717 | 84% | 0.530 | 69% | 48/50 |
+| 1,000 | 0.722 | 85% | 0.531 | 69% | 41/50 |
+| 2,000 | 0.725 | 85% | 0.531 | 69% | 11/50 |
+
+The headline: **astria's 250-token answers outscore Graphify's 2,000-token answers on every metric** (0.680 vs 0.531 MRR; 74% vs 69% recall@5) — an 8× budget advantage at equal quality, with the curve nearly flat above 500 tokens (MRR 0.717 → 0.725). Astria stayed inside the requested budget on all 200 responses; Graphify exceeded the 250- and 500-token budgets on 48 of 50 raw responses at each budget (its counted answers average ~1.5× the request at 250 and ~1.2× at 500), so under a hard token constraint Graphify cannot actually deliver what it retrieves. Structural only, one observation per condition — a compliance-and-cost result, not a statistical claim. The reserved goldens were not used in this run.
+
 ## Blind answer-correctness judging (TypeSafe, September 28)
 
 The blind judging blocked since the 1.0.4 comparison — every OpenRouter judge call failed on an exhausted key — ran with a TypeSafe System One judge (`jev-latest`, score-style graded verdicts) via `scripts/bench/quality/blind-judge.mjs`. Both tools answered the same 35 rubric-grounded questions on the self corpus, and the judge graded each answer against the golden rubric without knowing which tool produced it:
@@ -39,6 +52,10 @@ The blind judging blocked since the 1.0.4 comparison — every OpenRouter judge 
 | Graphify | 77.1% | 2.9% | 20% | 1.61 | 0.852 |
 
 This is the first generated-answer-correctness measurement in the project: retrieval precision (100% vs 77% judged correct) tracks the deterministic file/symbol results above. Single judge, single run — not a statistical claim.
+
+**Independent-grader confirmation (OpenRouter, September 28).** The same 35 answer pairs were re-judged by the organizationally external promptfoo/OpenRouter grader (`openai/gpt-4o-mini` via `OPENROUTER_API_KEY`, reset that morning; symmetric 4,000-token budgets; run cost ≈ $0.12, 772k judging tokens — `scripts/bench/quality/out/promptfoo-results-20260928.json`). Verdicts: astria 77.1% pass (27/35), Graphify 65.7% (23/35), 0 errors. The external judge is stricter on both tools than the TypeSafe judge — it fails six questions on *both* sides (community detection, incremental change detection, tree-sitter language coverage, blast-radius, URL-ingestion safety, file-type detection) — but the ordering agrees with every other measurement: astria leads on answer quality under both graders.
+
+Two boundaries on this result. The 35 questions are the self-authored golden set on astria's own repository; they measure answer quality on one corpus, not general correctness. And each grading track is a single judge with a single run — agreement across two independent judges strengthens the ordering but remains a point estimate, not a statistical claim.
 
 ## Performance tradeoffs
 

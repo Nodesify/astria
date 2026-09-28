@@ -1,5 +1,5 @@
 // One-shot benchmark snapshot: original graphify vs astria on the
-// same corpus (safishamsi/graphify @91f4d12), same machine (the CI runner).
+// same corpus (safishamsi/graphify v0.9.69 @4139885), same machine (the CI runner).
 // Writes website/src/data/benchmarks-snapshot.json; the workflow commits it.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

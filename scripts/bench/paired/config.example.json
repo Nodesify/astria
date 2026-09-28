@@ -30,6 +30,27 @@
       "split": "additional-validation-v1"
     },
     {
+      "name": "click-heldout-v2",
+      "source": "bench-work/paired-20260927-162610/click-source",
+      "commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+      "golden": "scripts/bench/paired/click.heldout-v2.jsonl",
+      "split": "heldout-v2"
+    },
+    {
+      "name": "click-doc-intent",
+      "source": "bench-work/paired-20260927-162610/click-source",
+      "commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+      "golden": "scripts/bench/paired/click.doc-intent-v1.jsonl",
+      "split": "reserved-doc-intent-v1"
+    },
+    {
+      "name": "click-reserved",
+      "source": "bench-work/paired-20260927-162610/click-source",
+      "commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+      "golden": "scripts/bench/paired/click.reserved-v1.jsonl",
+      "split": "reserved-v1"
+    },
+    {
       "name": "express",
       "source": "bench-work/paired-20260927-162610/express-source",
       "commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",

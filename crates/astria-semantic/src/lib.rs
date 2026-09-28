@@ -899,7 +899,15 @@ impl SemanticBackend for JevJudgeBackend {
         {
             return Ok(extraction);
         }
-        match self.client.verify(&extraction, content, file_type) {
+        // Edge existence is the only judgment that needs the file text;
+        // an edgeless extraction re-chooses node types from labels and
+        // summaries alone, so the (potentially large) content never ships.
+        let content_ref = if extraction.edges.is_empty() {
+            None
+        } else {
+            Some(content)
+        };
+        match self.client.verify(&extraction, content_ref, file_type) {
             Ok(verified) => Ok(verified),
             Err(e) => {
                 // The engine already produced an extraction; a failed
@@ -922,7 +930,7 @@ impl SemanticBackend for JevJudgeBackend {
         {
             return Ok(extraction);
         }
-        match self.client.verify(&extraction, "", media_type) {
+        match self.client.verify(&extraction, None, media_type) {
             Ok(verified) => Ok(verified),
             Err(e) => {
                 eprintln!(

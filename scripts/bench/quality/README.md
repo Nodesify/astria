@@ -11,7 +11,7 @@ Schema v2 scores exact normalized, case-sensitive corpus-relative file paths. `h
 
 Reports include CLI version, checkout commit and dirty state, native and entrypoint SHA-256 hashes for local builds, corpus commit and file count, golden SHA-256, runtime, query budget and depth. Local runs require `dist/astria.node` and reject a package-root `astria.node`, which otherwise takes loader precedence. Missing or unloadable native builds fail instead of using the installed platform package. The source commit identifies the harness checkout; a local built artifact must come from that checkout. CI builds it in the same job. Installed binaries may have different source provenance.
 
-Historical v1 scores called any-file-or-symbol hits ìrecallî and omitted failures. They cannot be compared directly to schema v2. The existing snapshot has not been remeasured by this change.
+Historical v1 scores called any-file-or-symbol hits ‚Äúrecall‚Äù and omitted failures. They cannot be compared directly to schema v2. The existing snapshot has not been remeasured by this change.
 
 ## External repositories and lexical baseline
 
@@ -29,3 +29,14 @@ Each corpus runs the same questions with requested budgets of 1000 and 4000 toke
 Token cost counts delivered retrieval context, not filesystem bytes scanned, graph construction, model reasoning, or a complete agent task. The baseline is deterministic, not a claim about expert iterative search. Full-corpus/query ratios are a separate size diagnostic and do not measure savings against targeted search.
 
 `.github/workflows/quality.yml` gates proposed changes using the local native build and a 50% self-corpus recall@5 floor. External runs remain explicit opt-in; no external measurements are checked in yet. Blind promptfoo judging remains optional under `promptfoo/` and is separate from deterministic retrieval metrics.
+
+## Blind answer-correctness judging
+
+`blind-judge.mjs` grades generated answers rather than file rankings. Both tools answer the same golden questions against their own corpus graphs at the same 4,000-token budget; a TypeSafe System One judge (`jev-latest`) scores each answer against the golden rubric (FAIL / PARTIAL / PASS) without knowing which tool produced it, after both answers are truncated to the same character limit.
+
+```sh
+TYPESAFE_API_KEY=... node scripts/bench/quality/blind-judge.mjs [--out scripts/bench/quality/out/blind-judge-results.json]
+```
+
+Requires `TYPESAFE_API_KEY` (model override via `TYPESAFE_MODEL`, default `jev-latest`). The judge is blind to tool identity but not organizationally independent. The same answer pairs were also graded on September 28 by the external promptfoo/OpenRouter judge (`gpt-4o-mini`, ~$0.12): astria 77.1% pass, Graphify 65.7% - stricter on both tools, same ordering. Verdicts land in `quality/out` and are not published automatically. The September 28 self-corpus run graded astria answers 100% PASS against Graphify 77.1% PASS / 20% FAIL (mean 1.92 vs 1.61 of 2) - single judge, single run, not a statistical claim.
+
