@@ -434,6 +434,30 @@ fn normalized_identifier(text: &str) -> String {
     tokenize(text).concat()
 }
 
+/// True when `term` is a qualified name that matches the node id's token
+/// tail or a scope token ("BaseCommand.get_usage" matches
+/// `src_click_core_basecommand::get_usage` via its [basecommand, get,
+/// usage] suffix; "BaseCommand" matches the basecommand scope token).
+/// Same-name symbols share one bare label, so the qualified scope in the
+/// id is the only lexical place the class lives — and the seed reservation
+/// must honor it or the label tie hands the slot to a same-name stranger.
+fn qualified_scope_match(term: &str, id: &str) -> bool {
+    let want = normalized_identifier(term);
+    if want.is_empty() {
+        return false;
+    }
+    let tokens = tokenize(id);
+    if tokens.iter().any(|t| *t == want) {
+        return true;
+    }
+    for start in 0..tokens.len() {
+        if tokens[start..].concat() == want {
+            return true;
+        }
+    }
+    false
+}
+
 /// Reservation applies to written identifiers, not ordinary prose terms.
 fn is_explicit_identifier(term: &str) -> bool {
     let quoted = term.starts_with(['`', '\"', '\'']);
@@ -514,6 +538,14 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
                 .unwrap_or_default()
         })
         .collect();
+    // Qualified ids participate in IDF like labels and bodies: id tokens
+    // repeat across a repo ("src", "core", "tests") and must not act as
+    // rare discriminators.
+    let id_components: Vec<Vec<String>> = loaded
+        .graph
+        .node_indices()
+        .map(|idx| tokenize(&loaded.graph[idx].id))
+        .collect();
     let mut idf: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
     let mut effective: Vec<&String> = Vec::new();
     for term in terms {
@@ -527,10 +559,11 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         let parts = tokenize(term);
         let hits = label_components
             .iter()
-            .zip(doc_components.iter())
-            .filter(|(label, doc)| {
+            .zip(doc_components.iter().zip(id_components.iter()))
+            .filter(|(label, (doc, id))| {
                 component_coverage(&parts, label) == 1.0
                     || component_coverage(&parts, doc) == 1.0
+                    || component_coverage(&parts, id) == 1.0
             })
             .count();
         let w = if hits == 0 {
@@ -676,6 +709,13 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             };
             let doc_coverage = component_coverage(&term_tokens, &doc_tokens);
             let path_coverage = component_coverage(&term_tokens, &file_tokens);
+            // A qualified question term ("BaseCommand.get_usage") matches a
+            // node's scope-qualified id even though every same-name symbol
+            // shares one bare label ("get_usage()"); without id evidence the
+            // tie falls to degree and a same-name symbol from the wrong
+            // class wins the answer slot.
+            let id_coverage = component_coverage(&term_tokens, &id_components[i]);
+            let id_score = id_coverage * id_coverage;
             // A chunk's body is its content: body evidence there scores at
             // label parity, so label luck (a speaker name in the first line)
             // cannot outrank the chunk that actually answers the question.
@@ -692,10 +732,11 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             } else {
                 0.0
             };
-            if label_score + doc_score + path_score + fuzzy_score > 0.0 {
+            if label_score + doc_score + path_score + id_score + fuzzy_score > 0.0 {
                 matched_terms += 1;
             }
-            score += (label_score.max(doc_score) + path_score + fuzzy_score) * idf_weight(term);
+            score += (label_score.max(doc_score) + id_score + path_score + fuzzy_score)
+                * idf_weight(term);
         }
         // Questions are multi-term: a node covering most of them outranks a
         // lexically lucky single-term match ("paint" in a speaker line vs
@@ -1309,6 +1350,7 @@ fn query_graph_loaded(
                     .replace('\\', "/")
                     .split('/')
                     .any(|segment| normalized_identifier(segment) == normalized_identifier(term))
+                || qualified_scope_match(term, &node.id)
         }) {
             if !seed_nodes.contains(&idx) {
                 seed_nodes.push(idx);
@@ -3070,5 +3112,33 @@ at the lake house');",
         assert!(small_shown < shown1, "tiny budget shows fewer files");
         assert!(small.contains("truncated"), "truncation is declared");
         assert!(small.contains("Hub"), "the top-ranked file always fits");
+    }
+}
+
+#[cfg(test)]
+mod scope_match {
+    use super::*;
+    #[test]
+    fn qualified_names_match_id_scope_tokens_and_tails() {
+        // qualified name -> scope slug + method tail
+        assert!(qualified_scope_match(
+            "BaseCommand.get_usage",
+            "src_click_core_basecommand::get_usage"
+        ));
+        // same-name symbol from the wrong class must not match
+        assert!(!qualified_scope_match(
+            "BaseCommand.get_usage",
+            "src_click_core_command::get_usage"
+        ));
+        // bare class name matches its scope token
+        assert!(qualified_scope_match(
+            "BaseCommand",
+            "src_click_core_basecommand::invoke"
+        ));
+        // prose must never match
+        assert!(!qualified_scope_match(
+            "how the usage works",
+            "src_click_core_basecommand::get_usage"
+        ));
     }
 }

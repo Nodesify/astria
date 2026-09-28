@@ -24,6 +24,12 @@ this file is the per-version summary.
 - The IDF pre-pass now counts document bodies as well as labels, so terms that are common in bodies but rare in first lines ("group", "friends" in transcripts) stop acting as near-max discriminators, and rare proper nouns carry the ranking.
 - Measured on the full LoCoMo set (1,977 questions, structural, no embeddings): recall@1 63.5% → 66.1%, recall@3 79.3% → 80.7%, MRR 0.717 → 0.736, with recall@5/10 at 85.0%. The 35-question code self-check holds recall@5 at 82.9% with MRR 0.636 → 0.659.
 
+### Qualified-name retrieval and the first blind answer-correctness run
+- Question terms now score against each node's scope-qualified id (`BaseCommand.get_usage` reaches `src_click_core_basecommand::get_usage` through the id even though every same-name symbol shares one bare label), and id tokens join the IDF pre-pass so ubiquitous scope words ("src", "core") cannot act as rare discriminators.
+- The seed reservation honors qualified names too: an explicitly named qualified symbol reserves its node a traversal seed instead of losing the slot to a label-tie stranger. Click's additional validation went from 0% to 2/2 exact definitions surfaced, additional ripgrep from 25% to 3/4, and the self code set's MRR from 0.618 to 0.687 at unchanged file recall; LoCoMo is unchanged.
+- Blind answer-correctness judging finally ran (TypeSafe System One judge, `scripts/bench/quality/blind-judge.mjs`): both tools answered the same 35 rubric-grounded questions, graded without tool identity — astria 100% PASS, Graphify 77.1% PASS / 20% FAIL. First generated-answer-correctness measurement in the project.
+- Held-out evidence grew: `scripts/bench/paired/*.heldout-v2.jsonl` adds 14 separately authored, line-exact grounded cases (5 Click, 5 Express, 4 ripgrep); current runtime retrieves 5/5, 5/5, 2/4 files and 11/13 v2 definitions in the top five.
+
 ## [1.0.6] — 2026-09-27
 
 ### Chunked document retrieval
