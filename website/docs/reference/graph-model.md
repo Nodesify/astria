@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Graph model
-description: What the graph contains — node types, relation types, provenance (EXTRACTED / INFERRED / AMBIGUOUS), confidence scores, hyperedges, and learned edges.
+description: What the graph contains — node types, relation types, provenance (EXTRACTED / INFERRED / SEMANTIC / AMBIGUOUS), confidence scores, hyperedges, and learned edges.
 keywords: [graph model, nodes, edges, relations, provenance, confidence, hyperedges, learned edges]
 ---
 
@@ -48,15 +48,16 @@ Every node carries: a stable `id` (deterministic from the file path and symbol �
 
 ## Provenance and confidence
 
-Every edge is labeled with one of three provenance values, plus a numeric `confidence_score`:
+Every edge is labeled with one of four provenance values, plus a numeric `confidence_score`:
 
 - **EXTRACTED** — found directly in the source (AST match, manifest parse, SCIP index). Declared fact.
-- **INFERRED** — deduced: embeddings, learned edges, global-graph type matching.
+- **INFERRED** — deduced: embeddings, learned edges, hyperedges, global-graph type matching.
+- **SEMANTIC** — produced by LLM enrichment: concept nodes and their edges extracted by the semantic backend, with relations validated against a fixed allowlist. Retrieval ranks it between INFERRED and AMBIGUOUS when no numeric score is present.
 - **AMBIGUOUS** — plausible but unconfirmed (e.g. a name match that could collide).
 
 You can always tell what was found versus deduced. High-fidelity traversals (`query --detail high`, `path --detail high`, `map --detail high`, MCP `repo_map`/`query_graph` fidelity tiers) keep only declared facts. Every `EDGE` line in query output is anchored with `@file:line` and every `NODE` with `src=file:line`.
 
-Semantic edges are `AMBIGUOUS` with a null score by default; under the [Jev judge layer](../guides/semantic-enrichment#jev-judge-layer) they carry the judge's calibrated existence probability (0–1) in `confidence_score`, and edges the judge rejects are dropped instead of published.
+Semantic edges carry the `SEMANTIC` provenance with a null score by default; under the [Jev judge layer](../guides/semantic-enrichment#jev-judge-layer) they gain the judge's calibrated existence probability (0–1) in `confidence_score`, and edges the judge rejects are dropped instead of published.
 
 ## Hyperedges
 

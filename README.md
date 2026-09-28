@@ -29,7 +29,7 @@ Code definitions retain their scoped identities during deduplication. Extraction
 Three things a folder full of files can't give you:
 
 1. **Structure that survives the session** — hub files, god nodes, communities, and the blast radius of any change, stored in SQLite and refreshed incrementally as code changes.
-2. **An honest audit trail** — every edge is labeled EXTRACTED / INFERRED / AMBIGUOUS with a numeric confidence score. You always know what was found in the source versus deduced, and `--detail high` filters to only declared facts ([graph model](https://nodesify.github.io/astria/docs/reference/graph-model)).
+2. **An honest audit trail** — every edge is labeled EXTRACTED / INFERRED / SEMANTIC / AMBIGUOUS with a numeric confidence score. You always know what was found in the source versus deduced versus LLM-enriched, and `--detail high` filters to only declared facts ([graph model](https://nodesify.github.io/astria/docs/reference/graph-model)).
 3. **Answers for agents and humans** — query it from the CLI, from any AI agent via MCP, or just read the exported markdown wiki with plain file links.
 
 [Worked examples with honest reviews](worked/) — the tool run on itself, including what the graph got *wrong* — plus a [head-to-head benchmark](worked/head-to-head/) against the Python Graphify project that inspired it, run on the same corpus. The full measurement stack — shared-tokenizer token parity, a golden-QA retrieval-quality harness (recall@k / MRR), blind LLM judging, and a LoCoMo memory adapter — lives in [`scripts/bench/`](scripts/bench/).
