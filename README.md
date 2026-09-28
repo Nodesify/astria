@@ -97,7 +97,6 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 
 See the [1.0.6 changelog](CHANGELOG.md) for behavior, measurements, and limitations.
 
->>>>>>> origin/main
 ## What's new in 1.0.5
 
 - **More complete code retrieval** — preserve scoped definitions, extract assigned JavaScript/TypeScript functions, prefer concrete Python implementations over overloads, and rank complete identifiers. Queries now enforce exact text budgets; restart pagination after upgrading.
@@ -145,7 +144,7 @@ packages/
   astria-cli/       Node.js CLI (commander.js)
 ```
 
-Pipeline: `detect() → extract() → enrich_with_semantics() → build() → dedup_nodes() → cluster() → analyze() → report()`
+Pipeline: `detect() → extract() → enrich_with_semantics() → build() → dedup_nodes() → embed() (optional --embed) → cluster() → analyze() → report()`
 
 Pipeline stages separate extraction, persistence, and derived outputs. Semantic enrichment requires explicit `--backend` or `ASTRIA_LLM_BACKEND` selection; credentials alone do not activate it. SQLite is the persistence layer (extraction cache, file manifest, graph storage, pipeline runs, query history). petgraph provides in-memory algorithms (BFS/DFS, label propagation, shortest path).
 

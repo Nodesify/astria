@@ -22,7 +22,7 @@ The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 2.  **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Uses 25 registered language configurations; discovery and parser selection share `astria-core/src/languages.rs`, with AST rules in `src/langs/`.
 3.  **enrich_with_semantics()** (`astria-semantic`, optional): When `--backend` or `ASTRIA_LLM_BACKEND` explicitly selects a backend, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results. With `--judge jev`, a TypeSafe System One judge layer wraps the engine: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking.
 4.  **build()** (`astria-build`): Publishes extracted nodes and edges into SQLite. The extraction reference pass reconciles cross-file references before publication; semantic entity deduplication runs as a derived pass. Code and test definitions, packages, rationale nodes and file identities are excluded from fuzzy merging: identical method names in different scopes remain separate definitions.
-5.  **embed()** (`astria-embed`, optional `--embed`): Computes local node embeddings (fastembed/ONNX, no API key), adds `similar_to` edges, and triggers a community refresh so semantic similarity consolidates clusters.
+5.  **embed()** (`astria-embed`, optional `--embed`): Computes local node embeddings (fastembed/ONNX, no API key) and adds `similar_to` edges ahead of the cluster() stage, so community detection consumes semantic similarity.
 6.  **cluster()** (`astria-cluster`): Performs community detection using the deterministic label propagation algorithm (via `petgraph`) and updates the `community` attribute on nodes.
 7.  **analyze()** (`astria-analyze`): Analyzes the graph to find "god nodes" (call stubs excluded), surprising cross-community connections, blast radius, and generates suggested questions.
 8.  **report()** (`astria-report`): Generates a plain-language `graph_report.md` summarizing the graph's structure and insights.
@@ -63,16 +63,9 @@ CLI and MCP queries use the same hybrid retrieval path. Each request loads a fre
 
 ### SQLite Schema
 
-The graph is stored in `.astria/db.sqlite` with the following tables:
+The graph is stored in `.astria/db.sqlite` with the tables `nodes`, `edges`, `hyperedges`, `communities`, `file_manifest`, `extraction_cache`, `pipeline_runs`, `query_history`, `node_embeddings` (populated by `--embed` builds), `query_pairs`, and `_meta`.
 
-*   `nodes`: `id`, `label`, `file_type`, `source_file`, `source_line`, `docstring`, `community`.
-*   `edges`: `source`, `target`, `relation`, `confidence`, `confidence_score`, `source_file`, `source_line`.
-*   `communities`: detected community labels and cohesion scores.
-*   `file_manifest`: `path`, `hash`, `last_extracted_at`. Used for incremental updates.
-*   `extraction_cache`: cached per-file extraction results keyed by content hash.
-*   `pipeline_runs`: one row per pipeline run (stage timing, version stamp).
-*   `query_history`: `question`, `answer`, `queried_at`.
-*   `_meta`: schema version and other bookkeeping.
+The column-level schema is generated from `crates/astria-core/src/db.rs` into [website/docs/explanation/architecture.md](website/docs/explanation/architecture.md) by `scripts/generate-schema-docs.mjs`; the docs-sync CI check rejects drift in either place.
 
 ### Relationship Types
 
@@ -80,17 +73,15 @@ Relations are stored lowercase — filter `--relation` with exactly these spelli
 
 Structural (AST extraction):
 
-*   `calls`: Function or method invocation. Resolved targets are `EXTRACTED`; unresolved name-level targets `INFERRED`.
+*   `calls`: Function or method invocation (including Ruby method and singleton-method invocations). Resolved targets are `EXTRACTED`; unresolved name-level targets `INFERRED`.
 *   `contains`: File/class/symbol containment (there is no `Defines` relation).
 *   `imports`: Module or file level dependency.
 *   `uses`: Variable or type usage.
-*   `references`: Document/markdown links and identifier mentions.
-*   `method`: Ruby method and singleton-method invocations.
-*   `inherits`, `implements`: OO inheritance/implementation where the language or semantic layer exposes them.
+*   `references`: Document/markdown links, identifier mentions, and memory documents citing nodes (from `save-result`).
 *   `rationale_for`: A comment rationale linked to the code it explains.
 *   `crate_depends_on`: Cargo workspace/path-dependency topology (from `Cargo.toml` ingestion).
 *   `requires_env`: An MCP server config and the environment-variable names it declares (names only, never values).
-*   `forks`: Symbol fork recorded from a SCIP index (`add --scip`).
+*   `scip_impl` / `scip_typed` / `scip_def` / `scip_ref`: Symbols and relations recorded from a simplified SCIP index (`add --scip`); unresolved targets become stubs.
 
 Cross-layer (deterministic post-build passes; edges carry context `crosslayer` and are re-derived on every pipeline run):
 
@@ -101,7 +92,7 @@ Cross-layer (deterministic post-build passes; edges carry context `crosslayer` a
 Semantic & learned (opt-in):
 
 *   `similar_to`: Local embedding similarity (`--embed`); powers semantic query recall.
-*   `implements`, `depends_on`, `relates_to`, `uses`: LLM semantic extraction (validated against an allowlist). Under `--judge jev`, the TypeSafe judge layer re-chooses these relations from the allowlist and stores a calibrated existence probability in `edges.confidence_score`.
+*   `implements`, `depends_on`, `relates_to`, `uses`, `contains`: LLM semantic extraction (validated against this allowlist; anything outside it clamps to `relates_to`). Under `--judge jev`, the TypeSafe judge layer re-chooses these relations from the allowlist and stores a calibrated existence probability in `edges.confidence_score`.
 *   `learned`: Promoted from recurring query pairs (the memory feedback loop).
 
 Hyperedges (n-ary, stored in the `hyperedges` table):
@@ -119,4 +110,4 @@ Hyperedges (n-ary, stored in the `hyperedges` table):
 
 Language names, extensions, and parser registration are defined once in `crates/astria-core/src/languages.rs`. Discovery and extraction consume that registry. The language-support documentation is generated by `scripts/generate-language-support.mjs` from the registry and actual AST configs; `scripts/check-docs-sync.mjs` rejects drift. Extraction rules are defined in `crates/astria-extract/src/langs/`. Each language module provides a `LanguageConfig` specifying which AST nodes represent classes, functions, and relationships.
 
-Currently supported: Python, JS, TS, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, CSS.
+Currently supported (25 configurations): Python, JS, TS, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Shell, Dart, Zig, CSS, Terraform/HCL, PowerShell, Verilog/SystemVerilog, and Metal.
