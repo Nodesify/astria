@@ -40,7 +40,7 @@ astria export --graph . --format html --mode large --out graph-view.html
 
 ## `add --postgres` fails
 
-Postgres introspection shells out to `psql` (read-only over `information_schema` — no credentials are stored). Install the Postgres client and make sure it is on `PATH`.
+Postgres introspection shells out to `psql` (read-only over the pg system catalogs — no credentials are stored). Install the Postgres client and make sure it is on `PATH`.
 
 ## First `run --embed` is slow
 

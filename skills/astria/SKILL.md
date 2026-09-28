@@ -10,7 +10,9 @@ metadata:
 
 # astria: query the codebase as a knowledge graph
 
-astria turns a folder of source code into a queryable graph stored in `.astria/` - deterministic AST extraction via tree-sitter, PageRank hub ranking, community detection, and a plain-language report. Questions that cost grep-and-read sessions ("where does auth live?", "what breaks if I change this?") become one graph query that answers in ~3,000 tokens.
+astria turns a folder of source code into a queryable graph stored in `.astria/` - deterministic AST extraction via tree-sitter, PageRank hub ranking, community detection, and a plain-language report. Document bodies (markdown, transcripts) are chunked and searchable alongside code. Questions that cost grep-and-read sessions ("where does auth live?", "what breaks if I change this?") become one graph query that answers within the token budget you set (default 2,000, `--budget`).
+
+Scope: this skill teaches the core graph-first surface (`run`, `update`, `query`, `map`, `explain`, `path`, `affected`, `stats`, `status`, `wiki`) and intentionally not every current flag and export. For the full surface, install the packaged skill (`astria install`) or see the [CLI reference](https://nodesify.github.io/astria/docs/reference/cli).
 
 ## Step 0 - Check the environment (do this first)
 
@@ -28,7 +30,7 @@ Then branch on the result:
 
 **C. Command not found and no `.astria/`** - tell the user astria isn't installed in this environment and offer the install. Ask before installing - do not install unprompted:
 
-> astria isn't installed here. Install it with `npm install -g @nodesify/astria` (prebuilt binaries, no Rust toolchain, needs Node >= 20)? After that I can build the graph and answer graph questions.
+> astria isn't installed here. Install it with `npm install -g @nodesify/astria` (prebuilt binaries, no Rust toolchain, needs Node >= 22)? After that I can build the graph and answer graph questions.
 
 If the user declines, stop cleanly and leave the command for later. Do not fake graph answers by guessing from file reads - say the graph is unavailable instead.
 
@@ -47,7 +49,7 @@ If `.astria/` exists in the project, prefer the graph over grep/glob for archite
 
 Keep native search for what the graph can't see: predicate-level bugs, exact-string audits, and cold discovery when no symbol name is known yet.
 
-If an `astria` MCP server is connected (registered by `astria install` for claude, cursor, gemini, and zcode), prefer its native tools - `repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected` - over shell commands.
+If an `astria` MCP server is connected (registered by `astria install` for claude, cursor, gemini, and zcode), prefer its native tools - `repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`, `god_nodes`, `list_communities`, `graph_stats`, `health` - over shell commands.
 
 ## Build or refresh the graph
 
@@ -56,13 +58,13 @@ astria run .       # full build, creates .astria/ (db.sqlite, graph.json, graph_
 astria update .    # incremental refresh after code changes
 ```
 
-If the project has no `.astria/` yet, run `astria run .` first (ask the user if the repo is large). Supported languages include Python, JS, TS, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, and CSS.
+If the project has no `.astria/` yet, run `astria run .` first (ask the user if the repo is large). Supported languages include Python, JS, TS, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Shell, Dart, Zig, CSS, Terraform/HCL, PowerShell, Verilog/SystemVerilog, and Metal (25 configurations).
 
-After editing code in a session with an active graph, run `astria update .` so later answers reflect the change.
+After editing code in a session with an active graph, run `astria update .` so later answers reflect the change. `astria hook install` automates this as a post-commit git hook; semantic enrichment backends accept `--judge jev` for a calibrated second opinion on the generated graph.
 
 ## Command quick reference
 
-- `astria query "<question>"` - BFS traversal from matching nodes (`--dfs`, `--depth`, `--budget`, `--directed`, `--detail high` for declared-facts-only)
+- `astria query "<question>"` - BFS traversal from matching nodes (`--dfs`, `--depth`, `--budget`, `--directed`, `--detail high` for `EXTRACTED`-facts-only)
 - `astria map` - PageRank-ranked repo map with each file's top symbols; best first command on an unfamiliar repo
 - `astria explain <node>` - node details with all connections and `file:line` anchors
 - `astria path <A> <B>` - shortest path; add `--directed` for call direction

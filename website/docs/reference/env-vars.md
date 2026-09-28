@@ -17,18 +17,20 @@ Activates the `enrich_with_semantics()` pipeline stage (docs, papers, images →
 
 | Variable | Purpose |
 |---|---|
-| `ASTRIA_LLM_BACKEND` | Required opt-in selection: `claude`, `openai`, or `gemini`; `none` disables enrichment |
+| `ASTRIA_LLM_BACKEND` | Required opt-in selection: `claude` (or `anthropic`), `openai` (or `openai-compatible`/`openai_compatible`), or `gemini` (or `google`); `none` disables enrichment |
 | `ASTRIA_LLM_API_KEY` | API key for the explicitly selected backend; does not select or activate a backend |
 | `ASTRIA_LLM_BASE_URL` | Endpoint for any OpenAI-compatible provider (OpenAI, DeepSeek, Ollama, LM Studio, custom) |
 | `ASTRIA_LLM_MODEL` | Overrides the default model for the selected backend |
-| `ASTRIA_LLM_CONCURRENCY` | Size of the parallel LLM worker pool |
+| `ASTRIA_LLM_CONCURRENCY` | Size of the parallel LLM worker pool (default `4`, clamped to 1–8) |
+| `ASTRIA_LLM_BUDGET` | Total LLM token budget (input + output) per run; `0` or unset = unlimited. When the budget is exhausted, extraction stops loudly before publishing; engine calls, judge calls, and usage-less responses all count toward it |
+| `ASTRIA_LLM_COMMUNITY_MAX` | Cap on community-naming LLM calls per run for `--label-communities` (default `48`) |
 | `OPENAI_API_KEY` | Fallback key for the OpenAI-compatible backend |
 | `OPENAI_BASE_URL` | Fallback base URL for the OpenAI-compatible backend when `ASTRIA_LLM_BASE_URL` is unset |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Key for the Gemini backend |
 
 Keys and endpoint variables do not activate enrichment. Without explicit backend selection, the pipeline makes no LLM calls. Per-run overrides without env vars: `astria run . --backend openai --model gpt-4o-mini`.
 
-Keys are sent in request headers (the Gemini key never goes in the URL, where it would leak into logs and history). When `ASTRIA_LLM_BASE_URL` points at a plain-`http` endpoint that is not local (localhost, `127.0.0.1`, `[::1]` — Ollama/LM Studio setups are silent), a warning is printed because the API key travels unencrypted.
+Keys are sent in request headers (the Gemini key never goes in the URL, where it would leak into logs and history). When `ASTRIA_LLM_BASE_URL` points at a plain-`http` endpoint that is not local (localhost, `127.0.0.1`, `[::1]` — Ollama/LM Studio setups are silent) **and an API key is set**, a warning is printed because the API key travels unencrypted.
 
 ## Jev judge layer
 
@@ -42,9 +44,12 @@ Optional decision layer over the selected backend (`--judge jev` / `ASTRIA_LLM_J
 | `ASTRIA_LLM_JEV_VERIFY` | `off` disables the per-file verification pass (relation/node-type re-choice + edge existence) |
 | `ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY` | Edges whose existence probability is below this are dropped (default `0.40`) |
 | `ASTRIA_LLM_JEV_GATE` | `off` disables the batched trivial-file gate |
+| `ASTRIA_LLM_JEV_GATE_CACHE` | `off` re-judges every run. Default on: gate verdicts are cached per (file content hash, judge configuration), so judge-gated runs are reproducible and unchanged files cost no judge calls on re-runs |
 | `ASTRIA_LLM_JEV_GATE_MAX_BYTES` | Files larger than this skip the gate and are always enriched (default `65536`) |
 | `ASTRIA_LLM_JEV_GATE_DROP_THRESHOLD` | Gate drop probability above this skips the file (default `0.40`) |
-| `ASTRIA_LLM_JEV_GATE_BATCH` | Files judged per gate request (default `50`) |
+| `ASTRIA_LLM_JEV_GATE_BATCH` | Files judged per gate request (default `50`, clamped to 1–200) |
+| `ASTRIA_QUERY_DEBUG_SCORES` | `1` (or `true`/`on`) dumps the top scored nodes with their match components and the final seed list to stderr — diagnose a retrieval miss from one query run |
+| `ASTRIA_QUERY_MIN_SEMANTIC_CONFIDENCE` | Hard floor for SEMANTIC edges at query time (default `0.0` = off). Verified edges whose calibrated keep-probability falls below the floor are excluded from traversal; structural and inferred edges are never filtered. Lets graph consumers act on the judge's verdicts at query time |
 
 ## Local embeddings
 
@@ -56,13 +61,20 @@ Optional decision layer over the selected backend (`--judge jev` / `ASTRIA_LLM_J
 
 ## Query logging
 
-Appends a JSONL line (ts, kind, question, nodes, duration) per query for agent/tooling consumption. Logging never breaks a query — it fails silent.
+Appends a JSONL line (ts, kind, question, nodes, duration_ms) per query for agent/tooling consumption. Logging never breaks a query — it fails silent.
 
 | Variable | Purpose |
 |---|---|
-| `ASTRIA_QUERY_LOG` | Path of the JSONL log file; `ASTRIA_QUERY_LOG=1` uses the default location |
-| `ASTRIA_QUERY_LOG_ENABLE` | `1` turns logging on without choosing a path |
+| `ASTRIA_QUERY_LOG` | Path of the JSONL log file; any non-empty value is used verbatim as the path (there is no `=1` shortcut — use `ASTRIA_QUERY_LOG_ENABLE` for the default location) |
+| `ASTRIA_QUERY_LOG_ENABLE` | `1` turns logging on with the default path (`~/.cache/astria-queries.log`) |
 | `ASTRIA_QUERY_LOG_DISABLE` | `1` always wins — logging is off regardless of the other two |
+
+## Export targets
+
+| Variable | Purpose |
+|---|---|
+| `NEO4J_USERNAME` | Username for `astria export --neo4j-push` (default `neo4j`; the `--neo4j-user` flag overrides) |
+| `NEO4J_PASSWORD` | Password for `astria export --neo4j-push` (empty by default; the `--neo4j-pass` flag overrides) |
 
 ## Hook guard
 
@@ -70,5 +82,5 @@ The editor `PreToolUse` guard (see [Agent integration](../guides/mcp-and-agents#
 
 | Variable | Purpose |
 |---|---|
-| `ASTRIA_HOOK_STRICT` | `1` enables strict mode (gates un-indexed reads); `0` or the `--strict` flag also work |
+| `ASTRIA_HOOK_STRICT` | `1` enables strict mode (gates un-indexed reads); `0` disables it and overrides the `--strict` flag; the `--strict` flag alone also enables strict mode when the variable is unset |
 | `ASTRIA_HOOK_STRICT_TTL` | Seconds a graph stays considered fresh in strict mode (default `1800`) |

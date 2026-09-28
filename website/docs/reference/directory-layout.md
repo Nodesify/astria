@@ -12,15 +12,17 @@ Everything astria produces lives in plain files, so it is inspectable, backup-ab
 ```
 <repo>/
   .astriaignore              # (optional, repo root) gitignore-syntax exclusion list
+  raw/                       # (after `add <url>`) downloaded papers/pages/images
   .astria/
     db.sqlite                # The graph database — the source of truth
+    db.sqlite-wal / -shm     # SQLite WAL sidecars while a process has the database open
     graph.json               # Full graph export (nodes, edges, hyperedges, communities)
     graph_report.md          # Markdown report: hub nodes, communities, surprising connections
+    cache/last_query_stamp   # Query-freshness stamp, rewritten after each query/explain/path
     wiki/                    # (after `wiki` / `run --wiki`) markdown wiki: index.md + articles
-    memory/                  # (after `save-result`) curated Q/A docs, ingested as graph nodes
+    memory/                  # (after `save-result`) curated Q/A docs (also inserted into the graph at save time)
     reflections/             # (after `reflect`) LESSONS.md outcome aggregation
     transcripts/             # (optional) drop .txt/.md here; ingested as document nodes
-    raw/                     # (after `add <url>`) downloaded papers/pages/images
 ```
 
 Plus, outside the repo:
@@ -41,7 +43,7 @@ The database is plain SQLite — open it with any SQLite client. Tables:
 | `communities` | Cluster assignments, labels, cohesion |
 | `file_manifest` | Every detected file and its hash — powers incremental `update` |
 | `extraction_cache` | Per-file extraction results, keyed by content hash — unchanged files are not re-extracted |
-| `pipeline_runs` | Run history (when, what stage, how long) |
+| `pipeline_runs` | Run history: timing, status, files/nodes/edges counters, and LLM usage (`llm_*` columns) |
 | `query_history` / `query_pairs` | Query log and the (seed, discovered) pairs that feed `learned` edge promotion |
 | `node_embeddings` | Vectors from `run --embed` |
 | `_meta` | Schema version and build metadata (what `status` reads) |

@@ -39,7 +39,7 @@ astria query "where is the shared auth type" --graph ~/.astria/global.db
 
 - **Sourced ids** — node ids from a repo are prefixed with its tag (`<tag>::<id>`), so every repo's private symbols stay distinct.
 - **Shared externals dedupe** — external/stub symbols stay unprefixed and dedupe by label, so `serde_json::Value` means the same thing in every repo.
-- **Type unification** — types sharing `(namespace, label)` across repos get `same_type_as` edges.
+- **Type unification** — same-label type declarations across repos get `same_type_as` edges (name-based unification, matching how external/stub symbols dedupe).
 - **Cross-repo call resolution** — parked unresolved calls are resolved when exactly one cross-repo candidate exists, and **fail closed on ambiguity**: two same-named candidates means no edge, never a guess.
 
 ## When to reach for it
