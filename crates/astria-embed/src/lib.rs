@@ -82,7 +82,13 @@ pub fn node_text(label: &str, docstring: Option<&str>, signature: Option<&str>) 
         text.push_str(description.trim());
     }
     if text.len() > MAX_TEXT_CHARS {
-        text.truncate(MAX_TEXT_CHARS);
+        // truncate() panics on a non-char boundary; multi-byte content
+        // (CJK, emoji) makes a plain byte cut land mid-character.
+        let mut end = MAX_TEXT_CHARS;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
     }
     text
 }
@@ -301,6 +307,18 @@ mod tests {
         assert!((cosine(&a, &a) - 1.0).abs() < 1e-9);
         assert!(cosine(&a, &b).abs() < 1e-9);
         assert_eq!(cosine(&a, &[]), 0.0);
+    }
+
+    #[test]
+    fn node_text_truncates_on_char_boundaries() {
+        // A byte cut at 1500 lands inside the multi-byte character in this
+        // text; truncate() panicked before the boundary walk.
+        let label = "x".repeat(1490);
+        let doc = "e\u{301}".repeat(40); // combining sequences, 2 bytes each
+        let text = node_text(&label, Some(&doc), None);
+        assert!(text.len() <= MAX_TEXT_CHARS + 4);
+        assert!(text.is_char_boundary(text.len()));
+        assert!(text.chars().count() > 0);
     }
 
     #[test]

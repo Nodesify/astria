@@ -53,10 +53,29 @@ function requirePlatformPackage(suffix: string): any {
 
 /// Local candidates are fixed paths relative to this module; each require()
 /// below uses a literal relative specifier, guarded by existsSync so a
-/// missing binary never throws at load time.
+/// missing binary never throws at load time. The package-root copy wins, so
+/// warn when a newer dist/ build exists — a stale root binary otherwise
+/// silently shadows a fresh rebuild.
+function warnIfShadowed(root: string, dist: string): void {
+  try {
+    const { statSync } = require('fs') as typeof import('fs');
+    if (statSync(root).mtimeMs < statSync(dist).mtimeMs - 1000) {
+      console.warn(
+        `@nodesify/astria: ${root} is older than ${dist}; loading the stale binary.\n` +
+        `Remove the package-root copy or rerun \`npm run napi:build\` so the fresh build is picked up.`,
+      );
+    }
+  } catch {
+    // Stat failures must never block loading.
+  }
+}
+
 function loadNativeBinding(): any {
   const local = join(__dirname, '..', 'astria.node');
-  if (existsSync(local)) return require('../astria.node');
+  if (existsSync(local)) {
+    warnIfShadowed(local, join(__dirname, '..', 'dist', 'astria.node'));
+    return require('../astria.node');
+  }
 
   // tsx runs tests from src/, where CI's built binary lands in dist/
   const localDist = join(__dirname, '..', 'dist', 'astria.node');

@@ -79,7 +79,13 @@ pub(crate) fn extract_markdown_from_string(
             let hashes = caps.get(1).unwrap().as_str().len();
             let title = caps.get(2).unwrap().as_str().trim().to_string();
             let level = hashes;
-            let slug = make_target_id(&title);
+            // A punctuation-only heading ("# ...") slugifies to empty, which
+            // would make the section id equal the file node's id — a
+            // guaranteed duplicate within the extraction.
+            let slug = {
+                let s = make_target_id(&title);
+                if s.is_empty() { "section".to_string() } else { s }
+            };
             let section_id = {
                 let base = make_node_id(&[&fid, &slug]);
                 if seen_section_ids.insert(base.clone()) {
@@ -562,6 +568,10 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
 
     // Track heading nesting: stack of (underline_char, id)
     let mut heading_stack: Vec<(char, String)> = Vec::new();
+    // Repeated section titles in one file (e.g. changelogs with several
+    // "API Changes" headings) get ordinal suffixes so ids stay unique —
+    // same scheme as the markdown extractor.
+    let mut seen_section_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Body text between headings, same scheme as the markdown extractor.
     let mut pending: Option<(String, String, u32, String)> = None;
     let mut pre_body = String::new();
@@ -597,8 +607,26 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
             flush_pending(&mut pending, &mut nodes, &mut edges);
             let ch = under_line.trim().chars().next().unwrap_or('=');
             let title = trimmed_text.to_string();
-            let slug = make_target_id(&title);
-            let section_id = make_node_id(&[&fid, &slug]);
+            // Same empty-slug guard as the markdown extractor.
+            let slug = {
+                let s = make_target_id(&title);
+                if s.is_empty() { "section".to_string() } else { s }
+            };
+            let section_id = {
+                let base = make_node_id(&[&fid, &slug]);
+                if seen_section_ids.insert(base.clone()) {
+                    base
+                } else {
+                    let mut n = 2usize;
+                    loop {
+                        let candidate = make_node_id(&[&fid, &format!("{slug}-{n}")]);
+                        if seen_section_ids.insert(candidate.clone()) {
+                            break candidate;
+                        }
+                        n += 1;
+                    }
+                }
+            };
 
             nodes.push(ExtractedNode {
                 id: section_id.clone(),
@@ -801,6 +829,77 @@ mod tests {
             .unwrap()
             .contains("Setup text here"));
         assert!(chunks[0].id.starts_with(&title.id));
+    }
+
+    #[test]
+    fn rst_repeated_section_titles_get_unique_ids() {
+        // Changelogs repeat section names ("API Changes" under several
+        // releases); duplicate ids in one extraction are a validation error,
+        // so the RST extractor must ordinal-suffix them like the markdown one.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("changelog.rst");
+        std::fs::write(
+            &p,
+            "Changelog\n=========\n\n20.0\n----\n\nAPI Changes\n~~~~~~~~~~~\n\nFirst api body\n\n20.1\n----\n\nAPI Changes\n~~~~~~~~~~~\n\nSecond api body\n",
+        )
+        .unwrap();
+        let ex = extract_rst(p.as_path(), p.as_path()).unwrap();
+        let sections: Vec<_> = ex
+            .nodes
+            .iter()
+            .filter(|n| n.label == "API Changes")
+            .map(|n| n.id.clone())
+            .collect();
+        assert_eq!(sections.len(), 2, "both sections extracted");
+        assert_ne!(
+            sections[0], sections[1],
+            "repeated titles must not collide: {sections:?}"
+        );
+    }
+
+    #[test]
+    fn rst_and_md_punctuation_headings_do_not_collide_with_file_node() {
+        // "# ..." slugifies to the empty string; without a fallback the
+        // section id equals the file node id and validation fails with a
+        // duplicate node id in one extraction.
+        let dir = tempfile::tempdir().unwrap();
+        let md = dir.path().join("plugins.md");
+        std::fs::write(&md, "# Plugins
+
+body one
+
+# ...
+
+punct body
+
+# ...
+
+more punct
+").unwrap();
+        let ex = extract_markdown(md.as_path(), md.as_path()).unwrap();
+        let ids: Vec<_> = ex.nodes.iter().map(|n| n.id.clone()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(ids.len(), sorted.len(), "duplicate ids in md extraction: {ids:?}");
+
+        let rst = dir.path().join("guide.rst");
+        std::fs::write(&rst, "Guide
+=====
+
+intro
+
+...
+~~~~~
+
+punct body
+").unwrap();
+        let ex2 = extract_rst(rst.as_path(), rst.as_path()).unwrap();
+        let ids2: Vec<_> = ex2.nodes.iter().map(|n| n.id.clone()).collect();
+        let mut s2 = ids2.clone();
+        s2.sort();
+        s2.dedup();
+        assert_eq!(ids2.len(), s2.len(), "duplicate ids in rst extraction: {ids2:?}");
     }
 
     #[test]

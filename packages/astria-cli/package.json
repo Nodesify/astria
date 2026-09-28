@@ -18,8 +18,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "napi:build": "napi build --platform --release dist",
-    "napi:dev": "napi build --platform dist",
+    "napi:build": "node ../../scripts/build-native.mjs",
+    "napi:dev": "node ../../scripts/build-native.mjs --debug",
     "napi:artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm",
     "test": "npx tsx src/__tests__/cli.test.ts && npx tsx src/__tests__/install.test.ts && npx tsx src/__tests__/hooks.test.ts && npx tsx src/__tests__/e2e.test.ts"

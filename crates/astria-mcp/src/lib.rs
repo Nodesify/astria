@@ -142,8 +142,14 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 );
                 for n in &r.neighbors {
                     out.push_str(&format!(
-                        "  --{} [{}]--> {} ({})\n",
-                        n.relation, n.confidence, n.neighbor_label, n.neighbor_file
+                        "  --{} [{}{}]--> {} ({})\n",
+                        n.relation,
+                        n.confidence,
+                        n.confidence_score
+                            .map(|s| format!(":{s:.2}"))
+                            .unwrap_or_default(),
+                        n.neighbor_label,
+                        n.neighbor_file
                     ));
                 }
                 text_result(out)
@@ -165,8 +171,13 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                         }
                     }
                     out.push_str(&format!(
-                        "{} [{}] ({})\n",
-                        n.neighbor_label, n.relation, n.neighbor_file
+                        "{} [{}{}] ({})\n",
+                        n.neighbor_label,
+                        n.relation,
+                        n.confidence_score
+                            .map(|s| format!(":{s:.2}"))
+                            .unwrap_or_default(),
+                        n.neighbor_file
                     ));
                 }
                 if out.is_empty() {

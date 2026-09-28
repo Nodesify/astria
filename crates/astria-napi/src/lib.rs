@@ -538,6 +538,7 @@ pub struct EdgeInfoJs {
     pub neighbor_line: Option<i64>,
     pub relation: String,
     pub confidence: String,
+    pub confidence_score: Option<f64>,
 }
 
 #[napi(object)]
@@ -1056,6 +1057,7 @@ pub fn explain_node(root: String, node_id: String) -> napi::Result<Option<Explai
                 neighbor_line: n.neighbor_line,
                 relation: n.relation,
                 confidence: n.confidence,
+                confidence_score: n.confidence_score,
             })
             .collect(),
     }))

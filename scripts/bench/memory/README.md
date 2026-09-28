@@ -22,11 +22,19 @@ Results land in `bench-work/locomo-results.json`: per-question evidence-file
 rank plus `recall@1/3/5/10` and `MRR`; with `--judge`, also
 `judged_correct` (Claude Haiku comparing the system answer to the reference).
 
-## First measured result
+## Measured results (full set, structural, no embeddings)
 
-Smoke sample (10 questions, structural graph, no embeddings): recall@10
-0.1 — consistent with the self-corpus finding in `../quality/README.md`.
-Not a published number; run the full set before quoting anything.
+The full 1,977-question set on the 1.0.6 chunked-document graph: **recall@1
+66.1%, recall@3 80.7%, recall@5/10 85.0%, MRR 0.736** (artifact
+`bench-work/locomo-fix3-full.json`; the shipped 1.0.6 scored 63.5/79.3/84.5%
+with MRR 0.717). Remaining misses are mostly same-conversation distractors —
+the right session ranks, not always first. One observation per condition;
+treat as a point estimate, not a statistical claim.
+
+History: the pre-1.0.6 structural pipeline scored ~0.1–0.2% recall@10 on this
+set (a 10-question smoke first showed 0.1) — transcript sidecars collapsed
+into a few content-free nodes, so nothing could match. Chunked document
+retrieval closed that gap; don't quote the smoke number as current.
 
 ## Why this matters
 

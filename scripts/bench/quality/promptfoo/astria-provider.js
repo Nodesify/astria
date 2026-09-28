@@ -9,7 +9,8 @@ class AstriaProvider {
   }
 
   async callApi(prompt) {
-    const r = spawnSync(`${process.env.ASTRIA_CMD || 'astria'} query "${prompt}" --budget 4000`, {
+    const budget = process.env.ASTRIA_BUDGET || '4000';
+    const r = spawnSync(`${process.env.ASTRIA_CMD || 'astria'} query "${prompt}" --budget ${budget}`, {
       cwd: process.env.BENCH_CORPUS || process.cwd(),
       encoding: 'utf8',
       shell: true,

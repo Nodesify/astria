@@ -98,7 +98,7 @@ Use ```` ```mermaid ```` fences in any doc (see
 `src/data/benchmarks-snapshot.json` (via
 `src/components/BenchmarkSnapshot`). To refresh it: **Actions → Benchmark
 snapshot → Run workflow** — it runs both tools (ours + the original Python
-graphify pinned to `91f4d12`) on a fresh runner via
+graphify pinned to `4139885` (v0.9.69)) on a fresh runner via
 `scripts/bench/run-snapshot.mjs`, commits the updated JSON, and dispatches
 this site's deploy. Locally you can run the same with
 `node scripts/bench/run-snapshot.mjs` (needs `uv`, and the published CLI).

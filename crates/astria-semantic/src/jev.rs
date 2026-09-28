@@ -251,11 +251,13 @@ impl JevClient {
     }
 
     /// Re-judge one extraction: node types, edge relations, and edge
-    /// existence, in a single request. See `verify_extraction`.
+    /// existence, in a single request. See `verify_extraction`. Pass
+    /// `content: None` when there are no edges to ground — the request
+    /// then ships labels and summaries instead of the file text.
     pub(crate) fn verify(
         &self,
         extraction: &SemanticExtraction,
-        content: &str,
+        content: Option<&str>,
         file_type: &str,
     ) -> Result<SemanticExtraction> {
         let request = build_verify_request(extraction, content, file_type);
@@ -429,9 +431,15 @@ pub(crate) fn parse_keep_drop(answer: &Value) -> Option<(f64, f64)> {
 /// questions over the same state, so they run in one parallel request.
 /// Items beyond the caps are left untouched by `verify_extraction`. The
 /// model is stamped by the client at send time.
+///
+/// `content` is the raw file text and the only component that scales with
+/// file size, so it ships only when edge-existence questions need it:
+/// with no edges there is nothing to ground in the file text, and node
+/// types are re-chosen from labels and summaries alone (which ride along
+/// in that mode instead).
 pub(crate) fn build_verify_request(
     extraction: &SemanticExtraction,
-    content: &str,
+    content: Option<&str>,
     file_type: &str,
 ) -> Value {
     let nodes: Vec<Value> = extraction
@@ -439,11 +447,15 @@ pub(crate) fn build_verify_request(
         .iter()
         .take(MAX_VERIFY_NODES)
         .map(|n| {
-            json!({
+            let mut entry = json!({
                 "id": n.id,
                 "label": n.label,
                 "node_type": n.node_type,
-            })
+            });
+            if content.is_none() {
+                entry["summary"] = json!(n.summary);
+            }
+            entry
         })
         .collect();
     let edges: Vec<Value> = extraction
@@ -491,14 +503,17 @@ pub(crate) fn build_verify_request(
             }),
         );
     }
-    let content_preview: String = content.chars().take(MAX_VERIFY_CONTENT_CHARS).collect();
+    let mut state = json!({
+        "file_type": file_type,
+        "nodes": nodes,
+        "edges": edges,
+    });
+    if let Some(content) = content {
+        let content_preview: String = content.chars().take(MAX_VERIFY_CONTENT_CHARS).collect();
+        state["content"] = json!(content_preview);
+    }
     json!({
-        "state": {
-            "file_type": file_type,
-            "content": content_preview,
-            "nodes": nodes,
-            "edges": edges,
-        },
+        "state": state,
         "questions": questions,
     })
 }
@@ -712,7 +727,7 @@ mod tests {
                 confidence_score: None,
             });
         }
-        let request = build_verify_request(&extraction, "content", "rust");
+        let request = build_verify_request(&extraction, Some("content"), "rust");
         let questions = request["questions"].as_object().unwrap();
         assert_eq!(questions.len(), MAX_VERIFY_NODES + 2 * MAX_VERIFY_EDGES);
         assert!(questions.contains_key("t_39"));
@@ -722,6 +737,19 @@ mod tests {
         assert!(questions.get("e_0").unwrap()["criteria"]["drop"].is_string());
         assert_eq!(request["state"]["content"], "content");
         assert!(request["state"]["nodes"].as_array().unwrap().len() == MAX_VERIFY_NODES);
+    }
+
+    #[test]
+    fn verify_without_content_ships_summaries_not_text() {
+        let extraction = sample_extraction();
+        let request = build_verify_request(&extraction, None, "markdown");
+        assert!(request["state"].get("content").is_none());
+        let node = &request["state"]["nodes"][0];
+        assert!(node["summary"].is_string(), "summaries ground type re-choice without content");
+        // The content-bearing mode must not carry summaries: the file text
+        // is the evidence and summaries would only add tokens.
+        let with_content = build_verify_request(&extraction, Some("text"), "markdown");
+        assert!(with_content["state"]["nodes"][0].get("summary").is_none());
     }
 
     #[test]
@@ -868,7 +896,7 @@ mod tests {
             ],
         };
         let content = "pub struct UserService;\nimpl UserService {\n    /// Opens a session for each request.\n    pub fn connect(db: &Db) -> Session { db.open() }\n}\n";
-        let verified = client.verify(&extraction, content, "rust").unwrap();
+        let verified = client.verify(&extraction, Some(content), "rust").unwrap();
         for (i, edge) in verified.edges.iter().enumerate() {
             assert!(
                 crate::ALLOWED_RELATIONS.contains(&edge.relation.as_str()),

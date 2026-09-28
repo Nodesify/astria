@@ -4,7 +4,7 @@
 
 This project has an astria knowledge graph at `.astria/`. Access it through whichever path your agent has:
 
-- MCP (ZCode and agents with the `astria` server connected): tools are `repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`.
+- MCP (ZCode and agents with the `astria` server connected): tools are `repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`, `god_nodes`, `list_communities`, `graph_stats`, `health`.
 - CLI (works everywhere, e.g. Codex): `astria map|query|explain|path|affected <args>`.
 
 - Prefer the graph over repeated text searches when investigating architecture, locating a feature across files, tracing cross-file logic flow, or assessing change impact. Orient with `repo_map` (or `map`, or a skim of `.astria/graph_report.md`); ask natural-language questions with `query`; inspect one symbol with `explain`; run `affected <node>` before changing a shared symbol.

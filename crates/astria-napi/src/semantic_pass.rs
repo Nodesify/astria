@@ -168,8 +168,63 @@ pub(super) fn enrich_with_semantics(
     // The backend may gate candidate files (Jev's batch keep/drop
     // judgments): files it drops never cost an engine call. The gate can
     // only save calls — gated files simply keep their AST-only extraction.
+    //
+    // Verdicts are cached per (content hash, backend identity): the live
+    // gate model re-rolls between runs, which made judge-gated graphs
+    // irreproducible (the same tree gated 31 files on one build and 17 on
+    // a replay). With the cache, identical bytes plus identical judge
+    // configuration reuse the previous decision — deterministic re-runs,
+    // and unchanged files cost no judge calls. `off` restores live gating.
     let all_pending_paths: Vec<PathBuf> = pending.iter().map(|p| p.path.clone()).collect();
-    let pending_paths = backend.gate_files(&all_pending_paths);
+    let gate_cache_on = std::env::var("ASTRIA_LLM_JEV_GATE_CACHE")
+        .map(|v| !matches!(v.trim().to_lowercase().as_str(), "0" | "false" | "off" | "no"))
+        .unwrap_or(true);
+    let pending_paths: Vec<PathBuf> = if gate_cache_on {
+        let gate_identity = backend.cache_identity();
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS gate_cache (
+                hash TEXT NOT NULL,
+                identity TEXT NOT NULL,
+                keep INTEGER NOT NULL,
+                judged_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (hash, identity)
+            )",
+        )?;
+        let mut cached_kept: Vec<PathBuf> = Vec::new();
+        let mut to_judge: Vec<(usize, PathBuf)> = Vec::new();
+        for (pi, p) in pending.iter().enumerate() {
+            let cached: Option<i64> = db
+                .query_row(
+                    "SELECT keep FROM gate_cache WHERE hash = ?1 AND identity = ?2",
+                    rusqlite::params![p.hash, gate_identity],
+                    |r| r.get(0),
+                )
+                .ok();
+            match cached {
+                Some(keep) if keep != 0 => cached_kept.push(p.path.clone()),
+                Some(_) => {}
+                None => to_judge.push((pi, p.path.clone())),
+            }
+        }
+        let judge_paths: Vec<PathBuf> = to_judge.iter().map(|(_, p)| p.clone()).collect();
+        let judged_kept: std::collections::HashSet<PathBuf> =
+            backend.gate_files(&judge_paths).into_iter().collect();
+        for (pi, path) in &to_judge {
+            db.execute(
+                "INSERT OR REPLACE INTO gate_cache (hash, identity, keep) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    pending[*pi].hash,
+                    gate_identity,
+                    judged_kept.contains(path) as i64
+                ],
+            )?;
+        }
+        let mut kept = cached_kept;
+        kept.extend(judge_paths.into_iter().filter(|p| judged_kept.contains(p)));
+        kept
+    } else {
+        backend.gate_files(&all_pending_paths)
+    };
     let gated = all_pending_paths.len() - pending_paths.len();
 
     // Batch-extract cache misses in parallel.

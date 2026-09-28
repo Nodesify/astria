@@ -36,6 +36,7 @@ struct EdgeRow {
     target: String,
     relation: String,
     confidence: String,
+    confidence_score: Option<f64>,
 }
 
 /// Replace characters that are hostile to file names or URLs. Windows
@@ -190,13 +191,15 @@ impl Wiki {
 
         let mut edges = Vec::new();
         {
-            let mut stmt = db.prepare("SELECT source, target, relation, confidence FROM edges")?;
+            let mut stmt = db
+                .prepare("SELECT source, target, relation, confidence, confidence_score FROM edges")?;
             let rows = stmt.query_map([], |row| {
                 Ok(EdgeRow {
                     source: row.get(0)?,
                     target: row.get(1)?,
                     relation: row.get(2)?,
                     confidence: row.get(3)?,
+                    confidence_score: row.get(4)?,
                 })
             })?;
             for edge in rows.flatten() {
@@ -475,7 +478,7 @@ fn god_node_article(wiki: &Wiki, node: &NodeAnalysis) -> String {
     // Neighbors of both directions, grouped by relation, highest degree
     // first within each group. Parallel edges to the same neighbor
     // (INFERRED call duplicates) collapse to the best confidence.
-    let mut by_relation: HashMap<&str, HashMap<&String, &str>> = HashMap::new();
+    let mut by_relation: HashMap<&str, HashMap<&String, (&str, Option<f64>)>> = HashMap::new();
     for edge in &wiki.edges {
         let neighbor = if edge.source == node.id {
             &edge.target
@@ -488,9 +491,15 @@ fn god_node_article(wiki: &Wiki, node: &NodeAnalysis) -> String {
             .entry(edge.relation.as_str())
             .or_default()
             .entry(neighbor)
-            .or_insert("");
-        if conf_rank(edge.confidence.as_str()) < conf_rank(entry) || entry.is_empty() {
-            *entry = edge.confidence.as_str();
+            .or_insert(("", None));
+        if entry.0.is_empty() || conf_rank(edge.confidence.as_str()) < conf_rank(entry.0) {
+            *entry = (edge.confidence.as_str(), edge.confidence_score);
+        } else if edge.confidence.as_str() == entry.0 {
+            match (entry.1, edge.confidence_score) {
+                (Some(best), score) if score.is_none_or(|s| s > best) => entry.1 = score,
+                (None, score) => entry.1 = score,
+                _ => {}
+            }
         }
     }
 
@@ -500,7 +509,7 @@ fn god_node_article(wiki: &Wiki, node: &NodeAnalysis) -> String {
         let mut relations: Vec<String> = by_relation.keys().map(|k| k.to_string()).collect();
         relations.sort();
         for rel in relations {
-            let mut targets: Vec<(&String, &str)> = by_relation
+            let mut targets: Vec<(&String, (&str, Option<f64>))> = by_relation
                 .remove(rel.as_str())
                 .unwrap_or_default()
                 .into_iter()
@@ -521,10 +530,14 @@ fn god_node_article(wiki: &Wiki, node: &NodeAnalysis) -> String {
                     .get(*neighbor)
                     .map(|n| n.label.clone())
                     .unwrap_or_else(|| neighbor.to_string());
-                let conf_tag = if conf.is_empty() {
+                let conf_tag = if conf.0.is_empty() {
                     String::new()
                 } else {
-                    format!(" `{conf}`")
+                    let score = conf
+                        .1
+                        .map(|s| format!(":{s:.2}"))
+                        .unwrap_or_default();
+                    format!(" `{}{score}`", conf.0)
                 };
                 lines.push(format!("- {}{conf_tag}", wiki.node_link(&label, "../")));
             }
