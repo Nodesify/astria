@@ -488,7 +488,7 @@ fn qualified_scope_match(term: &str, id: &str) -> bool {
         return false;
     }
     let tokens = tokenize(id);
-    if tokens.iter().any(|t| *t == want) {
+    if tokens.contains(&want) {
         return true;
     }
     for start in 0..tokens.len() {
@@ -647,7 +647,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.cmp(b))
     });
-    let salient_k = (((effective.len() + 3) / 4).max(1)).min(3);
+    let salient_k = effective.len().div_ceil(4).clamp(1, 3);
     salient_terms.truncate(salient_k);
     let salient_set: std::collections::HashSet<&str> =
         salient_terms.iter().map(|t| t.as_str()).collect();
