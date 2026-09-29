@@ -1,6 +1,6 @@
 {
   "name": "@nodesify/astria",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Turn any folder into a queryable knowledge graph",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -18,8 +18,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "napi:build": "napi build --platform --release dist",
-    "napi:dev": "napi build --platform dist",
+    "napi:build": "node ../../scripts/build-native.mjs",
+    "napi:dev": "node ../../scripts/build-native.mjs --debug",
     "napi:artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm",
     "test": "npx tsx src/__tests__/cli.test.ts && npx tsx src/__tests__/install.test.ts && npx tsx src/__tests__/hooks.test.ts && npx tsx src/__tests__/e2e.test.ts"
@@ -63,10 +63,10 @@
     }
   },
   "optionalDependencies": {
-    "@nodesify/astria-win32-x64-msvc": "1.0.6",
-    "@nodesify/astria-darwin-x64": "1.0.6",
-    "@nodesify/astria-linux-x64-gnu": "1.0.6",
-    "@nodesify/astria-darwin-arm64": "1.0.6",
-    "@nodesify/astria-linux-arm64-gnu": "1.0.6"
+    "@nodesify/astria-win32-x64-msvc": "1.0.7",
+    "@nodesify/astria-darwin-x64": "1.0.7",
+    "@nodesify/astria-linux-x64-gnu": "1.0.7",
+    "@nodesify/astria-darwin-arm64": "1.0.7",
+    "@nodesify/astria-linux-arm64-gnu": "1.0.7"
   }
 }

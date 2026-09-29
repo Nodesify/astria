@@ -7,6 +7,7 @@ import {loadTokenizer} from '../tokenize.mjs';
 const configPath=path.resolve(process.argv[2]||'');
 if(!process.argv[2]) throw Error('Usage: node scripts/bench/paired/run.mjs <config.json>');
 const config=JSON.parse(readFileSync(configPath,'utf8'));
+const BUDGETS=Array.isArray(config.budgets)&&config.budgets.length>0?config.budgets:[1000,4000];
 const repo=process.cwd(), root=path.resolve(config.output);
 if(existsSync(root)) throw Error('Output must be a new directory: '+root);
 const tok=await loadTokenizer(); if(!tok) throw Error('Exact js-tiktoken tokenizer required');
@@ -28,7 +29,7 @@ if(git(config.graphify_source,'rev-parse','HEAD')!==config.graphify_commit) thro
 if(git(config.graphify_source,'status','--porcelain','--untracked-files=no')) throw Error('Graphify source must have no tracked changes');
 const imported=exec(python,['-c','import graphify; print(graphify.__file__)']);
 if(imported.status!==0 || !path.resolve(imported.stdout.trim()).startsWith(path.resolve(config.graphify_source)+path.sep)) throw Error('Python must use editable Graphify from the pinned source');
-const results={schema_version:3,date:new Date().toISOString(),provenance:{astria_commit:git(repo,'rev-parse','HEAD'),source_status:git(repo,'status','--porcelain'),graphify_commit:config.graphify_commit,graphify_status:git(config.graphify_source,'status','--porcelain','--untracked-files=no'),native_sha256:sha(path.join(runtime,'astria.node')),astria_cli_sha256:sha(cli),astria_native:native,astria_cli:cli,graphify_import:imported.stdout.trim(),profile:config.profile||'unspecified',node:process.version,python:exec(python,['--version']).stdout.trim(),platform:os.platform(),cpu:os.cpus()[0].model,logical_cpus:os.cpus().length},method:{budgets:[1000,4000],depth:2,tokenizer:tok.name,llm:false,embeddings:false,query_repetitions:1,build_repetitions:1,notes:'Fresh git archive copies per tool; serial builds; alternating query order; process startup included. Complete NODE lines only, unique source files in output order; same exact complete-line token clipping for both; definitions matched by grounded file and declaration line, separately from file recall. File retrieval, not generated answer correctness. Graphify structural pipeline via orig_run.py; Astria native pipeline, excluding CLI post-build token benchmark.'},corpora:[]};
+const results={schema_version:3,date:new Date().toISOString(),provenance:{astria_commit:git(repo,'rev-parse','HEAD'),source_status:git(repo,'status','--porcelain'),graphify_commit:config.graphify_commit,graphify_status:git(config.graphify_source,'status','--porcelain','--untracked-files=no'),native_sha256:sha(path.join(runtime,'astria.node')),astria_cli_sha256:sha(cli),astria_native:native,astria_cli:cli,graphify_import:imported.stdout.trim(),profile:config.profile||'unspecified',node:process.version,python:exec(python,['--version']).stdout.trim(),platform:os.platform(),cpu:os.cpus()[0].model,logical_cpus:os.cpus().length},method:{budgets:BUDGETS,depth:2,tokenizer:tok.name,llm:false,embeddings:false,query_repetitions:1,build_repetitions:1,notes:'Fresh git archive copies per tool; serial builds; alternating query order; process startup included. Complete NODE lines only, unique source files in output order; same exact complete-line token clipping for both; definitions matched by grounded file and declaration line, separately from file recall. File retrieval, not generated answer correctness. Graphify structural pipeline via orig_run.py; Astria native pipeline, excluding CLI post-build token benchmark.'},corpora:[]};
 const definitionMatch=(n,d,cwd,tool)=>{let f=(n.source_file||'').replaceAll('\\','/');if(path.isAbsolute(f))f=path.relative(cwd,f).replaceAll('\\','/'); const line=n.source_line??Number(String(n.source_location||'').match(/\d+/)?.[0]);return f===d.path && line+(tool==='astria'?1:0)===d.line;};
 const save=()=>writeFileSync(path.join(root,'results.json'),JSON.stringify(results,null,2));
 const clip=(text,budget)=>{if(tok.count(text)<=budget)return text;let output='';for(const line of text.match(/[^\n]*\n|[^\n]+$/g)||[]){if(tok.count(output+line)>budget)break;output+=line;}return output;};
@@ -56,7 +57,7 @@ for(const spec of config.corpora){
     if(tool==='astria'){const audit=exec(python,[path.join(repo,'scripts/bench/paired/audit-symbols.py'),cwd]); if(audit.status!==0)throw Error(audit.stderr); retention=JSON.parse(audit.stdout);}
     corpus.builds[tool]={retention,definitions:items.flatMap(item=>(item.definitions||[]).map(d=>({question:item.id,...d,present:g.nodes.some(n=>definitionMatch(n,d,cwd,tool))}))),seconds:r.seconds,nodes:g.nodes.length,edges:(g.edges||g.links).length,stderr:r.stderr};save();console.log(`${tool}: ${g.nodes.length} nodes; ${retention?.preserved??'n/a'} cached definition IDs retained`);
   }
-  for(const budget of [1000,4000])for(const [index,item] of items.entries())for(const tool of index%2?['graphify','astria']:['astria','graphify']){
+  for(const budget of BUDGETS)for(const [index,item] of items.entries())for(const tool of index%2?['graphify','astria']:['astria','graphify']){
     const cwd=path.join(root,spec.name+'-'+tool);
     const r=tool==='astria'?exec(process.execPath,[cli,'query',item.question,'--budget',String(budget),'--depth','2'],cwd):exec(python,['-m','graphify','query',item.question,'--budget',String(budget),'--graph',path.join(cwd,'graphify-out/graph.json')],cwd);
     const output=clip(r.stdout,budget), ranked=r.status===0?files(output,cwd):[];
@@ -66,7 +67,7 @@ for(const spec of config.corpora){
     const row={definitions,tool,budget,id:item.id,question:item.question,expected,seconds:r.seconds,status:r.status,error:r.error,stderr:r.stderr,raw_tokens:tok.count(r.stdout),tokens:tok.count(output),clipped:output!==r.stdout,rank:rank||null,files:ranked,recall:Object.fromEntries([1,3,5,10].map(k=>[k,expected.filter(f=>ranked.slice(0,k).includes(f)).length/expected.length])),stdout:r.stdout};
     corpus.queries.push(row);save();console.log(`${spec.name} ${budget} ${tool} ${item.id} rank=${rank||'miss'} ${r.seconds.toFixed(2)}s`);
   }
-  for(const budget of [1000,4000])for(const tool of ['astria','graphify']){
+  for(const budget of BUDGETS)for(const tool of ['astria','graphify']){
     const rows=corpus.queries.filter(r=>r.tool===tool&&r.budget===budget),n=rows.length;
     const avg=k=>rows.reduce((s,r)=>s+r[k],0)/n;
     corpus.summaries.push({tool,budget,n,errors:rows.filter(r=>r.status!==0).length,avg_seconds:avg('seconds'),median_seconds:rows.map(r=>r.seconds).sort((a,b)=>a-b)[Math.floor(n/2)],avg_tokens:avg('tokens'),avg_raw_tokens:avg('raw_tokens'),over_budget:rows.filter(r=>r.raw_tokens>budget).length,mrr:rows.reduce((s,r)=>s+(r.rank?1/r.rank:0),0)/n,...Object.fromEntries([1,3,5,10].flatMap(k=>[[`hit@${k}`,rows.filter(r=>r.rank&&r.rank<=k).length/n],[`recall@${k}`,rows.reduce((s,r)=>s+r.recall[k],0)/n]]))});

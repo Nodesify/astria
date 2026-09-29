@@ -5,5 +5,6 @@
 - `external/`: immutable Click, Express and ripgrep corpora, grounded seed questions, and a question-derived rg plus source-read baseline under 1000/4000 requested token budgets. Run explicitly with `node scripts/bench/external/run.mjs` after building the local CLI and installing js-tiktoken.
 - `run-snapshot.mjs`, `orig_run.py`, `tokenize.mjs`: published-release Graphify comparison; corpus/query size ratios are diagnostics, not savings versus targeted search.
 - `memory/`: LoCoMo memory retrieval, separate from repository navigation.
+- `open/`: external published benchmarks — SWE-bench Verified localization, RepoQA find, HotpotQA distractor retrieval, LOCOMO QA accuracy (Graphify-protocol shape). Smoke subsets by default; see its README for protocols and licenses.
 
 `quality.yml` builds the proposed native source and gates self-corpus retrieval; `bench-snapshot.yml` records installed release measurements. Reports distinguish source/harness commit, CLI version, corpus revision, budgets and tokenizer. No new measurements are supplied by these harness changes. Historical scores require their original methodology; do not relabel them as schema v2 results.

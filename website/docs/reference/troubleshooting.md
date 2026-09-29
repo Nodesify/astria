@@ -27,6 +27,7 @@ Every `query` output reports when the graph was last built, so you can judge fre
 ```bash
 astria update <path>          # incremental — only changed files
 astria watch <path>           # or keep it fresh automatically
+astria hook install           # or refresh quietly after every commit (throttled)
 ```
 
 ## `export --format html` refuses on a large repo
@@ -39,7 +40,7 @@ astria export --graph . --format html --mode large --out graph-view.html
 
 ## `add --postgres` fails
 
-Postgres introspection shells out to `psql` (read-only over `information_schema` — no credentials are stored). Install the Postgres client and make sure it is on `PATH`.
+Postgres introspection shells out to `psql` (read-only over the pg system catalogs — no credentials are stored). Install the Postgres client and make sure it is on `PATH`.
 
 ## First `run --embed` is slow
 
@@ -57,7 +58,7 @@ For noise from fixtures, generated code, or vendored assets, exclude them with a
 
 ## Too much inferred content in answers
 
-Every edge carries a confidence class (`EXTRACTED` / `INFERRED` / `AMBIGUOUS`). Use the high-fidelity tier to see declared facts only:
+Every edge carries a confidence class (`EXTRACTED` / `INFERRED` / `SEMANTIC` / `AMBIGUOUS` — LLM enrichment edges are `SEMANTIC`). Use the high-fidelity tier to see declared facts only:
 
 ```bash
 astria query "..." --detail high

@@ -91,6 +91,8 @@ fn save_semantic_cache(
 pub(super) struct SemanticPassStats {
     pub enriched: usize,
     pub cached: usize,
+    /// Files the backend's gate dropped before extraction (not failures).
+    pub gated: usize,
 }
 
 pub(super) fn enrich_with_semantics(
@@ -105,9 +107,10 @@ pub(super) fn enrich_with_semantics(
         return Ok(SemanticPassStats {
             enriched: 0,
             cached: 0,
+            gated: 0,
         });
     }
-    backend_factory()?;
+    let backend = backend_factory()?;
 
     let mut file_to_idx: HashMap<PathBuf, usize> = HashMap::new();
     for (i, ext) in extractions.iter().enumerate() {
@@ -162,8 +165,74 @@ pub(super) fn enrich_with_semantics(
     }
     let cached = ready.len();
 
+    // The backend may gate candidate files (Jev's batch keep/drop
+    // judgments): files it drops never cost an engine call. The gate can
+    // only save calls — gated files simply keep their AST-only extraction.
+    //
+    // Verdicts are cached per (content hash, backend identity): the live
+    // gate model re-rolls between runs, which made judge-gated graphs
+    // irreproducible (the same tree gated 31 files on one build and 17 on
+    // a replay). With the cache, identical bytes plus identical judge
+    // configuration reuse the previous decision — deterministic re-runs,
+    // and unchanged files cost no judge calls. `off` restores live gating.
+    let all_pending_paths: Vec<PathBuf> = pending.iter().map(|p| p.path.clone()).collect();
+    let gate_cache_on = std::env::var("ASTRIA_LLM_JEV_GATE_CACHE")
+        .map(|v| {
+            !matches!(
+                v.trim().to_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
+        .unwrap_or(true);
+    let pending_paths: Vec<PathBuf> = if gate_cache_on {
+        let gate_identity = backend.cache_identity();
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS gate_cache (
+                hash TEXT NOT NULL,
+                identity TEXT NOT NULL,
+                keep INTEGER NOT NULL,
+                judged_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (hash, identity)
+            )",
+        )?;
+        let mut cached_kept: Vec<PathBuf> = Vec::new();
+        let mut to_judge: Vec<(usize, PathBuf)> = Vec::new();
+        for (pi, p) in pending.iter().enumerate() {
+            let cached: Option<i64> = db
+                .query_row(
+                    "SELECT keep FROM gate_cache WHERE hash = ?1 AND identity = ?2",
+                    rusqlite::params![p.hash, gate_identity],
+                    |r| r.get(0),
+                )
+                .ok();
+            match cached {
+                Some(keep) if keep != 0 => cached_kept.push(p.path.clone()),
+                Some(_) => {}
+                None => to_judge.push((pi, p.path.clone())),
+            }
+        }
+        let judge_paths: Vec<PathBuf> = to_judge.iter().map(|(_, p)| p.clone()).collect();
+        let judged_kept: std::collections::HashSet<PathBuf> =
+            backend.gate_files(&judge_paths).into_iter().collect();
+        for (pi, path) in &to_judge {
+            db.execute(
+                "INSERT OR REPLACE INTO gate_cache (hash, identity, keep) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    pending[*pi].hash,
+                    gate_identity,
+                    judged_kept.contains(path) as i64
+                ],
+            )?;
+        }
+        let mut kept = cached_kept;
+        kept.extend(judge_paths.into_iter().filter(|p| judged_kept.contains(p)));
+        kept
+    } else {
+        backend.gate_files(&all_pending_paths)
+    };
+    let gated = all_pending_paths.len() - pending_paths.len();
+
     // Batch-extract cache misses in parallel.
-    let pending_paths: Vec<PathBuf> = pending.iter().map(|p| p.path.clone()).collect();
     let results = astria_semantic::extract_semantic_for_files_parallel(
         &pending_paths,
         backend_factory,
@@ -190,7 +259,7 @@ pub(super) fn enrich_with_semantics(
         })
         .collect();
 
-    let failed = pending.len() - extraction_by_path.len();
+    let failed = pending_paths.len() - extraction_by_path.len();
     if failed > 0 {
         return Err(astria_core::AstriaError::Graph(format!(
             "semantic extraction failed for {failed} file(s); graph and manifest were not advanced; retry to reuse successful cached results"
@@ -222,14 +291,15 @@ pub(super) fn enrich_with_semantics(
                 target: sem_edge.target.clone(),
                 relation: sem_edge.relation.clone(),
                 confidence: "SEMANTIC".to_string(),
-                confidence_score: None,
+                confidence_score: sem_edge.confidence_score,
                 source_file: path.clone(),
                 source_line: None,
             });
         }
     }
     Ok(SemanticPassStats {
-        enriched: pending.len(),
+        enriched: pending_paths.len(),
         cached,
+        gated,
     })
 }

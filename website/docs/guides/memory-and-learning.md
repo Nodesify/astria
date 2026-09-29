@@ -14,7 +14,7 @@ flowchart TD
     A["query / explain / path"] -->|"every run records (seed, discovered) pairs"| B["query history"]
     B -->|"same pair recurs:<br/>2+ distinct questions, 3+ total hits"| C["next run/update promotes it<br/>to a learned edge (INFERRED)"]
     D["save-result"] -->|"Q/A doc with outcome + correction"| E[".astria/memory/"]
-    E -->|"ingested as graph nodes on next run/update"| F["graph"]
+    E -->|"inserted as a document node + references edges immediately"| F["graph"]
     E -->|"reflect aggregates"| G["LESSONS.md"]
 ```
 
@@ -36,8 +36,7 @@ astria save-result "where is rate limiting?" \
 astria reflect
 ```
 
-- `save-result` writes a Q/A memory doc (with an outcome — `useful`, `dead_end`, or `corrected` — and optional corrections) into `.astria/memory/`. Cited node ids link the answer back to the graph.
-- The next `run`/`update` ingests memory docs as graph nodes, so settled questions become part of the graph itself.
+- `save-result` writes a Q/A memory doc (with an outcome — `useful`, `dead_end`, or `corrected` — and optional corrections) into `.astria/memory/`, and immediately inserts it into the graph as a document node with `references` edges to the cited code. Settled questions become part of the graph right away. (Rebuilding the database does not re-ingest saved memory docs — keep `.astria/memory/` if you ever recreate a graph from scratch.)
 - `reflect` aggregates outcomes into `.astria/reflections/LESSONS.md` with tallies — a running record of which answers held up.
 
 ## Why two loops

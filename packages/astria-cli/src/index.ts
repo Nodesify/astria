@@ -48,6 +48,7 @@ program
   .argument('<path>', 'Directory to analyze')
   .option('--no-dedup', 'Skip near-duplicate node merging')
   .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), or gemini')
+  .option('--judge <name>', 'Decision layer over the backend: jev (TypeSafe System One — gates trivial files, re-judges relations/node types, adds calibrated edge confidence)')
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
   .option('--wiki', 'Also export a markdown wiki to .astria/wiki')
   .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
@@ -63,11 +64,16 @@ program
   .argument('<path>', 'Directory to update')
   .option('--no-dedup', 'Skip near-duplicate node merging')
   .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), or gemini')
+  .option('--judge <name>', 'Decision layer over the backend: jev (TypeSafe System One — gates trivial files, re-judges relations/node types, adds calibrated edge confidence)')
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
   .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
   .option('--label-communities', 'Name communities thematically with one LLM call per changed community (requires a semantic backend)')
   .option('--deep', 'Second extraction tier: LLM-linked cross-file concept edges, cached per file (requires a semantic backend)')
-  .action(updateCommand);
+  .option('--quiet', 'Suppress progress lines and the token benchmark')
+  .option('--if-stale <minutes>', 'Skip when the graph was updated less than N minutes ago')
+  .action((path, opts) =>
+    updateCommand(path, { ...opts, ifStale: opts.ifStale ? Number(opts.ifStale) : undefined }),
+  );
 
 program
   .command('watch')

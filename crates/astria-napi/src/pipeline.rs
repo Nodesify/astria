@@ -17,6 +17,8 @@ pub struct PipelineResult {
     /// Files whose semantic extraction came from the content-hash cache
     /// instead of an API call.
     pub semantic_cached: usize,
+    /// Files the backend's gate dropped before extraction (not failures).
+    pub semantic_gated: usize,
     /// Measured LLM spend of this run's semantic passes (extraction,
     /// community naming, deep linking).
     pub llm_usage: astria_semantic::enrichment::TokenUsage,
@@ -611,6 +613,15 @@ fn run_pipeline_inner(
                 .into(),
         ));
     }
+    // A judge layers decisions on top of an engine; without an engine
+    // there is nothing to judge.
+    if astria_semantic::judge_from_env().is_some() && !astria_semantic::enrichment_enabled() {
+        return Err(astria_core::AstriaError::Graph(
+            "ASTRIA_LLM_JUDGE requires an explicit --backend or ASTRIA_LLM_BACKEND \
+             (the judge wraps an engine; it cannot generate extractions)"
+                .into(),
+        ));
+    }
     let detected = graph_update::detect(root, db)?;
     let configuration = semantic_pass::configuration()?;
     let build_configuration = format!("{configuration}:dedup={}", options.dedup);
@@ -651,6 +662,7 @@ fn run_pipeline_inner(
             semantic_pass::SemanticPassStats {
                 enriched: 0,
                 cached: 0,
+                gated: 0,
             },
         )
     };
@@ -737,7 +749,33 @@ fn run_pipeline_inner(
         Ok(_) => {}
         Err(e) => eprintln!("warning: hyperedge generation failed: {e}"),
     }
-    let analysis = astria_analyze::analyze(db)?;
+    let mut analysis = astria_analyze::analyze(db)?;
+    // Optional derived pass: a decision backend (Jev) may re-rank the
+    // suggested questions so the report leads with the most useful ones.
+    // Runs only when this run actually built the graph (the questions only
+    // change with the graph) and is best-effort — a failure keeps the
+    // generated order.
+    if needs_build {
+        if let Ok(backend) = astria_semantic::backend_from_env() {
+            let permutation = backend.rank_questions(&analysis.suggested_questions);
+            let questions = &analysis.suggested_questions;
+            let mut seen = vec![false; questions.len()];
+            let valid_permutation = permutation.len() == questions.len()
+                && permutation
+                    .iter()
+                    .all(|&i| i < questions.len() && !std::mem::replace(&mut seen[i], true));
+            if valid_permutation {
+                analysis.suggested_questions = permutation
+                    .into_iter()
+                    .map(|i| questions[i].clone())
+                    .collect();
+            } else {
+                eprintln!(
+                    "warning: question ranking returned an invalid permutation; keeping the generated order"
+                );
+            }
+        }
+    }
     let report = astria_report::generate_report(db, &analysis)?;
 
     write_report(astria_dir, &report)?;
@@ -750,6 +788,7 @@ fn run_pipeline_inner(
         report,
         files_processed,
         semantic_cached: semantic_stats.cached,
+        semantic_gated: semantic_stats.gated,
         llm_usage: astria_semantic::enrichment::usage_snapshot(),
         community_labels: label_stats,
         deep_links: deep_stats,

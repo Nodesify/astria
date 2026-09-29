@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Graph model
-description: What the graph contains — node types, relation types, provenance (EXTRACTED / INFERRED / AMBIGUOUS), confidence scores, hyperedges, and learned edges.
+description: What the graph contains — node types, relation types, provenance (EXTRACTED / INFERRED / SEMANTIC / AMBIGUOUS), confidence scores, hyperedges, and learned edges.
 keywords: [graph model, nodes, edges, relations, provenance, confidence, hyperedges, learned edges]
 ---
 
@@ -21,7 +21,7 @@ Every node carries: a stable `id` (deterministic from the file path and symbol �
 | `function` / `class` | AST extraction | Code symbols (functions, methods, classes, structs, traits — the vocabulary varies per language; see [Language support](./language-support)) |
 | `document` / `section` | Ingest + extraction | Markdown/text content: README, docs pages, wiki, transcripts, fetched URLs |
 | `reference` | Extraction | Identifier-shaped string literals (env var names, snake_case keys, dotted/kebab/slash chains) so config/status-value usage is queryable |
-| `rationale` | Memory ingest | Curated Q/A answers from `save-result`, linked to the code they cite |
+| `rationale` | Extraction | An explanatory code comment captured as a node, linked by `rationale_for` to the code it explains |
 | `package` | Manifest ingest | Cargo workspace members and internal path dependencies (`crate::*` nodes) |
 | `mcp_server` / `mcp_command` / `mcp_package` / `env_var` | MCP config ingest | Servers declared in `.mcp.json`, `mcp_servers.json`, `claude_desktop_config.json` (env **names** only, never values) |
 | `concept` / `entity` / `code` | LLM semantic enrichment | Concept nodes produced from docs/papers/images when an LLM backend is configured (see [Semantic enrichment](../guides/semantic-enrichment)) |
@@ -34,27 +34,33 @@ Every node carries: a stable `id` (deterministic from the file path and symbol �
 | `contains` | File/class contains symbol | EXTRACTED |
 | `imports` | Import/require/use between files | EXTRACTED |
 | `uses` | Identifier usage within a body | EXTRACTED |
-| `references` | Node mentions a `reference` literal | EXTRACTED |
+| `references` | Node mentions a `reference` literal, or a memory document cites a node (from `save-result`, which inserts the doc as a document node immediately) | EXTRACTED |
 | `depends_on` | Document-level dependency (e.g. memory docs citing files) | EXTRACTED |
 | `crate_depends_on` | Cargo workspace/path dependency (honors `package =` renames, `workspace = true`) | EXTRACTED |
+| `entry_point` | Cross-layer: a package → its conventional entry file (`src/lib.rs`, `index.ts`, `__init__.py`, …) | EXTRACTED |
+| `ffi_binding` | Cross-layer: a TS/JS symbol importing the napi binding → the Rust function behind it | EXTRACTED |
 | `requires_env` | MCP server command requires an env var (name only) | EXTRACTED |
 | `similar_to` | Semantic similarity between embeddings (cosine-scored) | INFERRED |
 | `learned` | Recurring (seed, discovered) query pair promoted by usage | INFERRED |
-| `rationale_for` | Curated memory answer grounded in code nodes | EXTRACTED |
-| `same_type_as` | Cross-repo: types sharing `(namespace, label)` in the global graph | INFERRED |
+| `rationale_for` | A code-comment rationale linked to the code it explains | EXTRACTED |
+| `same_type_as` | Cross-repo: same-label type declarations in the global graph (name-based unification) | INFERRED |
 | `scip_impl` / `scip_typed` / `scip_def` / `scip_ref` | From an ingested SCIP index (`add --scip`) | EXTRACTED |
 | `participate_in` / `shares_reference` | Hyperedge membership (see below) | EXTRACTED |
-| *(backend-defined, e.g. `forks`)* | LLM enrichment of docs/papers/images | INFERRED |
+| `implements` / `relates_to` | LLM semantic enrichment of docs/papers/images; relations are validated against a fixed allowlist (`implements`, `depends_on`, `relates_to`, `uses`, `contains`) and anything outside it clamps to `relates_to` | SEMANTIC |
 
 ## Provenance and confidence
 
-Every edge is labeled with one of three provenance values, plus a numeric `confidence_score`:
+Every edge is labeled with a provenance value, plus a numeric `confidence_score`:
 
 - **EXTRACTED** — found directly in the source (AST match, manifest parse, SCIP index). Declared fact.
-- **INFERRED** — deduced: embeddings, learned edges, global-graph type matching.
+- **INFERRED** — deduced: embeddings, learned edges, hyperedges, global-graph type matching.
+- **SEMANTIC** — produced by LLM enrichment: concept nodes and their edges extracted by the semantic backend, with relations validated against a fixed allowlist. Retrieval ranks it between INFERRED and AMBIGUOUS when no numeric score is present.
 - **AMBIGUOUS** — plausible but unconfirmed (e.g. a name match that could collide).
+- **DECLARED** — recognized alongside EXTRACTED for externally declared facts (not produced by the standard pipeline; it appears in externally assembled or merged graphs). Where present it ranks just above EXTRACTED.
 
 You can always tell what was found versus deduced. High-fidelity traversals (`query --detail high`, `path --detail high`, `map --detail high`, MCP `repo_map`/`query_graph` fidelity tiers) keep only declared facts. Every `EDGE` line in query output is anchored with `@file:line` and every `NODE` with `src=file:line`.
+
+Semantic edges carry the `SEMANTIC` provenance with a null score by default; under the [Jev judge layer](../guides/semantic-enrichment#jev-judge-layer) they gain the judge's calibrated existence probability (0–1) in `confidence_score`, and edges the judge rejects are dropped instead of published.
 
 ## Hyperedges
 

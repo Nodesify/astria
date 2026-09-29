@@ -201,6 +201,10 @@ const config = {
                 label: 'Release notes',
                 to: '/blog',
               },
+              {
+                label: 'Changelog',
+                href: 'https://github.com/Nodesify/astria/blob/main/CHANGELOG.md',
+              },
             ],
           },
         ],

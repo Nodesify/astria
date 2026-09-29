@@ -5,9 +5,15 @@ import { VERSION } from '../version';
 
 export async function runCommand(
   path: string,
-  opts: { dedup?: boolean; backend?: string; model?: string; wiki?: boolean; embed?: boolean; labelCommunities?: boolean; deep?: boolean; global?: boolean; as?: string },
+  opts: { dedup?: boolean; backend?: string; judge?: string; model?: string; wiki?: boolean; embed?: boolean; labelCommunities?: boolean; deep?: boolean; global?: boolean; as?: string },
 ) {
+  if (opts.judge && !opts.backend) {
+    console.error('Error: --judge requires --backend (the judge wraps an engine; it cannot generate extractions)');
+    process.exitCode = 1;
+    return;
+  }
   if (opts.backend) process.env.ASTRIA_LLM_BACKEND = opts.backend;
+  if (opts.judge) process.env.ASTRIA_LLM_JUDGE = opts.judge;
   if (opts.model) process.env.ASTRIA_LLM_MODEL = opts.model;
   try {
     console.log(`Running astria pipeline on: ${path}`);

@@ -142,8 +142,14 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 );
                 for n in &r.neighbors {
                     out.push_str(&format!(
-                        "  --{} [{}]--> {} ({})\n",
-                        n.relation, n.confidence, n.neighbor_label, n.neighbor_file
+                        "  --{} [{}{}]--> {} ({})\n",
+                        n.relation,
+                        n.confidence,
+                        n.confidence_score
+                            .map(|s| format!(":{s:.2}"))
+                            .unwrap_or_default(),
+                        n.neighbor_label,
+                        n.neighbor_file
                     ));
                 }
                 text_result(out)
@@ -165,8 +171,13 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                         }
                     }
                     out.push_str(&format!(
-                        "{} [{}] ({})\n",
-                        n.neighbor_label, n.relation, n.neighbor_file
+                        "{} [{}{}] ({})\n",
+                        n.neighbor_label,
+                        n.relation,
+                        n.confidence_score
+                            .map(|s| format!(":{s:.2}"))
+                            .unwrap_or_default(),
+                        n.neighbor_file
                     ));
                 }
                 if out.is_empty() {
@@ -358,7 +369,7 @@ fn handle_message(db: &Connection, db_path: &str, msg: &Value) -> Option<Value> 
             "protocolVersion": params.get("protocolVersion").and_then(|v| v.as_str()).unwrap_or(PROTOCOL_VERSION),
             "capabilities": {"tools": {}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-            "instructions": "This server exposes a prebuilt knowledge graph of a codebase. Prefer these tools over grepping or browsing files: call repo_map first to orient, query_graph for natural-language questions about architecture or behavior, explain or get_neighbors for a specific symbol, shortest_path to trace how two things connect, and affected before changing a node to see the blast radius. If graph_stats reports 0 nodes, the graph has not been built yet — tell the user to run `astria run <path>`. After code edits, `astria update <path>` refreshes the graph."
+            "instructions": "This server exposes a prebuilt knowledge graph of a codebase. Prefer these tools over grepping or browsing files: call repo_map first to orient, query_graph for natural-language questions about architecture or behavior, explain or get_neighbors for a specific symbol, shortest_path to trace how two things connect, and affected before changing a node to see the blast radius. If graph_stats reports 0 nodes, the graph has not been built yet — tell the user to run `astria run <path>`. After code edits, `astria update <path>` refreshes the graph; installing the git hooks with `astria hook install` makes that automatic after every commit."
         }),
         "ping" => json!({}),
         "tools/list" => json!({"tools": tools()}),

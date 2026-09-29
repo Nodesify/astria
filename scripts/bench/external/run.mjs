@@ -4,6 +4,10 @@ import {readFileSync, existsSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {loadTokenizer} from '../tokenize.mjs';
+if (process.argv.slice(2).some(a => a === '--help' || a === '-h')) {
+  console.log('External paired benchmark: clones pinned Click/Express/ripgrep sources (never installs them), builds fresh graphs, runs the golden questions at 1000/4000-token budgets vs a targeted rg baseline. No arguments; outputs land in scripts/bench/quality/out. Refuses a previously graphed bench-work/external directory — use a fresh one for another run.');
+  process.exit(0);
+}
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(dir, '../../..');
 const cli = path.join(repo, 'packages/astria-cli/dist/index.js');

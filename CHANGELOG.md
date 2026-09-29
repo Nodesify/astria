@@ -4,6 +4,47 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.0.7] — 2026-09-28
+
+### Jev judge layer — calibrated second opinion over any backend
+- New `--judge jev` flag (run/update) layers TypeSafe's Jev — a System One decision model that returns typed judgments with calibrated probabilities, not generated text — on top of the selected `--backend` (claude, openai-compatible, or gemini). The engine still generates every extraction; the judge re-judges it. `--backend jev` is not accepted and errors with a pointer to `--judge` (`ASTRIA_LLM_JUDGE=jev` selects it via env).
+- **Trivial-file gate** (on by default, bounded batch sizes) — before a file's first extraction, batched keep/drop judgments (≈1 billed request per 50 files, files >64 KB presumed rich) skip files the judge finds empty or trivial, so they never cost an engine call. Gated files keep their structural extraction; the run summary reports them ("N files gated by Jev").
+- **Per-file verification** — one request per file re-chooses node types and relations from the schema allowlists (replacing the lossy `relates_to`/`concept` clamps) and gets a keep/drop existence verdict per edge. Spurious edges are dropped (`ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY`, default 0.40); kept edges carry the judge's keep probability as a calibrated `confidence_score` in the `edges` table — semantic edges previously left it null.
+- **Suggested-question ranking** — on runs that rebuilt the graph, the report's suggested questions are re-ordered by judge keep-scores so the most useful one leads. Best-effort: any judge failure keeps the generated order.
+- Judge calls count toward `ASTRIA_LLM_BUDGET` like every other response, and the judge configuration (model, thresholds, gate settings, prompt text) fingerprints into the semantic extraction cache — changing it invalidates cached extractions. `--judge` without `--backend` errors: the judge wraps an engine, it cannot generate extractions.
+- Configuration: `ASTRIA_LLM_JUDGE_API_KEY` (or `TYPESAFE_API_KEY`) and `ASTRIA_LLM_JUDGE_MODEL` (default `jev-latest`) are vendor-generic; behavior knobs keep the honest `ASTRIA_LLM_JEV_*` names (`_VERIFY`, `_MIN_EDGE_PROBABILITY`, `_GATE`, `_GATE_MAX_BYTES`, `_GATE_DROP_THRESHOLD`, `_GATE_BATCH`).
+
+### HTML visualization rewritten around drill-down
+- `astria export --format html` now ships a self-contained canvas viewer (no vis-network, no network access required) that opens as community bubbles — one per community, sized by membership, with edge-weighted links between bubbles. Click a bubble to expand it into member nodes, click a member to focus its 1-hop neighborhood, and search to jump straight to any symbol; "All nodes" expands everything with level-of-detail labels.
+- The exported layout stays fully precomputed (physics-free), and the viewer draws only what is on screen, so large graphs open and zoom instantly even in sandboxed HTML previewers.
+- Viewer source lives in `packages/viewer` (TypeScript, `npm run build`); the minified bundle is embedded at `crates/astria-napi/src/assets/viewer.js`. Community bubbles use themed labels from the `communities` table when `--label-communities` produced them.
+- **Relation-aware focus** — the exported edge payload now carries the edge kind (`calls`, `imports`, …): the focus panel lists a selected node's neighbors with their relation, and the highlighted 1-hop edges gain direction arrowheads (direction shown where it matters, not on the hairball).
+- **Community search** — search matches community names as well as symbols and files; picking a community expands and centers its bubble.
+- **Accessibility floor** — the canvas exposes a `role="img"` label with node/community/edge counts plus a visually hidden summary of the controls, so screen readers get a usable description of the export.
+- **Quiet, throttled git hooks** — `astria hook install` now writes v4 hooks that invoke `update . --quiet --if-stale 10`: hook-driven rebuilds print nothing (no progress lines, no token benchmark), and skip entirely when the graph was published less than 10 minutes ago, so a burst of commits rebuilds once instead of per commit. `astria update` gained matching `--quiet` / `--if-stale <minutes>` flags; hooks retry plain `update .` against any CLI version that predates the flags, and still never break a commit.
+
+### Skills and MCP updated for the new features
+- The shipped skills (`packages/astria-cli/skills/skill*.md`, full + per-assistant variants) now teach agents the new capabilities: the interactive bubble-viewer export (`export --format html`, `--mode standard|large`, the `tree` view, and `--neo4j-push`/`--redis-push`), the full `update` flag set (`--no-dedup`, `--embed`, `--label-communities`, `--deep`, `--quiet`, `--if-stale`), and the git hooks (`astria hook install|uninstall|status`, `hook-guard`) with their automatic post-commit refresh. Existing installs refresh by re-running `astria install`.
+- The MCP server's client instructions now point agents at the hooks (`astria hook install`) for automatic post-edit freshness, and the skill's MCP tool list is corrected to include `health`.
+
+### Retrieval ranking tightened for prose corpora
+- Chunk labels are a truncated first line of the chunk's own body; scoring no longer amplifies that prefix at label weight for `chunk` nodes, so a later session whose opening line re-mentions a topic cannot outrank the chunk whose body actually answers the question.
+- The IDF pre-pass now counts document bodies as well as labels, so terms that are common in bodies but rare in first lines ("group", "friends" in transcripts) stop acting as near-max discriminators, and rare proper nouns carry the ranking.
+- Measured on the full LoCoMo set (1,977 questions, structural, no embeddings): recall@1 63.5% → 66.1%, recall@3 79.3% → 80.7%, MRR 0.717 → 0.736, with recall@5/10 at 85.0%. The 35-question code self-check (quality harness) holds recall@5 at 82.9% with MRR 0.636 → 0.659 (a different series from the paired-runner self numbers below — different harness, pinned graphs).
+
+### Qualified-name retrieval and the first blind answer-correctness run
+- Question terms now score against each node's scope-qualified id (`BaseCommand.get_usage` reaches `src_click_core_basecommand::get_usage` through the id even though every same-name symbol shares one bare label), and id tokens join the IDF pre-pass so ubiquitous scope words ("src", "core") cannot act as rare discriminators.
+- The seed reservation honors qualified names too: an explicitly named qualified symbol reserves its node a traversal seed instead of losing the slot to a label-tie stranger. Click's additional validation went from 0% to 2/2 exact definitions surfaced, additional ripgrep from 25% to 3/4, and the paired-runner self set's MRR from 0.618 to 0.687 at unchanged file recall; LoCoMo is unchanged.
+- Blind answer-correctness judging finally ran (TypeSafe System One judge, `scripts/bench/quality/blind-judge.mjs`): both tools answered the same 35 rubric-grounded questions, graded without tool identity — astria 100% PASS, Graphify 77.1% PASS / 2.9% PARTIAL / 20% FAIL. First generated-answer-correctness measurement in the project (single judge, single run, 35 self-corpus questions — not a statistical claim). The same pairs re-graded by the independent promptfoo/OpenRouter judge (`gpt-4o-mini`) agreed on the ordering at 77.1% vs 65.7% pass.
+- The paired runner's budgets are configurable (`budgets` array). A four-point budget-response curve (250/500/1000/2000) shows astria's 250-token answers outscoring Graphify's 2,000-token answers (MRR 0.680 vs 0.531, recall@5 74% vs 69%) while Graphify exceeds each of the two smallest budgets on 48/50 raw responses and astria stays inside budget on all 200 (structural only, one observation per condition).
+- Two reserved golden tracks exist, authored from pinned source and unused during development: `click.doc-intent-v1.jsonl` (8 doc-intent cases) and `click.reserved-v1.jsonl` (12 cases, doc- and code-intent, line-exact definitions). First use must be an evaluation run; afterwards they count as exercised.
+- Held-out evidence grew: `scripts/bench/paired/*.heldout-v2.jsonl` adds 14 separately authored, line-exact grounded cases (5 Click, 5 Express, 4 ripgrep); current runtime retrieves 5/5, 5/5, 2/4 files and 11/13 v2 definitions in the top five.
+
+### Fixed
+- **Tree export hardening** — the symbol-tree hover inspector builds its panel with DOM `textContent` instead of `innerHTML`, and the embedded JSON escapes `</script`/`<!--` breakout sequences: the tree viewer now upholds the bubble viewer's labels-as-text safety property, with matching tests.
+- **Docs drift** — reference pages corrected against the code: query-log env semantics (`ASTRIA_QUERY_LOG` is a literal path; `ASTRIA_QUERY_LOG_ENABLE` selects the default), the `--json` 20-neighbor cap, `--detail high` as an `EXTRACTED`/`DECLARED` class filter, `--label-communities`/`--deep`/`update --embed` flags, missing env-var rows (`ASTRIA_LLM_BUDGET`, `ASTRIA_LLM_COMMUNITY_MAX`, `NEO4J_*`), the real `scip_*` relations replacing the never-emitted `method`/`inherits`/`forks`, schema table columns, memory ingestion timing, and `same_type_as` label-based grouping. The docs-sync guard no longer counts `#[cfg(test)]` fixtures as relation emitters (a clamp-test `relation: "forks"` had been satisfying the check for a documented relation that does not exist).
+- **Docs drift guard, both directions** — the docs-sync check now also fails when ARCHITECTURE.md documents a relation that no production code emits or references (with an explicit `(external only)` escape), when an `ASTRIA_*` variable is read but undocumented or documented but never read, when a registered CLI command/flag or MCP tool is missing from its reference page, and when the new generated SQLite schema block is stale. The schema block is generated from `db.rs` into the architecture page by `scripts/generate-schema-docs.mjs` (column lists can no longer drift — the first generated block surfaced five previously undocumented columns); ARCHITECTURE.md's schema section now links there instead of restating columns, and the website's relation list defers to the graph-model reference. The distributed skill (`skills/astria/SKILL.md`) gained an explicit scope note pointing at the full surface.
+
 ## [1.0.6] — 2026-09-27
 
 ### Chunked document retrieval
@@ -311,6 +352,7 @@ installed skill files. `astria migrate` moves pre-1.0 layouts.
 
 See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
+[1.0.6]: https://github.com/Nodesify/astria/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/Nodesify/astria/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/Nodesify/astria/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Nodesify/astria/compare/v1.0.2...v1.0.3

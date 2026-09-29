@@ -12,6 +12,14 @@ use std::collections::HashMap;
 const OVERSIZED_SHARE: f64 = 0.25;
 const OVERSIZED_MIN: usize = 10;
 
+/// Communities smaller than UNDERSIZED_MIN nodes that share at least one
+/// edge with another community are merged into their strongest neighbor.
+/// Judge-pruned semantic edges and near-duplicate removal strand one- and
+/// two-node fragments by the hundreds; they carry no theme and bury every
+/// community listing. Truly isolated nodes (no edges at all) keep their
+/// own community because there is nothing to merge into.
+const UNDERSIZED_MIN: usize = 3;
+
 #[derive(Debug)]
 pub struct ClusterResult {
     pub communities: HashMap<u32, usize>,
@@ -132,6 +140,53 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
         }
         if !split_happened {
             break;
+        }
+    }
+
+    // Merge undersized fragments into their strongest neighbor, always
+    // taking the mergeable fragment whose first member has the lowest
+    // index so the partition stays deterministic. Each merge strictly
+    // reduces the community count, and fragments with no cross edges are
+    // recorded as isolated (their edges never change, so they can never
+    // become mergeable) — a pass with neither terminates the loop.
+    let mut isolated: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    loop {
+        let sizes = sizes_of(&labels);
+        let mut fragment = None;
+        for &l in labels.iter() {
+            if sizes[&l] < UNDERSIZED_MIN && !isolated.contains(&l) {
+                fragment = Some(l);
+                break;
+            }
+        }
+        let Some(fragment) = fragment else { break };
+        let members: Vec<usize> = labels
+            .iter()
+            .enumerate()
+            .filter(|(_, &l)| l == fragment)
+            .map(|(i, _)| i)
+            .collect();
+        // Tally cross edges from every fragment member to each neighboring
+        // community; the most-connected one absorbs the fragment. Ties go
+        // to the lower community id.
+        let mut tally: HashMap<u32, usize> = HashMap::new();
+        for &member in &members {
+            for neighbor in graph.neighbors(NodeIndex::new(member)) {
+                let nl = labels[neighbor.index()];
+                if nl != fragment {
+                    *tally.entry(nl).or_insert(0) += 1;
+                }
+            }
+        }
+        let Some((&target, _)) = tally
+            .iter()
+            .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        else {
+            isolated.insert(fragment);
+            continue;
+        };
+        for &member in &members {
+            labels[member] = target;
         }
     }
 
@@ -588,6 +643,49 @@ mod tests {
         let db = open_db_in_memory().unwrap();
         let result = cluster(&db).unwrap();
         assert_eq!(result.communities.len(), 0);
+    }
+
+    #[test]
+    fn undersized_fragment_merges_into_strongest_neighbor_and_isolated_node_stays() {
+        // A clique of four plus a two-node fragment attached to 'c', plus a
+        // truly isolated node. The fragment (size 2 < UNDERSIZED_MIN) must
+        // merge into the clique's community; the isolated node has no edges
+        // and keeps its own community.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch("
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES ('a', 'A', 'code', 'f.py');
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES ('b', 'B', 'code', 'f.py');
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES ('c', 'C', 'code', 'f.py');
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES ('d', 'D', 'code', 'f.py');
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES ('f1', 'F1', 'code', 'g.py');
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES ('f2', 'F2', 'code', 'g.py');
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES ('solo', 'Solo', 'code', 'h.py');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('a', 'b', 'calls', 'EXTRACTED', 'f.py');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('a', 'c', 'calls', 'EXTRACTED', 'f.py');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('a', 'd', 'calls', 'EXTRACTED', 'f.py');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('b', 'c', 'calls', 'EXTRACTED', 'f.py');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('b', 'd', 'calls', 'EXTRACTED', 'f.py');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('c', 'd', 'calls', 'EXTRACTED', 'f.py');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('c', 'f1', 'calls', 'EXTRACTED', 'g.py');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('f1', 'f2', 'calls', 'EXTRACTED', 'g.py');
+        ").unwrap();
+        let result = cluster(&db).unwrap();
+        let community: HashMap<String, i64> = {
+            let mut stmt = db.prepare("SELECT id, community FROM nodes").unwrap();
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        // Fragment joined the clique: f1/f2 share their community with c.
+        assert_eq!(community["f1"], community["c"]);
+        assert_eq!(community["f2"], community["f1"]);
+        // Isolated node kept its own community.
+        assert_ne!(community["solo"], community["c"]);
+        // The clique itself stayed one community.
+        assert_eq!(community["a"], community["d"]);
+        // Exactly two communities remain: the merged clique+fragment and solo.
+        assert_eq!(result.communities.len(), 2, "{:?}", result.communities);
     }
 
     #[test]

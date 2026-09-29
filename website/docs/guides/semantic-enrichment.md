@@ -2,7 +2,7 @@
 sidebar_position: 2
 title: Semantic enrichment
 description: Two optional semantic layers — local embeddings (no API key) and LLM enrichment — that add similar_to edges and concept nodes to the graph.
-keywords: [embeddings, llm, semantic, claude, openai, gemini, similar_to]
+keywords: [embeddings, llm, semantic, claude, openai, gemini, jev, judge, similar_to]
 ---
 
 # Semantic enrichment
@@ -42,9 +42,19 @@ Select an LLM backend explicitly with `--backend` or `ASTRIA_LLM_BACKEND` to enr
 
 Once selected, a backend reads its configured credentials, including the generic provider environment variables listed above. Without explicit selection, the structural pipeline does not invoke an LLM. `--label-communities` and `--deep` also require explicit backend selection.
 
+### Jev judge layer
+
+`astria run . --backend openai --judge jev` keeps the engine backend as the generator and layers TypeSafe's Jev on top of it. Jev is a System One decision model — typed judgments with calibrated probabilities, not a text generator — so it never writes the extraction itself; it re-judges what the engine produced:
+
+- **Gates trivial files** before their first extraction with batched keep/drop judgments (≈1 request per 50 files), so empty or trivial files never cost an engine call. Gated files keep their structural extraction; the run summary reports the count ("N files gated by Jev"). Verdicts are cached per file content and judge configuration, so re-runs are reproducible and unchanged files cost no gate calls (`ASTRIA_LLM_JEV_GATE_CACHE=off` restores live re-judging).
+- **Re-judges every extraction** in one request per file: relations and node types are re-chosen from the schema allowlists (replacing the lossy clamps), and every edge gets a keep/drop existence verdict. Spurious edges are dropped; kept edges carry the judge's keep probability as a calibrated `confidence_score` in the graph — surfaced on query `EDGE` lines (`[SEMANTIC:0.82]`), `explain`/MCP neighbor listings, and wiki relation sections. Query traversal makes the signal load-bearing: nodes reached only through low-confidence semantic links sort after strongly-reached ones, and `ASTRIA_QUERY_MIN_SEMANTIC_CONFIDENCE` sets a hard floor that drops weak verified edges from traversal entirely (structural and inferred edges are never filtered).
+- **Re-ranks the suggested questions** in `graph_report.md` so the most useful one leads (only on runs that rebuilt the graph).
+
+Judge decisions are cheap and batched, count toward `ASTRIA_LLM_BUDGET` like every other call, and fingerprint into the extraction cache — changing the judge or its configuration invalidates cached extractions. The judge requires an explicit backend (it wraps an engine; it cannot generate extractions — `--backend jev` is rejected with a pointer to `--judge`).
+
 ### Cost: measured, capped, and cached
 
-Every backend response's usage block is counted across the whole run — extraction, community naming, and deep linking — and the run summary prints it:
+Every response's usage block is counted across the whole run — extraction, gate, verification, community naming, and deep linking — and the run summary prints it:
 
 ```
 LLM usage: 17 API calls, 3366 in / 1675 out tokens

@@ -430,6 +430,8 @@ pub struct PipelineResultJs {
     pub report: String,
     /// Files whose semantic extraction came from the content-hash cache.
     pub semantic_cached: i64,
+    /// Files the backend's gate dropped before extraction (not failures).
+    pub semantic_gated: i64,
     /// Measured LLM spend of this run's semantic passes.
     pub llm_input_tokens: i64,
     pub llm_output_tokens: i64,
@@ -536,6 +538,7 @@ pub struct EdgeInfoJs {
     pub neighbor_line: Option<i64>,
     pub relation: String,
     pub confidence: String,
+    pub confidence_score: Option<f64>,
 }
 
 #[napi(object)]
@@ -651,6 +654,7 @@ fn pipeline_result_js(result: &pipeline::PipelineResult) -> PipelineResultJs {
         communities: result.cluster_result.communities.len() as i64,
         report: result.report.clone(),
         semantic_cached: result.semantic_cached as i64,
+        semantic_gated: result.semantic_gated as i64,
         llm_input_tokens: result.llm_usage.input as i64,
         llm_output_tokens: result.llm_usage.output as i64,
         llm_api_calls: result.llm_usage.calls as i64,
@@ -1053,6 +1057,7 @@ pub fn explain_node(root: String, node_id: String) -> napi::Result<Option<Explai
                 neighbor_line: n.neighbor_line,
                 relation: n.relation,
                 confidence: n.confidence,
+                confidence_score: n.confidence_score,
             })
             .collect(),
     }))
@@ -1278,6 +1283,7 @@ pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
         communities: cluster_result.communities.len() as i64,
         report,
         semantic_cached: 0,
+        semantic_gated: 0,
         llm_input_tokens: 0,
         llm_output_tokens: 0,
         llm_api_calls: 0,
@@ -1306,6 +1312,7 @@ pub fn merge_graphs(
         communities: result.communities as i64,
         report: result.report,
         semantic_cached: 0,
+        semantic_gated: 0,
         llm_input_tokens: 0,
         llm_output_tokens: 0,
         llm_api_calls: 0,
