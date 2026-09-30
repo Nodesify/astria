@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "astria": {
+      "type": "stdio",
+      "command": "astria",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

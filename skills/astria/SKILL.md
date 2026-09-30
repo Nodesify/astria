@@ -49,7 +49,7 @@ If `.astria/` exists in the project, prefer the graph over grep/glob for archite
 
 Keep native search for what the graph can't see: predicate-level bugs, exact-string audits, and cold discovery when no symbol name is known yet.
 
-If an `astria` MCP server is connected (registered by `astria install` for claude, cursor, gemini, and zcode), prefer its native tools - `repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`, `god_nodes`, `list_communities`, `graph_stats`, `health` - over shell commands.
+If an `astria` MCP server is connected (registered by `astria install` for most coding tools — claude, cursor, gemini, zcode, vscode, codex, trae, kiro, windsurf, opencode, and the Copilot coding agent)), prefer its native tools - `repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`, `god_nodes`, `list_communities`, `graph_stats`, `health` - over shell commands.
 
 ## Build or refresh the graph
 
