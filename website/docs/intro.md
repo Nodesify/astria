@@ -16,7 +16,7 @@ You drop into an unfamiliar repo and need to know: what is load-bearing here, wh
 ## Three things a folder full of files can't give you
 
 1. **Structure that survives the session** — hub files, god nodes, communities, and the blast radius of any change, stored in SQLite and refreshed incrementally as code changes.
-2. **An honest audit trail** — every edge is labeled `EXTRACTED` / `INFERRED` / `SEMANTIC` / `AMBIGUOUS` with a numeric confidence score. You always know what was found in the source versus deduced versus judged by an LLM, and `--detail high` filters to only `EXTRACTED` facts.
+2. **An honest audit trail** — every edge is labeled `EXTRACTED` / `RESOLVED` / `INFERRED` / `SEMANTIC` / `AMBIGUOUS` with a numeric confidence score. You always know what was found in the source, uniquely bound, deduced, or judged by an LLM, and `--detail high` filters to only source-declared facts.
 3. **Answers for agents and humans** — query it from the CLI, from any AI agent via MCP, or just read the exported markdown wiki with plain file links.
 
 ## Where to go next

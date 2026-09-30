@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Graph model
-description: What the graph contains — node types, relation types, provenance (EXTRACTED / INFERRED / SEMANTIC / AMBIGUOUS), confidence scores, hyperedges, and learned edges.
+description: What the graph contains — node types, relation types, provenance (EXTRACTED / RESOLVED / INFERRED / SEMANTIC / AMBIGUOUS), confidence scores, hyperedges, and learned edges.
 keywords: [graph model, nodes, edges, relations, provenance, confidence, hyperedges, learned edges]
 ---
 
@@ -11,14 +11,14 @@ astria stores a property graph in SQLite (see [The .astria directory](./director
 
 ## Nodes
 
-Every node carries: a stable `id` (deterministic from the file path and symbol — the same code produces the same ids across runs), a `label`, a `node_type`, source location (`source_file` + `source_line`), an optional `docstring` and `signature` (source text up to the body — what the symbol is without opening the file), plus computed fields (`community` id, `degree_centrality`).
+Every node carries: a stable `id` (deterministic from the file path and symbol — the same code produces the same ids across runs), a `label`, a `node_type`, source location (`source_file` + `source_line`), an optional `docstring` (doc comments where the language has them — `///` items and `//!` modules in Rust, body docstrings in Python/JS) and `signature` (source text up to the body — what the symbol is without opening the file), plus computed fields (`community` id, `degree_centrality`).
 
 ### Node types
 
 | Type | Produced by | Meaning |
 |---|---|---|
 | `file` | AST extraction | One per analyzed source file |
-| `function` / `class` | AST extraction | Code symbols (functions, methods, classes, structs, traits — the vocabulary varies per language; see [Language support](./language-support)) |
+| `function` / `class` | AST extraction | Code symbols (functions, methods, classes, structs, traits — the vocabulary varies per language; see [Language support](./language-support)). Rust `pub`/documented `const`/`static` items are extracted with the initializer verbatim as the signature (extraction type `constant`, stored as code) so value questions ("which model", "what threshold") are answerable |
 | `document` / `section` | Ingest + extraction | Markdown/text content: README, docs pages, wiki, transcripts, fetched URLs |
 | `reference` | Extraction | Identifier-shaped string literals (env var names, snake_case keys, dotted/kebab/slash chains) so config/status-value usage is queryable |
 | `rationale` | Extraction | An explanatory code comment captured as a node, linked by `rationale_for` to the code it explains |
@@ -30,7 +30,7 @@ Every node carries: a stable `id` (deterministic from the file path and symbol �
 
 | Relation | Meaning | Provenance |
 |---|---|---|
-| `calls` | A calls B | EXTRACTED (call sites) |
+| `calls` | A calls B | RESOLVED when the callee name binds to exactly one definition; INFERRED when it cannot resolve (the call site is extracted either way) |
 | `contains` | File/class contains symbol | EXTRACTED |
 | `imports` | Import/require/use between files | EXTRACTED |
 | `uses` | Identifier usage within a body | EXTRACTED |
@@ -53,7 +53,8 @@ Every node carries: a stable `id` (deterministic from the file path and symbol �
 Every edge is labeled with a provenance value, plus a numeric `confidence_score`:
 
 - **EXTRACTED** — found directly in the source (AST match, manifest parse, SCIP index). Declared fact.
-- **INFERRED** — deduced: embeddings, learned edges, hyperedges, global-graph type matching.
+- **RESOLVED** — a call expression extracted from source whose bare name binds to exactly one definition during reference resolution. Trustworthy for impact analysis, but the binding is name inference rather than compiler resolution, so it deliberately sits below EXTRACTED: high-fidelity tiers and EXTRACTED-only checks (like health's file-cycle detection) still exclude it.
+- **INFERRED** — deduced: unresolvable call stubs, embeddings, learned edges, hyperedges, global-graph type matching.
 - **SEMANTIC** — produced by LLM enrichment: concept nodes and their edges extracted by the semantic backend, with relations validated against a fixed allowlist. Retrieval ranks it between INFERRED and AMBIGUOUS when no numeric score is present.
 - **AMBIGUOUS** — plausible but unconfirmed (e.g. a name match that could collide).
 - **DECLARED** — recognized alongside EXTRACTED for externally declared facts (not produced by the standard pipeline; it appears in externally assembled or merged graphs). Where present it ranks just above EXTRACTED.

@@ -68,7 +68,7 @@ For noise from fixtures, generated code, or vendored assets, exclude them with a
 
 ## Too much inferred content in answers
 
-Every edge carries a confidence class (`EXTRACTED` / `INFERRED` / `SEMANTIC` / `AMBIGUOUS` — LLM enrichment edges are `SEMANTIC`). Use the high-fidelity tier to see declared facts only:
+Every edge carries a confidence class (`EXTRACTED` / `RESOLVED` / `INFERRED` / `SEMANTIC` / `AMBIGUOUS` — LLM enrichment edges are `SEMANTIC`; `RESOLVED` marks a source-extracted call uniquely bound to one definition). Use the high-fidelity tier to see declared facts only (`RESOLVED` bindings stay excluded — they are name inference, not compiler resolution):
 
 ```bash
 astria query "..." --detail high

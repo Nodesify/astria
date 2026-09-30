@@ -136,13 +136,14 @@ fn root_relative(path: &str, root: Option<&Path>) -> String {
     normalized
 }
 
-/// EXTRACTED beats INFERRED beats anything else when collapsing duplicate
+/// EXTRACTED beats RESOLVED beats INFERRED beats anything else when collapsing duplicate
 /// edges to the same neighbor.
 fn conf_rank(conf: &str) -> u8 {
     match conf {
         "EXTRACTED" => 0,
-        "INFERRED" => 1,
-        _ => 2,
+        "RESOLVED" => 1,
+        "INFERRED" => 2,
+        _ => 3,
     }
 }
 
