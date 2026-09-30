@@ -28,15 +28,15 @@ Runs the MCP stdio server — ten tools for querying and assessing the graph fro
 ## Skill files (`install`)
 
 ```bash
-astria install [--platform claude]
-astria uninstall [--platform claude]
+astria install [--platform claude] [--all]
+astria uninstall [--platform claude] [--all]
 ```
 
-Supported platforms: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`.
+Supported platforms: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`, `vscode`, `windsurf`, `cline`, `roo`, `amp`. `--all` installs (or removes) every platform in one run — multi-tool users don't need to know the flag per tool.
 
 `install` writes the platform's skill files and injects an always-on `## astria` instruction block into `AGENTS.md` / `CLAUDE.md` — telling agents to query the graph before grepping and to run `update` after edits. The instruction block names both access paths: MCP tools when the `astria` server is connected, or the `astria` CLI from any agent.
 
-Platforms with a project-scoped MCP config also get the astria server registered automatically: `zcode` (`.zcode/config.json`), `claude` (`.mcp.json` — Claude Code asks you to approve it once), `cursor` (`.cursor/mcp.json`), and `gemini` (`.gemini/settings.json`). The tools (`repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`) then appear natively in every session for that project. Codex keeps hooks + CLI — its MCP config is global-only, so it is intentionally left untouched. All steps are idempotent and merge-safe (existing servers and unrelated config keys are preserved); `uninstall` removes them.
+Most platforms get the astria MCP server registered automatically. Project-scoped JSON configs: `zcode` (`.zcode/config.json`), `claude` (`.mcp.json` — Claude Code asks you to approve it once), `cursor` (`.cursor/mcp.json`), `gemini` (`.gemini/settings.json`), `vscode` (`.vscode/mcp.json` — native workspace MCP, what Copilot inside VS Code uses), `trae` (`.trae/mcp.json`), `windsurf` (`.windsurf/mcp.json`), `kiro` (workspace-root `mcp.json`), `opencode` (`.opencode/opencode.json`), and `copilot` (`.github/copilot-mcp.json` for the Copilot coding agent). Codex defines MCP servers in its user-global `~/.codex/config.toml`, so `install --platform codex` appends a managed `[mcp_servers.astria]` table there — never touching a hand-written one. The tools (`repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`) then appear natively in every session for that project. All steps are idempotent and merge-safe (existing servers and unrelated config keys are preserved); `uninstall` removes them.
 
 Existing installs upgrade in place: `install` recognizes its own previously generated instruction blocks and refreshes them to the current wording; hand-customized pre-1.0 `## graphify` sections are detected and left untouched.
 

@@ -22,6 +22,13 @@ const MCP_LABELS: Record<McpFlavor, { name: string; file: string }> = {
   claude: { name: 'Claude MCP server', file: '.mcp.json' },
   cursor: { name: 'Cursor MCP server', file: '.cursor/mcp.json' },
   gemini: { name: 'Gemini MCP server', file: '.gemini/settings.json' },
+  vscode: { name: 'VS Code MCP server', file: '.vscode/mcp.json' },
+  trae: { name: 'Trae MCP server', file: '.trae/mcp.json' },
+  windsurf: { name: 'Windsurf MCP server', file: '.windsurf/mcp.json' },
+  kiro: { name: 'Kiro MCP server', file: 'mcp.json (workspace root)' },
+  opencode: { name: 'OpenCode MCP server', file: '.opencode/opencode.json' },
+  copilot: { name: 'Copilot coding-agent MCP server', file: '.github/copilot-mcp.json' },
+  codex: { name: 'Codex MCP server', file: '~/.codex/config.toml (user-global)' },
 };
 
 function getSkillDir(): string {
@@ -99,7 +106,10 @@ function writeInstallStamp(dir: string) {
 
 /// Pre-1.0 installs wrote skills under `skills/graphify/`. The path carries
 /// exactly one `astria` segment (the skill dir name), so the legacy
-/// destination is derivable by swapping that segment.
+/// destination is derivable by swapping that segment. Layouts whose `astria`
+/// is a file stem rather than a directory (`.clinerules/astria.md`) have no
+/// legacy variant — the swap is a no-op there and must not run, or the
+/// cleanup would delete the freshly installed skill.
 function legacySkillDst(cfg: PlatformConfig): string {
   return cfg.skillDst.replace(/([\\/])astria([\\/])/, '$1graphify$2');
 }
@@ -109,6 +119,7 @@ function legacySkillDst(cfg: PlatformConfig): string {
 function removeLegacySkillFile(platform: string, cfg: PlatformConfig): string[] {
   const messages: string[] = [];
   if (!cfg.skillFile) return messages;
+  if (legacySkillDst(cfg) === cfg.skillDst) return messages;
 
   const targets = [path.join(os.homedir(), legacySkillDst(cfg))];
   if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
@@ -160,6 +171,14 @@ export function installPlatform(platform: string, projectDir: string): string[] 
       messages.push('Kiro steering -> .kiro/steering/astria.md');
     } else {
       messages.push('Kiro steering: already installed');
+    }
+    if (cfg.mcp) {
+      const label = MCP_LABELS[cfg.mcp];
+      messages.push(
+        injectAgentMcp(projectDir, cfg.mcp)
+          ? `${label.name} -> ${label.file}`
+          : `${label.name}: already registered`
+      );
     }
     return messages;
   }
@@ -266,7 +285,7 @@ export function installPlatform(platform: string, projectDir: string): string[] 
       break;
     case 'opencode':
       if (injectOpenCodePlugin(projectDir)) {
-        messages.push('OpenCode plugin -> .opencode/plugins/astria.js');
+        messages.push('OpenCode plugin -> .opencode/plugin/astria.js');
       } else {
         messages.push('OpenCode plugin: already installed');
       }
@@ -314,6 +333,13 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
       messages.push('Kiro steering: removed');
     } else {
       messages.push('Kiro steering: not found');
+    }
+    if (cfg.mcp) {
+      messages.push(
+        removeAgentMcp(projectDir, cfg.mcp)
+          ? 'Kiro MCP server: removed'
+          : 'Kiro MCP server: not found'
+      );
     }
     return messages;
   }

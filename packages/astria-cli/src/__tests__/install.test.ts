@@ -18,6 +18,7 @@ import {
   injectCursorRule, removeCursorRule,
   injectKiroSteering, removeKiroSteering,
   injectZcodeMcp, removeZcodeMcp,
+  injectCodexMcp, removeCodexMcp,
   injectAgentMcp, removeAgentMcp,
 } from '../install/settings-inject';
 import type { McpFlavor } from '../install/settings-inject';
@@ -165,27 +166,42 @@ function testOpenCodePlugin() {
   const result1 = injectOpenCodePlugin(dir);
   assert(result1 === true, 'OpenCode: first inject returns true');
 
-  const pluginPath = path.join(dir, '.opencode', 'plugins', 'astria.js');
-  assert(fs.existsSync(pluginPath), 'OpenCode: plugin file created');
+  // Plugins auto-discover from .opencode/plugin/ (singular) — and a
+  // `plugins` key in opencode.json is REJECTED by opencode 1.17+.
+  const pluginPath = path.join(dir, '.opencode', 'plugin', 'astria.js');
+  assert(fs.existsSync(pluginPath), 'OpenCode: plugin file created in plugin/');
   const pluginContent = fs.readFileSync(pluginPath, 'utf-8');
   assert(pluginContent.includes('"view", "grep", "glob", "ls", "bash"'), 'OpenCode: plugin matches view|grep|glob|ls|bash');
   assert(pluginContent.includes('MUST'), 'OpenCode: plugin uses MUST language');
   assert(pluginContent.includes('.astria'), 'OpenCode: plugin checks .astria graph');
 
-  const config = readJson(path.join(dir, '.opencode', 'opencode.json'));
-  assert(config.plugins.includes('./plugins/astria.js'), 'OpenCode: config references plugin');
+  const configPath = path.join(dir, '.opencode', 'opencode.json');
+  // The plugin injector no longer touches opencode.json at all; if the file
+  // exists (e.g. from an MCP inject) it must not carry a plugins key.
+  assert(
+    !fs.existsSync(configPath) || !readJson(configPath).plugins,
+    'OpenCode: no plugins key in opencode.json'
+  );
 
-  const result2 = injectOpenCodePlugin(dir);
-  assert(result2 === false || result2 === true, 'OpenCode: re-inject does not duplicate');
-  const configAfter = readJson(path.join(dir, '.opencode', 'opencode.json'));
-  assert((configAfter.plugins.filter((p: string) => p.includes('astria.js'))).length === 1, 'OpenCode: single plugin registration');
+  // Upgrades: the legacy plugins/ dir and invalid plugins key are cleaned.
+  const dir2 = tmpDir();
+  fs.mkdirSync(path.join(dir2, '.opencode', 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(dir2, '.opencode', 'plugins', 'astria.js'), 'old');
+  fs.writeFileSync(
+    path.join(dir2, '.opencode', 'opencode.json'),
+    JSON.stringify({ plugins: ['./plugins/astria.js'], theme: 'dark' })
+  );
+  injectOpenCodePlugin(dir2);
+  assert(!fs.existsSync(path.join(dir2, '.opencode', 'plugins', 'astria.js')), 'OpenCode: legacy plugins file removed');
+  const upgraded = readJson(path.join(dir2, '.opencode', 'opencode.json'));
+  assert(!upgraded.plugins, 'OpenCode: invalid plugins key stripped on upgrade');
+  assert(upgraded.theme === 'dark', 'OpenCode: unrelated config preserved on upgrade');
+  assert(fs.existsSync(path.join(dir2, '.opencode', 'plugin', 'astria.js')), 'OpenCode: plugin placed in plugin/');
+  fs.rmSync(dir2, { recursive: true, force: true });
 
   const removed = removeOpenCodePlugin(dir);
   assert(removed === true, 'OpenCode: remove returns true');
   assert(!fs.existsSync(pluginPath), 'OpenCode: plugin file deleted after remove');
-
-  const config2 = readJson(path.join(dir, '.opencode', 'opencode.json'));
-  assert(!config2.plugins.includes('./plugins/astria.js'), 'OpenCode: plugin removed from config');
 
   const removed2 = removeOpenCodePlugin(dir);
   assert(removed2 === false, 'OpenCode: second remove returns false');
@@ -297,23 +313,50 @@ function testZcodeMcp() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// ---- Agent MCP registration (claude / cursor / gemini) ----
+// ---- Agent MCP registration (all JSON flavors) ----
 
 function testAgentMcp() {
-  const flavors: Array<[McpFlavor, string, Record<string, unknown>]> = [
-    ['claude', '.mcp.json', {}],
-    ['cursor', path.join('.cursor', 'mcp.json'), {}],
-    ['gemini', path.join('.gemini', 'settings.json'), { theme: 'dark' }],
+  // [flavor, config path, servers key path, unrelated top-level keys]
+  const flavors: Array<[McpFlavor, string, string[], Record<string, unknown>]> = [
+    ['claude', '.mcp.json', ['mcpServers'], {}],
+    ['cursor', path.join('.cursor', 'mcp.json'), ['mcpServers'], {}],
+    ['gemini', path.join('.gemini', 'settings.json'), ['mcpServers'], { theme: 'dark' }],
+    ['vscode', path.join('.vscode', 'mcp.json'), ['servers'], {}],
+    ['trae', path.join('.trae', 'mcp.json'), ['mcpServers'], {}],
+    ['windsurf', path.join('.windsurf', 'mcp.json'), ['mcpServers'], {}],
+    ['kiro', 'mcp.json', ['mcpServers'], {}],
+    // OpenCode keys servers directly under `mcp` — its dedicated shape test
+    // below asserts the local-command server object.
+    ['copilot', path.join('.github', 'copilot-mcp.json'), ['servers'], {}],
   ];
 
-  for (const [flavor, rel, extra] of flavors) {
+  const serversOf = (config: any, keyPath: string[]): any =>
+    keyPath.reduce((node, key) => node[key], config);
+
+  const seedServers = (config: any, keyPath: string[], servers: any): void => {
+    let node = config;
+    for (const key of keyPath.slice(0, -1)) {
+      if (typeof node[key] !== 'object' || node[key] === null) node[key] = {};
+      node = node[key];
+    }
+    node[keyPath[keyPath.length - 1]] = servers;
+  };
+
+  for (const [flavor, rel, keyPath, extra] of flavors) {
     const dir = tmpDir();
 
     assert(injectAgentMcp(dir, flavor) === true, `${flavor}: first inject returns true`);
 
     const config = readJson(path.join(dir, rel));
-    assert(config.mcpServers.astria.command === 'astria', `${flavor}: server command is astria`);
-    assert(JSON.stringify(config.mcpServers.astria.args) === '["mcp"]', `${flavor}: server args are ["mcp"]`);
+    const servers = serversOf(config, keyPath);
+    assert(servers.astria.command === 'astria', `${flavor}: server command is astria`);
+    assert(JSON.stringify(servers.astria.args) === '["mcp"]', `${flavor}: server args are ["mcp"]`);
+    if (flavor === 'vscode') {
+      // Matches VS Code 1.137's own --add-mcp writer: bare command shape.
+      assert(servers.astria.type === undefined, 'vscode: bare command shape (no type field)');
+    } else {
+      assert(servers.astria.type === 'stdio', `${flavor}: server type is stdio`);
+    }
 
     assert(injectAgentMcp(dir, flavor) === false, `${flavor}: second inject returns false (idempotent)`);
 
@@ -321,11 +364,14 @@ function testAgentMcp() {
     const dir2 = tmpDir();
     const target = path.join(dir2, rel);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, JSON.stringify({ mcpServers: { other: { command: 'other-cli' } }, ...extra }));
+    const seeded: any = { ...extra };
+    seedServers(seeded, keyPath, { other: { command: 'other-cli' } });
+    fs.writeFileSync(target, JSON.stringify(seeded));
     injectAgentMcp(dir2, flavor);
     const merged = readJson(target);
-    assert(merged.mcpServers.other.command === 'other-cli', `${flavor}: preserves existing MCP servers`);
-    assert(merged.mcpServers.astria.command === 'astria', `${flavor}: adds astria server`);
+    const mergedServers = serversOf(merged, keyPath);
+    assert(mergedServers.other.command === 'other-cli', `${flavor}: preserves existing MCP servers`);
+    assert(mergedServers.astria.command === 'astria', `${flavor}: adds astria server`);
     for (const key of Object.keys(extra)) {
       assert((merged as any)[key] === (extra as any)[key], `${flavor}: preserves unrelated key ${key}`);
     }
@@ -333,10 +379,110 @@ function testAgentMcp() {
 
     assert(removeAgentMcp(dir, flavor) === true, `${flavor}: remove returns true`);
     const cleaned = readJson(path.join(dir, rel));
-    assert(!cleaned.mcpServers, `${flavor}: empty mcpServers block cleaned up after remove`);
+    const leftover = (() => {
+      let node: any = cleaned;
+      for (const key of keyPath) {
+        if (typeof node !== 'object' || node === null || !(key in node)) return undefined;
+        node = node[key];
+      }
+      return node;
+    })();
+    assert(leftover === undefined, `${flavor}: empty servers block cleaned up after remove`);
     assert(removeAgentMcp(dir, flavor) === false, `${flavor}: second remove returns false`);
 
+    if (flavor === 'vscode') {
+      // A 1.0.8-era mcpServers entry is migrated to the servers key that
+      // VS Code 1.137's own --add-mcp writer uses.
+      const migrate = tmpDir();
+      fs.mkdirSync(path.join(migrate, '.vscode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(migrate, '.vscode', 'mcp.json'),
+        JSON.stringify({ mcpServers: { astria: { type: 'stdio', command: 'astria', args: ['mcp'] } } })
+      );
+      injectAgentMcp(migrate, 'vscode');
+      const migrated = readJson(path.join(migrate, '.vscode', 'mcp.json'));
+      assert(!migrated.mcpServers, 'vscode: legacy mcpServers entry migrated away');
+      assert(migrated.servers.astria.command === 'astria', 'vscode: migrated to servers key');
+      fs.rmSync(migrate, { recursive: true, force: true });
+    }
+
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// OpenCode's config validator requires its own server shape (type "local",
+// command array, explicit enabled) and keys servers directly under `mcp` —
+// verified against opencode 1.17.8's `opencode mcp list` validator.
+function testOpenCodeMcpShape() {
+  const dir = tmpDir();
+  assert(injectAgentMcp(dir, 'opencode') === true, 'OpenCode MCP: first inject returns true');
+  const oc = readJson(path.join(dir, '.opencode', 'opencode.json'));
+  assert(oc.mcp.astria.type === 'local', 'OpenCode MCP: server type is local');
+  assert(
+    JSON.stringify(oc.mcp.astria.command) === JSON.stringify(['astria', 'mcp']),
+    'OpenCode MCP: command array is [astria, mcp]'
+  );
+  assert(oc.mcp.astria.enabled === true, 'OpenCode MCP: server enabled');
+  // Migration: a 1.0.8-era nested mcp.servers.astria entry is removed, not
+  // left behind to fail opencode's config validator.
+  const migrate = tmpDir();
+  fs.mkdirSync(path.join(migrate, '.opencode'), { recursive: true });
+  fs.writeFileSync(
+    path.join(migrate, '.opencode', 'opencode.json'),
+    JSON.stringify({ mcp: { servers: { astria: { type: 'stdio', command: 'astria', args: ['mcp'] } } } })
+  );
+  injectAgentMcp(migrate, 'opencode');
+  const migrated = readJson(path.join(migrate, '.opencode', 'opencode.json'));
+  assert(!migrated.mcp.servers, 'OpenCode MCP: legacy nested entry migrated away');
+  assert(migrated.mcp.astria.type === 'local', 'OpenCode MCP: migrated to local shape');
+  fs.rmSync(migrate, { recursive: true, force: true });
+  assert(removeAgentMcp(dir, 'opencode') === true, 'OpenCode MCP: remove returns true');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ---- Codex MCP (user-global ~/.codex/config.toml, TOML) ----
+
+function testCodexMcpToml() {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-codex-home-'));
+  const prevUserProfile = process.env.USERPROFILE;
+  const prevHome = process.env.HOME;
+  process.env.USERPROFILE = fakeHome;
+  process.env.HOME = fakeHome;
+  try {
+    const configPath = path.join(fakeHome, '.codex', 'config.toml');
+
+    assert(injectCodexMcp() === true, 'Codex TOML: first inject returns true');
+    const text = fs.readFileSync(configPath, 'utf-8');
+    assert(text.includes('[mcp_servers.astria]'), 'Codex TOML: section header written');
+    assert(text.includes('command = "astria"'), 'Codex TOML: command written');
+    assert(text.includes('args = ["mcp"]'), 'Codex TOML: args written');
+    assert(text.endsWith('\n'), 'Codex TOML: file ends with newline');
+
+    assert(injectCodexMcp() === false, 'Codex TOML: second inject returns false (idempotent)');
+
+    // preserves unrelated user config around the managed block
+    const withUser = 'model = "gpt-5"\n\n[profiles]\nfast = { model = "gpt-5-mini" }\n\n' + text;
+    fs.writeFileSync(configPath, withUser);
+    assert(injectCodexMcp() === false, 'Codex TOML: existing section not duplicated');
+    const after = fs.readFileSync(configPath, 'utf-8');
+    assert(after === withUser, 'Codex TOML: user config byte-identical when section present');
+    assert(removeCodexMcp() === true, 'Codex TOML: remove returns true');
+    const removed = fs.readFileSync(configPath, 'utf-8');
+    assert(!removed.includes('[mcp_servers.astria]'), 'Codex TOML: section removed');
+    assert(removed.includes('model = "gpt-5"'), 'Codex TOML: user config preserved on remove');
+
+    // a user-customized astria section is never touched
+    const custom = '[mcp_servers.astria]\ncommand = "my-wrapper"\nargs = ["--custom"]\n';
+    fs.writeFileSync(configPath, custom);
+    assert(injectCodexMcp() === false, 'Codex TOML: custom section not overwritten');
+    assert(removeCodexMcp() === false, 'Codex TOML: custom section not removed');
+    assert(fs.readFileSync(configPath, 'utf-8') === custom, 'Codex TOML: custom section untouched');
+
+    assert(removeCodexMcp() === false, 'Codex TOML: remove from missing file returns false');
+  } finally {
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    fs.rmSync(fakeHome, { recursive: true, force: true });
   }
 }
 
@@ -568,10 +714,9 @@ function testLegacyMigration() {
   );
   assert(injectOpenCodePlugin(ocDir) === true, 'Legacy OpenCode: inject returns true');
   assert(!fs.existsSync(path.join(ocDir, '.opencode', 'plugins', 'graphify.js')), 'Legacy OpenCode: legacy plugin file removed');
-  assert(fs.existsSync(path.join(ocDir, '.opencode', 'plugins', 'astria.js')), 'Legacy OpenCode: astria plugin written');
+  assert(fs.existsSync(path.join(ocDir, '.opencode', 'plugin', 'astria.js')), 'Legacy OpenCode: astria plugin written to plugin/');
   const ocConfig = readJson(path.join(ocDir, '.opencode', 'opencode.json'));
-  assert(!ocConfig.plugins.includes('./plugins/graphify.js'), 'Legacy OpenCode: legacy registration removed');
-  assert(ocConfig.plugins.includes('./plugins/astria.js'), 'Legacy OpenCode: astria plugin registered');
+  assert(!ocConfig.plugins, 'Legacy OpenCode: invalid plugins key stripped');
   // uninstall removes both eras
   assert(removeOpenCodePlugin(ocDir) === true, 'Legacy OpenCode: remove works');
   fs.rmSync(ocDir, { recursive: true, force: true });
@@ -699,6 +844,34 @@ function testCopilotInstructions() {
   }
 }
 
+// ---- File-stem skill layouts (cline / roo) ----
+
+function testFileStemSkillLayouts() {
+  // .clinerules/astria.md has no directory segment to swap, so the legacy
+  // cleanup must be a no-op there — it used to resolve to the same path and
+  // delete the freshly installed skill.
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-stem-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-stem-proj-'));
+  const prevUserProfile = process.env.USERPROFILE;
+  const prevHome = process.env.HOME;
+  process.env.USERPROFILE = fakeHome;
+  process.env.HOME = fakeHome;
+  try {
+    const { PLATFORMS } = require('../install/platforms') as typeof import('../install/platforms');
+    for (const platform of ['cline', 'roo']) {
+      installPlatform(platform, project);
+      const cfg = PLATFORMS[platform];
+      const dst = path.join(fakeHome, cfg.skillDst);
+      assert(fs.existsSync(dst), platform + ': skill file survives its own install');
+    }
+  } finally {
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+}
+
 // ---- Run all ----
 
 testClaudeHook();
@@ -709,6 +882,9 @@ testCursorRule();
 testKiroSteering();
 testZcodeMcp();
 testAgentMcp();
+testOpenCodeMcpShape();
+testCodexMcpToml();
+testFileStemSkillLayouts();
 testMarkdownInject();
 testLegacyMigration();
 testLegacySkillDirCleanup();

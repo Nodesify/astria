@@ -17,7 +17,7 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn tools() -> Value {
     json!([
-        {"name": "query_graph", "description": "BFS/DFS traversal of the knowledge graph for a natural-language question. Returns a compact subgraph context.",
+        {"name": "query_graph", "description": "Answer code-locating questions (where/how/what-breaks) with a ranked subgraph: NODE records carry id + src=file:line anchors, EDGE records carry provenance (EXTRACTED/RESOLVED/INFERRED). Prefer over grep for architecture and cross-module questions. An explicit \"No confident match\" means the question's vocabulary is absent from the graph — rephrase toward symbol names or file paths. The header discloses graph age and any files changed since the build.",
          "inputSchema": {"type": "object", "properties": {
             "question": {"type": "string"},
             "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs"},
@@ -34,7 +34,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {
             "budget": {"type": "integer", "default": 2000},
             "detail": {"type": "string", "enum": ["all", "high"], "default": "all"}}}},
-        {"name": "explain", "description": "Explain a node: its metadata and up to 20 neighbors with relations and confidence.",
+        {"name": "explain", "description": "Explain a node: metadata plus its strongest 20 connections with real edge direction (--> it calls/imports the neighbor, <-- the neighbor points back) and evidence tier per connection.",
          "inputSchema": {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}},
         {"name": "get_neighbors", "description": "List a node's neighbors, optionally filtered by relation.",
          "inputSchema": {"type": "object", "properties": {
@@ -46,7 +46,7 @@ fn tools() -> Value {
                 "description": "Follow edges only in their stored direction."},
             "detail": {"type": "string", "enum": ["all", "high"], "default": "all"}},
             "required": ["source", "target"]}},
-        {"name": "affected", "description": "Blast radius: everything impacted by changing a node (reverse reachability over calls/imports/uses).",
+        {"name": "affected", "description": "Blast radius — run BEFORE changing a shared symbol. Reverse reachability over calls/imports/uses; each hop shows its evidence tier (RESOLVED = source-extracted call uniquely bound, INFERRED = no source locus, treat as weaker).",
          "inputSchema": {"type": "object", "properties": {
             "node": {"type": "string"}, "depth": {"type": "integer", "default": 2},
             "relation": {"type": "string"}}, "required": ["node"]}},

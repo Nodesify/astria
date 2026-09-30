@@ -172,8 +172,8 @@ URL fetching is SSRF-guarded: only `http`/`https` schemes are accepted; each hos
 
 ```bash
 astria mcp [--graph .]              # Run MCP stdio server - query the graph from any AI agent
-astria install [--platform claude]  # Install skill files for AI coding assistants
-astria uninstall [--platform claude]  # Uninstall skill files
+astria install [--platform claude] [--all]  # Skill + MCP registration for one AI platform or all (claude, codex, gemini, cursor, copilot, aider, opencode, kiro, trae, zcode, vscode, windsurf, cline, roo, amp)
+astria uninstall [--platform claude] [--all]  # Remove the install for one platform or all
 astria hook install|uninstall|status  # Git hook management
 astria hook-guard <mode>            # Editor PreToolUse guard (search | read | gemini) — installed into .claude/settings.json
 ```

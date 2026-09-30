@@ -1284,6 +1284,29 @@ pub fn count_response_tokens(text: &str) -> usize {
         .len()
 }
 
+/// Count manifest files modified after the graph was published (with a
+/// small skew so same-second writes do not cry stale). Stat-only: this runs
+/// on every query. `None` when the manifest is unreadable — disclosure is
+/// best-effort and must never fail a query.
+fn files_changed_since(db: &Connection, built_at_secs: u64) -> Option<usize> {
+    let cutoff = std::time::UNIX_EPOCH + std::time::Duration::from_secs(built_at_secs + 2);
+    let mut stmt = db.prepare("SELECT file_path FROM file_manifest").ok()?;
+    let paths: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .ok()?
+        .flatten()
+        .collect();
+    let mut changed = 0usize;
+    for path in &paths {
+        if let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) {
+            if modified > cutoff {
+                changed += 1;
+            }
+        }
+    }
+    Some(changed)
+}
+
 fn render_page(
     header: &str,
     records: &[String],
@@ -1854,6 +1877,20 @@ fn query_graph_loaded(
     );
     if let Some(timestamp) = graph_built_at {
         header.push_str(&format!("# graph built at {timestamp}\n"));
+        // Staleness disclosure: hooked editors and the git hook keep the
+        // graph fresh, but edits through other paths (print-mode sessions,
+        // editors without hooks, plain typing) do not — and an agent that
+        // does not notice the timestamp answers from the past. Stat-only
+        // (no re-hashing), so this costs milliseconds even on large repos.
+        if let Ok(built) = timestamp.parse::<u64>() {
+            if let Some(changed) = files_changed_since(db, built) {
+                if changed > 0 {
+                    header.push_str(&format!(
+                        "# {changed} file(s) changed since this build — run `astria update` before trusting answers\n"
+                    ));
+                }
+            }
+        }
     }
     // Corpus-mode disclosure: the ranking rules differ between modes, so a
     // mode other than auto-detected code-majority is stated in the header
@@ -3681,6 +3718,86 @@ at the lake house');",
         assert!(confidence_rank("DECLARED") > confidence_rank("EXTRACTED"));
         assert!(confidence_rank("EXTRACTED") > confidence_rank("INFERRED"));
         assert!(confidence_rank("INFERRED") > confidence_rank("SEMANTIC"));
+    }
+
+    #[test]
+    fn stale_graph_discloses_changed_files() {
+        // An agent that cannot tell the graph predicates its answers on an
+        // old build answers confidently from the past. A file in the
+        // manifest modified after publication must be disclosed; a fresh
+        // graph must stay quiet.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("app.rs");
+        std::fs::write(&file, "fn a() {}\n").unwrap();
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('a', 'alpha()', 'code', 'src/a.rs');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('a', 'a', 'calls', 'EXTRACTED', 'src/a.rs');",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO file_manifest (file_path, content_hash, file_type, last_seen_at, size_bytes)
+             VALUES (?1, 'x', 'code', '2026-01-01', 9)",
+            rusqlite::params![file.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
+        // Published long ago, file written now → stale disclosure.
+        db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_published_at', '1000')",
+            [],
+        )
+        .unwrap();
+        let g = load_graph_snapshot(&db, "stale-yes").unwrap();
+        let (text, _, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "alpha",
+            "bfs",
+            1,
+            2000,
+            false,
+            0.0,
+            0,
+            &[],
+            false,
+            Some("1000"),
+        )
+        .unwrap();
+        assert!(
+            text.contains("changed since this build"),
+            "stale graph must disclose: {text}"
+        );
+
+        // Published in the future (or just now) → quiet.
+        let fresh_ts = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 60)
+            .to_string();
+        let g2 = load_graph_snapshot(&db, "stale-no").unwrap();
+        let (text2, _, _, _) = query_graph_loaded(
+            &db,
+            g2,
+            "alpha",
+            "bfs",
+            1,
+            2000,
+            false,
+            0.0,
+            0,
+            &[],
+            false,
+            Some(fresh_ts.as_str()),
+        )
+        .unwrap();
+        assert!(
+            !text2.contains("changed since this build"),
+            "fresh graph must stay quiet: {text2}"
+        );
     }
 
     #[test]

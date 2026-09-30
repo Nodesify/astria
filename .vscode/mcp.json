@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "astria": {
+      "command": "astria",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
