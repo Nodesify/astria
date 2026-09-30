@@ -1,5 +1,5 @@
 {
-  "mcpServers": {
+  "servers": {
     "astria": {
       "type": "stdio",
       "command": "astria",
