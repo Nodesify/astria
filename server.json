@@ -8,13 +8,13 @@
     "url": "https://github.com/Nodesify/astria",
     "source": "github"
   },
-  "version": "1.0.8",
+  "version": "1.0.9",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@nodesify/astria",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "transport": {
         "type": "stdio"
       }

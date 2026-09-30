@@ -4,7 +4,7 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## [Unreleased]
+## [1.0.9] — 2026-10-01
 
 ### Distribution — official MCP Registry, Claude Code plugin marketplace, Homebrew tap, Smithery
 - **Official MCP Registry publishing is automated** — the repo now carries a registry `server.json` (`io.github.nodesify/astria`, stdio transport over the npm package) and `release.yml` publishes it via `mcp-publisher` with GitHub OIDC after the npm publishes succeed; the `verify` job fails fast when `server.json`'s version drifts from the package version. npm packages must declare the matching `mcpName` for registry validation — added to `packages/astria-cli/package.json`. The first listing goes live on the next tagged release.
