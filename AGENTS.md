@@ -1,13 +1,20 @@
-
-
 ## astria
 
-This project has an astria knowledge graph at `.astria/`. Access it through whichever path your agent has:
+This project has an astria knowledge graph at .astria/.
+Access it through whichever path your agent has:
+- MCP (when an astria MCP server is connected): repo_map, query_graph, explain,
+  get_neighbors, shortest_path, affected, god_nodes, list_communities,
+  graph_stats, health.
+- CLI (works everywhere): astria map, query, explain, path, affected.
 
-- MCP (ZCode and agents with the `astria` server connected): tools are `repo_map`, `query_graph`, `explain`, `get_neighbors`, `shortest_path`, `affected`, `god_nodes`, `list_communities`, `graph_stats`, `health`.
-- CLI (works everywhere, e.g. Codex): `astria map|query|explain|path|affected <args>`.
+Always-on behaviors:
+1. Prefer the graph over repeated text searches for architecture questions, feature
+   location, cross-file logic flow, and change impact; orient with repo_map (or map,
+   or .astria/graph_report.md), and run affected <node> before changing a shared symbol.
+2. Before running grep/ripgrep to locate code, try astria query first --
+   it answers with file:line provenance in one call against the already-built graph.
+3. After modifying code, run astria update . (AST-only, no API cost) so the
+   graph stays fresh; queries then report accurate staleness metadata.
 
-- Prefer the graph over repeated text searches when investigating architecture, locating a feature across files, tracing cross-file logic flow, or assessing change impact. Orient with `repo_map` (or `map`, or a skim of `.astria/graph_report.md`); ask natural-language questions with `query`; inspect one symbol with `explain`; run `affected <node>` before changing a shared symbol.
-- Plain Grep/Read remains right for exact text, implementation details, and verifying graph results against source.
-- Do not rebuild the graph on session start or before every command. After substantial edits, refresh it with `astria update .`; if results look stale or incomplete, verify against source files and update as needed.
-- `/astria` loads the full usage skill.
+Where slash-skills are supported (Claude Code, ZCode), /astria loads the full usage skill.
+<!-- astria:managed -->

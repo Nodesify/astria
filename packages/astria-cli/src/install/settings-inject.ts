@@ -211,13 +211,17 @@ export const AstriaPlugin = async ({ directory }) => {
 `;
 
 export function injectOpenCodePlugin(projectDir: string): boolean {
-  // OpenCode 1.17+ auto-discovers plugins from `.opencode/plugin/` and
-  // REJECTS a `plugins` key in opencode.json ("Unrecognized key"), so the
-  // plugin is a file drop with no config registration. The pre-1.0.9
-  // `plugins/` directory and config key are cleaned up on inject.
-  const pluginDir = path.join(projectDir, '.opencode', 'plugin');
+  // OpenCode auto-discovers plugins from `.opencode/plugins/` — the current
+  // documented convention (opencode.ai/docs/plugins). Verified against
+  // opencode 1.17.8 locally: `opencode debug config` lists plugin files from
+  // both the plural and the singular directory, so writing `plugins/` works
+  // there too. opencode 1.17+ REJECTS a `plugins` key in opencode.json
+  // ("Unrecognized key"), so the plugin is a file drop with no config
+  // registration. The 1.0.9-era singular `plugin/` directory and the config
+  // key are cleaned up on inject.
+  const pluginDir = path.join(projectDir, '.opencode', 'plugins');
   const pluginPath = path.join(pluginDir, 'astria.js');
-  const legacyDir = path.join(projectDir, '.opencode', 'plugins');
+  const legacyDir = path.join(projectDir, '.opencode', 'plugin');
   const legacyPaths = [path.join(legacyDir, 'graphify.js'), path.join(legacyDir, 'astria.js')];
 
   let changed = false;
@@ -320,7 +324,7 @@ export type McpFlavor =
   | 'windsurf'
   | 'kiro'
   | 'opencode'
-  | 'copilot'
+  | 'pi'
   | 'codex';
 
 const ASTRIA_MCP_SERVER = { type: 'stdio', command: 'astria', args: ['mcp'] };
@@ -339,6 +343,10 @@ const MCP_TARGETS: Partial<Record<McpFlavor, {
    * remove (only entries this installer produced — a customized entry with
    * a foreign command is preserved like every other legacy case). */
   legacyServerPath?: string[];
+  /** Whole config files a previous release wrote at a since-corrected path;
+   * their astria entry is cleaned on inject and remove (file deleted when
+   * nothing of the user's remains). */
+  legacyConfigPaths?: string[];
 }>> = {
   zcode: { configPath: path.join('.zcode', 'config.json'), serverPath: ['mcp', 'servers', 'astria'] },
   claude: { configPath: '.mcp.json', serverPath: ['mcpServers', 'astria'] },
@@ -356,8 +364,15 @@ const MCP_TARGETS: Partial<Record<McpFlavor, {
   },
   trae: { configPath: path.join('.trae', 'mcp.json'), serverPath: ['mcpServers', 'astria'] },
   windsurf: { configPath: path.join('.windsurf', 'mcp.json'), serverPath: ['mcpServers', 'astria'] },
-  // Kiro workspace MCP servers live in a bare mcp.json at the project root.
-  kiro: { configPath: 'mcp.json', serverPath: ['mcpServers', 'astria'] },
+  // Kiro workspace MCP servers live in .kiro/settings/mcp.json (kiro.dev docs:
+  // workspace scope, `mcpServers` key — verified 2026-09-30). The 1.0.9-era
+  // bare mcp.json at the project root this installer wrote is a path nothing
+  // reads; it is cleaned up on inject and remove.
+  kiro: {
+    configPath: path.join('.kiro', 'settings', 'mcp.json'),
+    serverPath: ['mcpServers', 'astria'],
+    legacyConfigPaths: ['mcp.json'],
+  },
   // OpenCode keys servers directly under `mcp` (no `servers` intermediate)
   // and requires its own server shape. The 1.0.8-era nested path is
   // migrated away on inject.
@@ -367,10 +382,95 @@ const MCP_TARGETS: Partial<Record<McpFlavor, {
     server: { type: 'local', command: ['astria', 'mcp'], enabled: true },
     legacyServerPath: ['mcp', 'servers', 'astria'],
   },
-  // GitHub Copilot coding agent (repo-level pre-configuration).
-  copilot: { configPath: path.join('.github', 'copilot-mcp.json'), serverPath: ['servers', 'astria'] },
+  // Pi reads the standard .mcp.json via the pi-mcp-adapter extension —
+  // same file as claude; its own flavor so install output stays honest.
+  pi: { configPath: '.mcp.json', serverPath: ['mcpServers', 'astria'] },
 };
 const LEGACY_MCP_SERVER_NAME = 'graphify';
+
+// ---- Copilot (.github/copilot-mcp.json) ----
+
+// The Copilot coding agent has no committed repo file for MCP servers:
+// repository-level configuration is entered as JSON in the repository
+// Settings UI (docs.github.com, "Configure MCP servers for your repository").
+// The 1.0.9-era .github/copilot-mcp.json this installer wrote is read by
+// nothing; it is removed on install and uninstall when it only carries the
+// astria entry this installer produced — a file with other content stays.
+export function cleanupLegacyCopilotMcp(projectDir: string): boolean {
+  const legacyPath = path.join(projectDir, '.github', 'copilot-mcp.json');
+  if (!fs.existsSync(legacyPath)) return false;
+  const data = readJson(legacyPath);
+  const ours = (entry: any) =>
+    entry && (entry.command === 'astria' || entry.command === 'nodesify-graphify');
+  let found = false;
+  for (const container of ['servers', 'mcpServers']) {
+    const node = data[container];
+    if (typeof node !== 'object' || node === null) continue;
+    const names = Object.keys(node).filter((n) => n === 'astria' || n === LEGACY_MCP_SERVER_NAME);
+    if (!names.every((n) => ours(node[n]))) continue;
+    for (const n of names) delete node[n];
+    if (Object.keys(node).length === 0) delete data[container];
+    found = found || names.length > 0;
+  }
+  if (!found) return false;
+  if (Object.keys(data).length === 0) {
+    fs.unlinkSync(legacyPath);
+  } else {
+    writeJson(legacyPath, data);
+  }
+  return true;
+}
+
+/// Removes astria entries this installer wrote in legacy config *files*
+/// (whole files at since-corrected paths, e.g. Kiro's 1.0.9 root mcp.json).
+/// Only installer-produced entries (command astria / nodesify-graphify) are
+/// deleted; empty containers are pruned and a file left as `{}` is removed.
+/// `keepPath` skips the flavor's current target file. Returns whether
+/// anything changed.
+function cleanupLegacyConfigPaths(
+  projectDir: string,
+  target: { serverPath: string[]; legacyConfigPaths?: string[] },
+  keepPath: string
+): boolean {
+  if (!target.legacyConfigPaths) return false;
+  let changed = false;
+  for (const legacyRel of target.legacyConfigPaths) {
+    const legacyPath = path.join(projectDir, legacyRel);
+    if (legacyPath === keepPath || !fs.existsSync(legacyPath)) continue;
+    const data = readJson(legacyPath);
+    let node: any = data;
+    const parents: Array<[any, string]> = [];
+    let reachable = true;
+    for (const key of target.serverPath.slice(0, -1)) {
+      if (typeof node[key] !== 'object' || node[key] === null) {
+        reachable = false;
+        break;
+      }
+      parents.push([node, key]);
+      node = node[key];
+    }
+    if (!reachable) continue;
+    const name = target.serverPath[target.serverPath.length - 1];
+    const ours = (entry: any) =>
+      entry && (entry.command === 'astria'
+        || (Array.isArray(entry.command) && entry.command[0] === 'astria')
+        || entry.command === 'nodesify-graphify');
+    if (!ours(node[name]) && !ours(node[LEGACY_MCP_SERVER_NAME])) continue;
+    delete node[name];
+    delete node[LEGACY_MCP_SERVER_NAME];
+    for (let i = parents.length - 1; i >= 0; i--) {
+      const [parent, key] = parents[i];
+      if (Object.keys(parent[key]).length === 0) delete parent[key];
+    }
+    if (Object.keys(data).length === 0) {
+      fs.unlinkSync(legacyPath);
+    } else {
+      writeJson(legacyPath, data);
+    }
+    changed = true;
+  }
+  return changed;
+}
 
 // ---- Codex MCP (~/.codex/config.toml, user-global TOML) ----
 
@@ -441,6 +541,9 @@ export function injectAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
   }
   const target = MCP_TARGETS[flavor]!;
   const configPath = path.join(projectDir, target.configPath);
+  // Config files a previous release wrote at since-corrected paths are
+  // cleaned up whether or not the current target ends up being written.
+  const removedLegacyFile = cleanupLegacyConfigPaths(projectDir, target, configPath);
   const data = readJson(configPath);
 
   let node: any = data;
@@ -469,7 +572,7 @@ export function injectAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
       writeJson(configPath, data);
       return true;
     }
-    return false;
+    return removedLegacyFile;
   }
 
   node[name] = { ...(target.server ?? ASTRIA_MCP_SERVER) };
@@ -522,7 +625,10 @@ export function removeAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
   }
   const target = MCP_TARGETS[flavor]!;
   const configPath = path.join(projectDir, target.configPath);
-  if (!fs.existsSync(configPath)) return false;
+  // Legacy config files are cleaned even when the current target is absent
+  // (an install made before a path correction, then a straight uninstall).
+  const removedLegacyFile = cleanupLegacyConfigPaths(projectDir, target, configPath);
+  if (!fs.existsSync(configPath)) return removedLegacyFile;
 
   const data = readJson(configPath);
   const parents: Array<[any, string]> = [];
@@ -560,7 +666,7 @@ export function removeAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
       }
     }
   }
-  if (!removed) return false;
+  if (!removed) return removedLegacyFile;
   for (let i = parents.length - 1; i >= 0; i--) {
     const [parent, key] = parents[i];
     if (Object.keys(parent[key]).length === 0) delete parent[key];
@@ -575,6 +681,201 @@ export function injectZcodeMcp(projectDir: string): boolean {
 
 export function removeZcodeMcp(projectDir: string): boolean {
   return removeAgentMcp(projectDir, 'zcode');
+}
+
+// ---- Pi (~/.pi/agent/extensions/astria.mjs) ----
+
+// Pi auto-discovers extensions from ~/.pi/agent/extensions/; entry shape is
+// `export default function (pi)`. The API surface here (registerTool,
+// tool_result, registerCommand) was read from pi 0.87's ExtensionAPI types.
+// Native tools are the pi-idiomatic integration — pi's own philosophy is
+// CLI tools over MCP definitions (a registered tool costs a few hundred
+// context tokens; ten MCP tool definitions cost 10k+), so the graph is
+// exposed as first-class pi tools backed by the astria CLI. The standard
+// .mcp.json registration stays for users of the pi-mcp-adapter extension.
+const PI_EXTENSION_JS = `// astria extension for the Pi coding agent.
+// Native tools (pi-idiomatic): astria_query/map/explain/path/affected,
+// backed by the astria CLI. Freshness: write/edit refresh the graph
+// (throttled, detached). /astria: guidance.
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+function astriaCli(cwd) {
+  return existsSync(join(cwd, "packages", "astria-cli", "dist", "index.js"))
+    ? "node packages/astria-cli/dist/index.js"
+    : "astria";
+}
+
+function run(args, cwd) {
+  if (!existsSync(join(cwd, ".astria"))) {
+    return Promise.resolve({
+      out: 'No astria graph in this project. Build one first: run "astria run ." (creates .astria/ with the knowledge graph).',
+    });
+  }
+  return new Promise((resolve) => {
+    const child = spawn(astriaCli(cwd) + " " + args, { cwd, shell: true });
+    let out = "";
+    let err = "";
+    const timer = setTimeout(() => child.kill(), 90000);
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("error", (e) => { clearTimeout(timer); resolve({ out: String(e) }); });
+    child.on("close", () => { clearTimeout(timer); resolve({ out: out || err }); });
+  });
+}
+
+function textResult(text, command) {
+  return { content: [{ type: "text", text: String(text) }], details: { command } };
+}
+
+function schema(props, required) {
+  return { type: "object", properties: props, required };
+}
+
+let lastUpdate = 0;
+function refreshGraph(cwd, awaitSpawn) {
+  try {
+    const now = Date.now();
+    if (now - lastUpdate < 120000) return Promise.resolve(false);
+    lastUpdate = now;
+    const child = spawn(astriaCli(cwd) + " update .", { cwd, shell: true, detached: true, stdio: "ignore" });
+    child.unref();
+    if (!awaitSpawn) return Promise.resolve(true);
+    // Print-mode sessions exit the instant the tool returns — a detached
+    // child whose spawn syscall has not completed yet never materializes.
+    // Wait until the OS has actually created it (bounded) before returning.
+    return new Promise((resolve) => {
+      const done = () => resolve(true);
+      child.once("spawn", done);
+      setTimeout(done, 1000);
+    });
+  } catch {
+    return Promise.resolve(false);
+  }
+}
+
+const ASTRIA_TOOLS = [
+  {
+    name: "astria_query",
+    cli: "query",
+    args: (p) => "query " + JSON.stringify(p.question) + " --budget " + (p.budget || 3000) + " --graph .",
+    description: 'Query the repo knowledge graph with a natural-language question. Ranked nodes carry file:line anchors and edge provenance. Prefer over grep for architecture/cross-module questions. "No confident match" means the vocabulary is absent — rephrase toward symbol names.',
+    props: {
+      question: { type: "string", description: "Natural-language question about the codebase" },
+      budget: { type: "integer", description: "Max output tokens (default 3000)" },
+    },
+    required: ["question"],
+  },
+  {
+    name: "astria_map",
+    cli: "map",
+    args: () => "map --budget 2000 --graph .",
+    description: "PageRank-ranked repo map with top symbols per file — orient before diving in.",
+    props: {},
+    required: [],
+  },
+  {
+    name: "astria_explain",
+    cli: "explain",
+    args: (p) => "explain " + JSON.stringify(p.node) + " --graph .",
+    description: "Explain a symbol: metadata plus its strongest connections with real edge direction and evidence tier.",
+    props: { node: { type: "string", description: "Symbol or node name" } },
+    required: ["node"],
+  },
+  {
+    name: "astria_path",
+    cli: "path",
+    args: (p) => "path " + JSON.stringify(p.from) + " " + JSON.stringify(p.to) + " --graph .",
+    description: "Shortest connection path between two symbols or concepts, relations per hop.",
+    props: { from: { type: "string" }, to: { type: "string" } },
+    required: ["from", "to"],
+  },
+  {
+    name: "astria_affected",
+    cli: "affected",
+    args: (p) => "affected " + JSON.stringify(p.node) + " --depth " + (p.depth || 2) + " --graph .",
+    description: "Blast radius — run BEFORE changing a shared symbol. Hops show evidence tier (RESOLVED = source-extracted call uniquely bound; INFERRED = weaker).",
+    props: {
+      node: { type: "string", description: "Symbol to assess" },
+      depth: { type: "integer", description: "Max hops (default 2)" },
+    },
+    required: ["node"],
+  },
+];
+
+export default function (pi) {
+  for (const t of ASTRIA_TOOLS) {
+    try {
+      pi.registerTool({
+        name: t.name,
+        label: t.name,
+        description: t.description,
+        parameters: schema(t.props, t.required),
+        async execute(toolCallId, params, signal, onUpdate, ctx) {
+          const cwd = (ctx && ctx.cwd) || (typeof process !== "undefined" ? process.cwd() : ".");
+          const out = await run(t.args(params || {}), cwd);
+          // Mode-independent freshness: pi 0.87 print-mode sessions do not
+          // deliver tool_result events to extensions (measured), so every
+          // graph tool call also kicks the throttled refresh — awaited
+          // until the update process exists, because the session exits
+          // the moment this tool returns. The staleness disclosure in the
+          // output covers the gap until the next query.
+          await refreshGraph(cwd, true);
+          return textResult(out.out || "(no output)", "astria " + t.cli);
+        },
+      });
+    } catch { /* one failed registration must not block the rest */ }
+  }
+
+  pi.on("tool_result", (event, ctx) => {
+    const tool = event && (event.tool ?? event.toolName);
+    if (tool !== "write" && tool !== "edit") return;
+    refreshGraph((ctx && ctx.cwd) || (typeof process !== "undefined" ? process.cwd() : "."));
+  });
+
+  try {
+    pi.registerCommand("astria", {
+      description: "astria knowledge-graph guidance for this repo",
+      handler: async (args, ctx) => {
+        const lines = [
+          "astria knowledge graph:",
+          "- .astria/ holds a queryable graph of this repo (built by 'astria run').",
+          "- Native tools available: astria_query, astria_map, astria_explain,",
+          "  astria_path, astria_affected — prefer them over grep for",
+          "  architecture and cross-module questions.",
+          "- Output carries file:line anchors and edge provenance",
+          '  (EXTRACTED/RESOLVED/INFERRED); "No confident match" means rephrase',
+          "  toward symbol names or file paths.",
+          "- After edits the graph refreshes automatically (throttled);",
+          "  'astria update .' refreshes on demand.",
+        ];
+        const msg = lines.join("\\n");
+        try { pi.sendToolResult({ title: "astria", data: msg }); }
+        catch { console.log(msg); }
+      },
+    });
+  } catch { /* command registration is optional polish */ }
+}
+`;
+
+export function injectPiExtension(): boolean {
+  const dir = path.join(os.homedir(), '.pi', 'agent', 'extensions');
+  const extPath = path.join(dir, 'astria.mjs');
+  if (fs.existsSync(extPath)) {
+    const current = fs.readFileSync(extPath, 'utf-8');
+    if (current === PI_EXTENSION_JS) return false;
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(extPath, PI_EXTENSION_JS, 'utf-8');
+  return true;
+}
+
+export function removePiExtension(): boolean {
+  const extPath = path.join(os.homedir(), '.pi', 'agent', 'extensions', 'astria.mjs');
+  if (!fs.existsSync(extPath)) return false;
+  fs.unlinkSync(extPath);
+  return true;
 }
 
 // ---- Kiro (.kiro/steering/astria.md) ----

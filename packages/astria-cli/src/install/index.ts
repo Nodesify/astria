@@ -8,9 +8,10 @@ import {
   injectCodexHook, removeCodexHook,
   injectGeminiHook, removeGeminiHook,
   injectOpenCodePlugin, removeOpenCodePlugin,
+  injectPiExtension, removePiExtension,
   injectCursorRule, removeCursorRule,
   injectKiroSteering, removeKiroSteering,
-  injectAgentMcp, removeAgentMcp, McpFlavor,
+  injectAgentMcp, removeAgentMcp, McpFlavor, cleanupLegacyCopilotMcp,
 } from './settings-inject';
 
 function sectionMessage(result: SectionResult, added: string, updated: string, unchanged: string): string {
@@ -25,9 +26,9 @@ const MCP_LABELS: Record<McpFlavor, { name: string; file: string }> = {
   vscode: { name: 'VS Code MCP server', file: '.vscode/mcp.json' },
   trae: { name: 'Trae MCP server', file: '.trae/mcp.json' },
   windsurf: { name: 'Windsurf MCP server', file: '.windsurf/mcp.json' },
-  kiro: { name: 'Kiro MCP server', file: 'mcp.json (workspace root)' },
+  kiro: { name: 'Kiro MCP server', file: '.kiro/settings/mcp.json' },
   opencode: { name: 'OpenCode MCP server', file: '.opencode/opencode.json' },
-  copilot: { name: 'Copilot coding-agent MCP server', file: '.github/copilot-mcp.json' },
+  pi: { name: 'astria MCP server (pi-mcp-adapter reads it)', file: '.mcp.json' },
   codex: { name: 'Codex MCP server', file: '~/.codex/config.toml (user-global)' },
 };
 
@@ -258,6 +259,12 @@ export function installPlatform(platform: string, projectDir: string): string[] 
           'Copilot instructions: already up to date'
         )
       );
+      // The Copilot coding agent reads MCP config only from repository
+      // Settings (no committed file); a 1.0.9-era install wrote a dead
+      // .github/copilot-mcp.json — clean it up.
+      if (cleanupLegacyCopilotMcp(projectDir)) {
+        messages.push('Legacy Copilot MCP config removed (.github/copilot-mcp.json is read by nothing)');
+      }
     }
   }
 
@@ -283,9 +290,16 @@ export function installPlatform(platform: string, projectDir: string): string[] 
         messages.push('Gemini BeforeTool hook: already installed');
       }
       break;
+    case 'pi':
+      if (injectPiExtension()) {
+        messages.push('Pi extension -> ~/.pi/agent/extensions/astria.mjs');
+      } else {
+        messages.push('Pi extension: already installed');
+      }
+      break;
     case 'opencode':
       if (injectOpenCodePlugin(projectDir)) {
-        messages.push('OpenCode plugin -> .opencode/plugin/astria.js');
+        messages.push('OpenCode plugin -> .opencode/plugins/astria.js');
       } else {
         messages.push('OpenCode plugin: already installed');
       }
@@ -382,6 +396,9 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
   if (cfg.copilotMd) {
     removeSection(path.join(projectDir, '.github', 'copilot-instructions.md'));
     messages.push('Copilot instructions: astria section removed');
+    if (cleanupLegacyCopilotMcp(projectDir)) {
+      messages.push('Legacy Copilot MCP config removed (.github/copilot-mcp.json is read by nothing)');
+    }
   }
 
   switch (cfg.settingsHook) {
