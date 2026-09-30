@@ -4,6 +4,15 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+### Distribution — official MCP Registry, Claude Code plugin marketplace, Homebrew tap, Smithery
+- **Official MCP Registry publishing is automated** — the repo now carries a registry `server.json` (`io.github.nodesify/astria`, stdio transport over the npm package) and `release.yml` publishes it via `mcp-publisher` with GitHub OIDC after the npm publishes succeed; the `verify` job fails fast when `server.json`'s version drifts from the package version. npm packages must declare the matching `mcpName` for registry validation — added to `packages/astria-cli/package.json`. The first listing goes live on the next tagged release.
+- **The repository is a Claude Code plugin marketplace** — `/plugin marketplace add Nodesify/astria` then `/plugin install astria@nodesify` installs, in one plugin: the MCP server (the tracked `.mcp.json`), the graph-first skill (`skills/astria/`), two slash commands (`/astria` graph queries, `/astria-risk` PR-ready risk report), and an `astria-architect` subagent — wired through `.claude-plugin/marketplace.json` + `.claude-plugin/plugin.json`.
+- **Homebrew tap** — `brew install nodesify/tap/astria` installs the published npm package; the formula ships in the new [`Nodesify/homebrew-tap`](https://github.com/Nodesify/homebrew-tap) repo, with per-release update instructions in `packaging/homebrew/README.md`.
+- **Smithery registry config** — `smithery.yaml` (stdio start command over the published npm package, optional `projectPath`) so smithery.ai lists the server once the repo is connected there.
+- **Discovery metadata** — GitHub topics gained `claude-code` and `agent-skills` alongside the existing `mcp-server`/`model-context-protocol` set.
+
 ## [1.0.8] — 2026-10-01
 
 ### Agent experience — staleness disclosure and MCP tools that teach their use
