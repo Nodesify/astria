@@ -4,7 +4,14 @@ skill.md drives it (Part A AST + Part C merge + Step 4), skipping Part B
 
 Writes a machine-readable results JSON to the path given as argv[2].
 
-Usage: python orig_run.py <corpus_dir> <out_json>
+Usage: python orig_run.py <corpus_dir> <out_json> [--include-documents]
+
+--include-documents also feeds detect()'s "document" class (markdown and
+friends) through the extractor: graphify's skill.md drives documents
+through Part B (LLM subagents), but its dispatch table can extract .md
+structurally too. Prose-corpus comparisons (LoCoMo transcripts) pass this
+flag so both tools carry the same no-LLM workload over documents; code
+corpora leave it off to keep the paired/token-parity semantics unchanged.
 """
 import json
 import sys
@@ -12,8 +19,10 @@ import time
 from pathlib import Path
 
 def main():
-    corpus = Path(sys.argv[1]).resolve()
-    out_path = Path(sys.argv[2]).resolve()
+    include_documents = "--include-documents" in sys.argv[3:]
+    argv = [a for a in sys.argv[1:] if not a.startswith("--")]
+    corpus = Path(argv[0]).resolve()
+    out_path = Path(argv[1]).resolve()
     t0 = time.perf_counter()
 
     from graphify.detect import detect
@@ -36,6 +45,10 @@ def main():
     for f in files.get("code", []):
         p = Path(f)
         code_files.extend(collect_files(p) if p.is_dir() else [p])
+    if include_documents:
+        for f in files.get("document", []):
+            p = Path(f)
+            code_files.extend(collect_files(p) if p.is_dir() else [p])
     t1 = time.perf_counter()
     ast = extract(code_files)
     t_extract = time.perf_counter() - t1

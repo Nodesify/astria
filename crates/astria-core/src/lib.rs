@@ -1,5 +1,6 @@
 // astria-core: core types, database schema, and pipeline orchestration
 
+pub mod calibration;
 pub mod db;
 pub mod error;
 pub mod ids;
@@ -19,7 +20,9 @@ pub mod types;
 /// v8: preserve scoped definitions, assigned functions, test roles and Python implementations.
 /// v9: chunk document body text into searchable section chunks (markdown, text, RST).
 /// v10: chunk overlap across boundaries, `chunk` node type, ASTRIA_CHUNK_CHARS override.
-pub const EXTRACTION_HASH_VERSION: &str = "v10";
+/// v11: Rust `pub`/documented consts and statics extracted as `constant` nodes
+/// (label + doc comment + initializer signature).
+pub const EXTRACTION_HASH_VERSION: &str = "v11";
 
 /// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`
 /// spelling so pre-1.0 env configs keep working. The new name wins; an empty

@@ -62,7 +62,7 @@ CLI and MCP queries use the same hybrid retrieval path. Each request loads a fre
 | `astria-paths` | Path normalization and `.astria` directory management. |
 | `astria-detect` | File system scanning, `.astriaignore` support, and incremental change detection via SHA-256 hashes. |
 | `astria-extract` | Tree-sitter AST traversal logic. Each language defines its own extraction rules (nodes, edges, docstrings). |
-| `astria-embed` | Local embedding model (fastembed/ONNX, `bge-small-en-v1.5`) powering `similar_to` edges and embedding-backed query recall — no API key, offline after the first model download. |
+| `astria-embed` | Local embedding model (fastembed/ONNX, `jina-embeddings-v2-base-code` — code + English trained, so a natural-language description ranks its true function) powering `similar_to` edges and embedding-backed query recall — no API key, offline after the first model download. |
 | `astria-build` | Persistent graph assembly; entity dedup (MinHash/LSH blocking + Jaro-Winkler verify) in `dedup.rs`. |
 | `astria-cluster` | Deterministic community detection (stable labels, cohesion, modularity) using `petgraph`. |
 | `astria-analyze` | God nodes, ranked surprising cross-community connections, blast radius (`affected.rs`, reverse reachability). |

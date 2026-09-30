@@ -20,7 +20,11 @@ import path from 'node:path';
 
 const repo0 = path.resolve(import.meta.dirname, '..', '..', '..');
 const work = path.join(repo0, 'bench-work', 'open');
-const cli = path.join(repo0, 'bench-work', 'modes-20260928', 'cli', 'dist', 'index.js');
+// The working-tree CLI by default (the adapters exist to measure the current
+// tool); pin a specific snapshot with ASTRIA_BIN for reproducibility runs.
+const cli = process.env.ASTRIA_BIN
+  ? path.resolve(process.env.ASTRIA_BIN)
+  : path.join(repo0, 'packages', 'astria-cli', 'dist', 'index.js');
 const language = process.argv[2] || 'python';
 const maxRepos = Number(process.argv[3] || 2);
 // EMBED=1 builds each repo with --embed (local embedding model) so the

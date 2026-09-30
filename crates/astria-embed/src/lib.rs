@@ -6,11 +6,14 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use rusqlite::Connection;
 use std::path::PathBuf;
 
-/// The embedding model used for nodes and queries. bge-small-en-v1.5
-/// (384 dims) keeps the download small and embeddings fast.
-pub const MODEL: EmbeddingModel = EmbeddingModel::BGESmallENV15;
+/// The embedding model used for nodes and queries. jina-embeddings-v2-base-code
+/// (768 dims, 8k-token context) is trained on code + English, so a natural-
+/// language description ranks its true function among thousands of code nodes —
+/// the exact failure measured for the previous general-prose model (bge-small:
+/// the reserved semantic seed hit the RepoQA needle 0/10 times on psf/black).
+pub const MODEL: EmbeddingModel = EmbeddingModel::JinaEmbeddingsV2BaseCode;
 /// Human-readable model label stored alongside embeddings.
-pub const MODEL_NAME: &str = "BAAI/bge-small-en-v1.5";
+pub const MODEL_NAME: &str = "jinaai/jina-embeddings-v2-base-code";
 
 /// Deterministic model cache shared across projects. Query-time model
 /// loads are gated on `model_cached()` so they never trigger downloads.
@@ -27,13 +30,13 @@ pub fn cache_dir() -> PathBuf {
 /// True when the model files are already downloaded — the only condition
 /// under which query paths may load the embedder. fastembed 6 stores
 /// models in HuggingFace-hub layout (`models--<org>--<name>/`), so probe
-/// for any downloaded model directory.
+/// for the current model's directory specifically: accepting any model
+/// directory would let a query-time load start a download when only a
+/// different model (e.g. a pre-swap bge cache) is present.
 pub fn model_cached() -> bool {
-    let dir = cache_dir();
+    let dir = cache_dir().join(format!("models--{}", MODEL_NAME.replace('/', "--")));
     match std::fs::read_dir(&dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok())
-            .any(|e| e.file_name().to_string_lossy().starts_with("models--")),
+        Ok(mut entries) => entries.next().is_some(),
         Err(_) => false,
     }
 }
@@ -51,14 +54,19 @@ pub fn load_embedder() -> astria_core::Result<TextEmbedding> {
     })
 }
 
-/// Cosine above which two nodes get a `similar_to` edge.
-pub const DEFAULT_SIMILARITY_THRESHOLD: f64 = 0.80;
+/// Cosine above which two nodes get a `similar_to` edge — the measured
+/// calibration for this model (see `astria_core::calibration`).
+pub const DEFAULT_SIMILARITY_THRESHOLD: f64 =
+    astria_core::calibration::SEMANTIC_CALIBRATION.similar_to_threshold;
 /// Max similar_to edges kept per node (bound edge growth on big graphs).
 pub const DEFAULT_TOP_K: usize = 5;
-/// Model text input cap — bge was trained on short passages.
-const MAX_TEXT_CHARS: usize = 1500;
-/// Below this cosine a query match is noise, not recall.
-const MIN_QUERY_SIMILARITY: f64 = 0.55;
+/// Model text input cap — the jina v2 code model takes 8k-token contexts,
+/// so full docstrings embed without harmful truncation; the cap only bounds
+/// pathological inputs.
+const MAX_TEXT_CHARS: usize = 4000;
+/// Below this cosine a query match is noise, not recall — the measured
+/// calibration for this model (see `astria_core::calibration`).
+const MIN_QUERY_SIMILARITY: f64 = astria_core::calibration::SEMANTIC_CALIBRATION.noise_floor;
 /// Semantic candidates fed into the query engine per question.
 const MAX_QUERY_CANDIDATES: usize = 50;
 
@@ -203,14 +211,19 @@ pub fn embed_missing_nodes(
 /// top-K most similar neighbors above the threshold, one edge per pair
 /// (lexicographically smaller id first). Existing similar_to edges are
 /// replaced, so re-running is idempotent. Returns edges inserted.
+///
+/// Only vectors from the current model participate: a graph embedded by an
+/// older model still carries its rows, and cosines across models (or across
+/// differing dimensions) are meaningless.
 pub fn rebuild_similarity_edges(
     db: &Connection,
     threshold: f64,
     top_k: usize,
 ) -> astria_core::Result<usize> {
     let vectors: Vec<(String, Vec<f32>)> = {
-        let mut stmt = db.prepare("SELECT node_id, embedding FROM node_embeddings")?;
-        let rows = stmt.query_map([], |row| {
+        let mut stmt =
+            db.prepare("SELECT node_id, embedding FROM node_embeddings WHERE model = ?1")?;
+        let rows = stmt.query_map(rusqlite::params![MODEL_NAME], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 blob_to_vec(&row.get::<_, Vec<u8>>(1)?),
@@ -268,17 +281,34 @@ pub fn has_embeddings(db: &Connection) -> bool {
     .unwrap_or(false)
 }
 
+/// Distinct models present in `node_embeddings`, largest first. After a
+/// model swap the previous model's rows are all that exist while
+/// `has_embeddings` (current-model-scoped) reads false — this is the
+/// signal that lets the pipeline detect the swap instead of silently
+/// losing semantic recall.
+pub fn stored_embedding_models(db: &Connection) -> astria_core::Result<Vec<(String, usize)>> {
+    let mut stmt = db.prepare(
+        "SELECT model, COUNT(*) FROM node_embeddings
+         GROUP BY model ORDER BY COUNT(*) DESC, model ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+    })?;
+    Ok(rows.flatten().collect())
+}
+
 /// Semantic candidates for a question: cosine of the question embedding
 /// against every stored node embedding, mapped into the query engine's
-/// seed-score scale. Only meaningfully-similar nodes are returned.
+/// seed-score scale. Only meaningfully-similar nodes are returned. Only
+/// current-model vectors are scored — cross-model cosines are noise.
 pub fn semantic_scores(
     db: &Connection,
     embedder: &mut TextEmbedding,
     question: &str,
 ) -> astria_core::Result<Vec<(String, f64)>> {
     let query_vector = embed_one(embedder, question)?;
-    let mut stmt = db.prepare("SELECT node_id, embedding FROM node_embeddings")?;
-    let rows = stmt.query_map([], |row| {
+    let mut stmt = db.prepare("SELECT node_id, embedding FROM node_embeddings WHERE model = ?1")?;
+    let rows = stmt.query_map(rusqlite::params![MODEL_NAME], |row| {
         Ok((
             row.get::<_, String>(0)?,
             blob_to_vec(&row.get::<_, Vec<u8>>(1)?),
@@ -300,6 +330,19 @@ mod tests {
     use super::*;
     use astria_core::db::open_db_in_memory;
 
+    /// The calibration table must track the shipped model: swapping
+    /// `MODEL` without re-measuring leaves every cosine threshold on the
+    /// old model's scale (run `cargo run --release -p astria-embed
+    /// --example calibrate` and update `astria_core::calibration`).
+    #[test]
+    fn calibration_matches_shipped_model() {
+        assert_eq!(
+            astria_core::calibration::SEMANTIC_CALIBRATION.model,
+            MODEL_NAME,
+            "SEMANTIC_CALIBRATION is measured for a different model"
+        );
+    }
+
     #[test]
     fn cosine_basics() {
         let a = vec![1.0, 0.0];
@@ -311,9 +354,9 @@ mod tests {
 
     #[test]
     fn node_text_truncates_on_char_boundaries() {
-        // A byte cut at 1500 lands inside the multi-byte character in this
+        // A byte cut at the cap lands inside the multi-byte character in this
         // text; truncate() panicked before the boundary walk.
-        let label = "x".repeat(1490);
+        let label = "x".repeat(MAX_TEXT_CHARS - 10);
         let doc = "e\u{301}".repeat(40); // combining sequences, 2 bytes each
         let text = node_text(&label, Some(&doc), None);
         assert!(text.len() <= MAX_TEXT_CHARS + 4);
@@ -333,7 +376,7 @@ mod tests {
     fn node_text_prefers_docstring_and_caps_length() {
         assert_eq!(node_text("a()", Some("does x"), None), "a()\ndoes x");
         assert_eq!(node_text("a()", None, Some("fn a()")), "a()\nfn a()");
-        let long = "x".repeat(3000);
+        let long = "x".repeat(MAX_TEXT_CHARS + 500);
         assert!(node_text(&long, None, None).len() <= MAX_TEXT_CHARS);
     }
 
@@ -387,8 +430,38 @@ mod tests {
         assert_eq!(count, 1);
     }
 
-    /// Real model round-trip — downloads bge-small-en-v1.5 on first run
-    /// (~90 MB), offline afterwards. Ignored in normal test runs.
+    #[test]
+    fn stored_embedding_models_exposes_a_model_swap() {
+        // After a swap the old model's rows are all that exist while
+        // has_embeddings (current-model-scoped) reads false — the pipeline
+        // needs the model list to tell "never embedded" from "embedded by
+        // an older model".
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+              ('a', 'Alpha', 'code', 'f.rs'),
+              ('b', 'Beta', 'code', 'f.rs'),
+              ('c', 'Gamma', 'code', 'f.rs');",
+        )
+        .unwrap();
+        for (id, model) in [("a", "old/model"), ("b", "old/model"), ("c", MODEL_NAME)] {
+            db.execute(
+                "INSERT INTO node_embeddings (node_id, dim, embedding, model, embedded_at)
+                 VALUES (?1, 2, ?2, ?3, datetime('now'))",
+                rusqlite::params![id, vec_to_blob(&[1.0f32, 0.0]), model],
+            )
+            .unwrap();
+        }
+        let models = stored_embedding_models(&db).unwrap();
+        assert_eq!(
+            models,
+            vec![("old/model".to_string(), 2), (MODEL_NAME.to_string(), 1)],
+            "largest first, so the dominant stored model leads"
+        );
+    }
+
+    /// Real model round-trip — downloads jina-embeddings-v2-base-code on
+    /// first run, offline afterwards. Ignored in normal test runs.
     #[test]
     #[ignore]
     fn real_model_embeds_and_scores() {
@@ -407,6 +480,6 @@ mod tests {
             sim_auth_session > sim_auth_math,
             "auth should be closer to session middleware ({sim_auth_session:.3}) than to matrix math ({sim_auth_math:.3})"
         );
-        assert!(sim_auth_session > 0.6);
+        assert!(sim_auth_session > 0.45);
     }
 }

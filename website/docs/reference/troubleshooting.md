@@ -30,6 +30,16 @@ astria watch <path>           # or keep it fresh automatically
 astria hook install           # or refresh quietly after every commit (throttled)
 ```
 
+## A query returns "No confident match"
+
+The no-confident-match guard fired: none of the question's key (highest-IDF) terms appear anywhere in the graph, and no node matched even half of the question's terms — so any traversal would be seeded by an incidental word match ("handled" fuzzy-matching `handle_message()`) rather than an answer. The message names the terms it could not find.
+
+That is the honest answer when the topic genuinely is not in the corpus (a payroll question against a repo with no payroll code). To get results anyway:
+
+- Rephrase toward the code's own vocabulary — a symbol name, a file path, or the words a docstring would use.
+- If a concept is present but shares no vocabulary with your question, build with `--embed` so semantic recall can bridge the gap (a qualifying embedding candidate bypasses the guard).
+- To restore the historical always-traverse behavior for a run (e.g. measuring IR-style recall), set `ASTRIA_QUERY_SEED_FLOOR=off`. See [environment variables](./env-vars.md).
+
 ## `export --format html` refuses on a large repo
 
 That is the safety limit: the default `--mode standard` interactive viewer is capped at 5,000 nodes and fails with an actionable message beyond that. Explicitly opt into the optimized viewer:
@@ -44,7 +54,7 @@ Postgres introspection shells out to `psql` (read-only over the pg system catalo
 
 ## First `run --embed` is slow
 
-The one-time ~90 MB local model download. After it, embedding refreshes are incremental and fully offline. To relocate the cache (e.g. onto a persistent dir in CI), set `ASTRIA_EMBED_CACHE_DIR` — see [Environment variables](./env-vars).
+The one-time ~615 MB local model download (jina-embeddings-v2-base-code, ONNX fp32). After it, embedding refreshes are incremental and fully offline. To relocate the cache (e.g. onto a persistent dir in CI), set `ASTRIA_EMBED_CACHE_DIR` — see [Environment variables](./env-vars).
 
 ## A graph looks wrong
 

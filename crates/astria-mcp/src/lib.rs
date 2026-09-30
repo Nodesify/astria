@@ -224,17 +224,29 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                     "Blast radius of {} ({}, {} hits):\n",
                     r.seed_label, r.seed, r.total
                 );
+                // Hops across INFERRED edges are reconstructed from name
+                // references (direction not guaranteed) — they must be
+                // visibly weaker evidence than source-verified hops.
+                if r.hits.iter().any(|h| h.provenance != "EXTRACTED") {
+                    out.push_str("(hits marked [INFERRED] come from edges the source does not literally contain)\n");
+                }
                 let mut last_depth = 0;
                 for h in &r.hits {
                     if h.depth != last_depth {
                         last_depth = h.depth;
                         out.push_str(&format!("\ndepth {}:\n", h.depth));
                     }
+                    let provenance = if h.provenance == "EXTRACTED" {
+                        String::new()
+                    } else {
+                        format!(" {}", h.provenance)
+                    };
                     out.push_str(&format!(
-                        "  {} [id={}] ({}) via {}\n",
+                        "  {} [id={}] ({}{}) via {}\n",
                         h.label,
                         h.id,
                         h.relation,
+                        provenance,
                         rel(&h.via_file)
                     ));
                 }
