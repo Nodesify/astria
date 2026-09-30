@@ -2,6 +2,7 @@
   "name": "@nodesify/astria",
   "version": "1.0.8",
   "description": "Turn any folder into a queryable knowledge graph",
+  "mcpName": "io.github.nodesify/astria",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {

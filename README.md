@@ -44,6 +44,10 @@ Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 
 Just want the agent skill, no CLI? `npx skills add Nodesify/astria` installs the graph-first skill from [skills.sh](https://skills.sh) - it answers from an existing `.astria/` graph as plain files and, when graph commands are needed, offers the install above (never without asking).
 
+On Claude Code? One plugin bundles the MCP server, the skill, `/astria` + `/astria-risk` commands, and the `astria-architect` subagent: `/plugin marketplace add Nodesify/astria` then `/plugin install astria@nodesify`.
+
+macOS/Linux without npm? `brew install nodesify/tap/astria` ([tap](https://github.com/Nodesify/homebrew-tap)).
+
 ```bash
 astria run .                                  # build the graph (creates .astria/)
 astria query "how does authentication work"   # ask the graph a question
@@ -87,6 +91,8 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 - **10 MCP tools** — query_graph, repo_map, explain, get_neighbors, shortest_path, affected, god_nodes, list_communities, graph_stats, health ([MCP tools reference](https://nodesify.github.io/astria/docs/reference/mcp-tools))
 
 - **Agent skill on skills.sh** - `npx skills add Nodesify/astria` installs the graph-first skill on its own; it detects the CLI and guides install on first use ([skill file](https://github.com/Nodesify/astria/blob/main/skills/astria/SKILL.md))
+
+- **Claude Code plugin & official MCP Registry listing** - `/plugin marketplace add Nodesify/astria` installs the MCP server, skill, commands, and subagent as one plugin; the server is published to the official MCP Registry ([server.json](server.json))
 
 ## Architecture
 
