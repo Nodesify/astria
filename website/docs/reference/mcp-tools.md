@@ -57,7 +57,7 @@ Aider-style repo map: files ranked by PageRank over the reference graph, with to
 
 ### `explain`
 
-Explain a node: its metadata and up to 20 neighbors with relations and confidence. Errors with `node not found` for unknown labels.
+Explain a node: its metadata and up to 20 neighbors with relations, confidence, and direction — `-->` the node calls/imports the neighbor, `<--` the neighbor points back at the node. Errors with `node not found` for unknown labels.
 
 | Argument | Type | Notes |
 |---|---|---|
@@ -65,7 +65,7 @@ Explain a node: its metadata and up to 20 neighbors with relations and confidenc
 
 ### `get_neighbors`
 
-List a node's neighbors, optionally filtered by relation. Returns the strongest 20 neighbors; relation filtering applies after that cap, so a filtered listing can show fewer neighbors than exist.
+List a node's neighbors, optionally filtered by relation, each with its edge direction (`->` out, `<-` in). Returns the strongest 20 neighbors; relation filtering applies after that cap, so a filtered listing can show fewer neighbors than exist.
 
 | Argument | Type | Notes |
 |---|---|---|

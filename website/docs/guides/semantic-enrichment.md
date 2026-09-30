@@ -18,7 +18,7 @@ astria run . --embed
 Downloads a local model once (jina-embeddings-v2-base-code, ~615 MB, then offline forever) and computes vector embeddings for every node. This adds:
 
 - `similar_to` edges (`INFERRED`, cosine-scored) linking semantically related symbols across files — they flow into clustering, surprising connections, and every export
-- embedding-backed query recall: `query` merges semantic candidates with token matching, so conceptual questions with zero string overlap still find their symbols
+- embedding-backed query recall: `query` merges semantic candidates with token matching, so conceptual questions with zero string overlap still find their symbols. When the question's identifying terms have no lexical evidence anywhere, a strong embedding match ranks like a label match instead of capping below partial word matches — the model is the only witness to what the question is about. The model loads once per process, so steady-state queries answer in ~100ms
 
 Once embeddings exist, every `run`/`update` refreshes them incrementally (offline — the refresh never downloads), and `query` picks them up automatically.
 

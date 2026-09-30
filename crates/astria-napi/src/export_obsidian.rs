@@ -120,8 +120,9 @@ fn tag_segment(name: &str) -> String {
 fn conf_rank(conf: &str) -> u8 {
     match conf {
         "EXTRACTED" => 0,
-        "INFERRED" => 1,
-        _ => 2,
+        "RESOLVED" => 1,
+        "INFERRED" => 2,
+        _ => 3,
     }
 }
 
