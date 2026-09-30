@@ -20,8 +20,10 @@ impl std::fmt::Display for ValidationIssue {
 }
 
 /// EXTRACTED/INFERRED/AMBIGUOUS are the AST tiers; SEMANTIC is stamped on
-/// LLM-enrichment edges (query ranking treats it above INFERRED).
-const CONFIDENCE_VALUES: &[&str] = &["EXTRACTED", "INFERRED", "AMBIGUOUS", "SEMANTIC"];
+/// LLM-enrichment edges (query ranking treats it above INFERRED); RESOLVED
+/// marks a source-extracted call edge whose bare name bound to exactly one
+/// definition during reference resolution.
+const CONFIDENCE_VALUES: &[&str] = &["EXTRACTED", "RESOLVED", "INFERRED", "AMBIGUOUS", "SEMANTIC"];
 
 pub fn validate_extractions(extractions: &[Extraction]) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();

@@ -536,6 +536,9 @@ pub struct EdgeInfoJs {
     pub neighbor_label: String,
     pub neighbor_file: String,
     pub neighbor_line: Option<i64>,
+    /// True when the edge points from the explained node to the neighbor
+    /// (it calls/imports the neighbor); false when the neighbor points back.
+    pub outgoing: bool,
     pub relation: String,
     pub confidence: String,
     pub confidence_score: Option<f64>,
@@ -1058,6 +1061,7 @@ pub fn explain_node(root: String, node_id: String) -> napi::Result<Option<Explai
                 neighbor_label: n.neighbor_label,
                 neighbor_file: n.neighbor_file,
                 neighbor_line: n.neighbor_line,
+                outgoing: n.outgoing,
                 relation: n.relation,
                 confidence: n.confidence,
                 confidence_score: n.confidence_score,

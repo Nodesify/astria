@@ -22,7 +22,9 @@ pub mod types;
 /// v10: chunk overlap across boundaries, `chunk` node type, ASTRIA_CHUNK_CHARS override.
 /// v11: Rust `pub`/documented consts and statics extracted as `constant` nodes
 /// (label + doc comment + initializer signature).
-pub const EXTRACTION_HASH_VERSION: &str = "v11";
+/// v12: Rust `///` item doc comments and `//!` module docs captured as
+/// docstrings; uniquely-resolved call edges carry `RESOLVED` provenance.
+pub const EXTRACTION_HASH_VERSION: &str = "v12";
 
 /// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`
 /// spelling so pre-1.0 env configs keep working. The new name wins; an empty

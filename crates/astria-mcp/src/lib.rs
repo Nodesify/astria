@@ -141,16 +141,25 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                     r.label, r.id, r.source_file, r.neighbor_count
                 );
                 for n in &r.neighbors {
-                    out.push_str(&format!(
-                        "  --{} [{}{}]--> {} ({})\n",
-                        n.relation,
-                        n.confidence,
-                        n.confidence_score
-                            .map(|s| format!(":{s:.2}"))
-                            .unwrap_or_default(),
-                        n.neighbor_label,
-                        n.neighbor_file
-                    ));
+                    // Direction is the stored edge's, not display order:
+                    // `--calls [RESOLVED]--> X` means this node calls X;
+                    // `<-calls [RESOLVED]-- X` means X calls this node.
+                    let score = n
+                        .confidence_score
+                        .map(|s| format!(":{s:.2}"))
+                        .unwrap_or_default();
+                    let line = if n.outgoing {
+                        format!(
+                            "  --{} [{}{}]--> {} ({})\n",
+                            n.relation, n.confidence, score, n.neighbor_label, n.neighbor_file
+                        )
+                    } else {
+                        format!(
+                            "  <-{} [{}]-- {} ({})\n",
+                            n.relation, n.confidence, n.neighbor_label, n.neighbor_file
+                        )
+                    };
+                    out.push_str(&line);
                 }
                 text_result(out)
             })
@@ -170,9 +179,13 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                             continue;
                         }
                     }
+                    // `->` the node points at the neighbor; `<-` the
+                    // neighbor points at the node.
+                    let arrow = if n.outgoing { "->" } else { "<-" };
                     out.push_str(&format!(
-                        "{} [{}{}] ({})\n",
+                        "{} {} [{}{}] ({})\n",
                         n.neighbor_label,
+                        arrow,
                         n.relation,
                         n.confidence_score
                             .map(|s| format!(":{s:.2}"))
@@ -224,11 +237,13 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                     "Blast radius of {} ({}, {} hits):\n",
                     r.seed_label, r.seed, r.total
                 );
-                // Hops across INFERRED edges are reconstructed from name
-                // references (direction not guaranteed) — they must be
-                // visibly weaker evidence than source-verified hops.
-                if r.hits.iter().any(|h| h.provenance != "EXTRACTED") {
-                    out.push_str("(hits marked [INFERRED] come from edges the source does not literally contain)\n");
+                // Hops across INFERRED edges have no source locus (or a
+                // name too common to bind) — visibly weaker evidence than
+                // source-verified hops. RESOLVED hops (call extracted from
+                // source, unique name binding) are trustworthy and carry
+                // no alarm; the provenance is in the per-hit text.
+                if r.hits.iter().any(|h| h.provenance == "INFERRED") {
+                    out.push_str("(hits marked [INFERRED] have no source locus — edges reconstructed from name references)\n");
                 }
                 let mut last_depth = 0;
                 for h in &r.hits {

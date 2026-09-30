@@ -43,15 +43,54 @@ pub fn model_cached() -> bool {
 
 /// Load the embedding model, downloading it on first use (cached under
 /// `cache_dir()` afterwards).
-pub fn load_embedder() -> astria_core::Result<TextEmbedding> {
-    TextEmbedding::try_new(
-        InitOptions::new(MODEL)
-            .with_cache_dir(cache_dir())
-            .with_show_download_progress(true),
-    )
-    .map_err(|e| {
-        astria_core::AstriaError::Graph(format!("failed to load embedding model {MODEL_NAME}: {e}"))
-    })
+///
+/// The loaded model is cached for the process lifetime and handed out
+/// under a lock: loading the ONNX session takes ~1s and ~600 MB, and the
+/// MCP server answers many queries per process — per-query loads were the
+/// bulk of embedded query latency. One instance also bounds memory no
+/// matter how many worker threads ask.
+static EMBEDDER: std::sync::Mutex<Option<TextEmbedding>> = std::sync::Mutex::new(None);
+
+/// Borrowed access to the process-wide embedder. Derefs to
+/// `TextEmbedding`; the model stays loaded for the next caller when the
+/// handle drops.
+pub struct EmbedderHandle(std::sync::MutexGuard<'static, Option<TextEmbedding>>);
+
+impl std::ops::Deref for EmbedderHandle {
+    type Target = TextEmbedding;
+    fn deref(&self) -> &TextEmbedding {
+        self.0
+            .as_ref()
+            .expect("handle is only minted with a loaded model")
+    }
+}
+
+impl std::ops::DerefMut for EmbedderHandle {
+    fn deref_mut(&mut self) -> &mut TextEmbedding {
+        self.0
+            .as_mut()
+            .expect("handle is only minted with a loaded model")
+    }
+}
+
+pub fn load_embedder() -> astria_core::Result<EmbedderHandle> {
+    let mut slot = EMBEDDER
+        .lock()
+        .map_err(|_| astria_core::AstriaError::Graph("embedding model lock poisoned".into()))?;
+    if slot.is_none() {
+        let model = TextEmbedding::try_new(
+            InitOptions::new(MODEL)
+                .with_cache_dir(cache_dir())
+                .with_show_download_progress(true),
+        )
+        .map_err(|e| {
+            astria_core::AstriaError::Graph(format!(
+                "failed to load embedding model {MODEL_NAME}: {e}"
+            ))
+        })?;
+        *slot = Some(model);
+    }
+    Ok(EmbedderHandle(slot))
 }
 
 /// Cosine above which two nodes get a `similar_to` edge — the measured

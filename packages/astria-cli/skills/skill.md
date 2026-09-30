@@ -115,6 +115,12 @@ you can jump straight from a node or edge to the source.
   `EDGE` line ends with `@path:line` — the exact spot the relationship was
   extracted from. `explain` prints `File: path:line` for the node and each
   neighbor.
+- Edge evidence tiers: `EXTRACTED` (verified in source), `RESOLVED` (a call
+  expression from source whose name binds to exactly one definition —
+  trustworthy for impact analysis), `INFERRED` (reconstructed or unbindable
+  — weaker evidence, marked with a legend in `affected` output).
+- `explain`/`neighbors` arrows show real edge direction: `-->` the node
+  calls/imports the neighbor, `<--` the neighbor calls/imports the node.
 - Identifier-shaped string literals (env vars like `PLANE_URL`, snake_case
   keys like `needs_human`, dotted/kebab/slash chains like
   `harness/hr-101-fix-redis-leak`) are indexed as global `reference` nodes

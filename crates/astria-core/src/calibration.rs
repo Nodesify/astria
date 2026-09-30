@@ -67,6 +67,29 @@ impl SemanticCalibration {
     pub const fn seed_slot_score_floor(&self) -> f64 {
         self.seed_score(self.seed_slot_floor)
     }
+
+    /// Seed-score mapping for description-shaped questions — the ones whose
+    /// identifying (salient) terms have no lexical evidence anywhere in the
+    /// graph, so lexical ranking is admitted to be guessing among partial
+    /// matches. There a strong calibrated cosine is the only real evidence
+    /// about the answer and may rank like a full label match instead of
+    /// merely breaking ties: `strong_match` maps to the label-match tier
+    /// (2.0 on the lexical scale, where a full term coverage scores 2.0 and
+    /// an exact label match 4.0), rising to 2.6 at the top of the scale.
+    /// Cosines below `strong_match` keep the tie-breaking cap — the boost
+    /// is for evidence the calibration calls a strong match, not for
+    /// neighbors, and an exact label match still outranks everything.
+    pub const fn description_seed_score(&self, cosine: f64) -> f64 {
+        if cosine < self.strong_match {
+            return self.seed_score(cosine);
+        }
+        let score = 2.0 + (cosine - self.strong_match) * 3.0;
+        if score > 2.6 {
+            2.6
+        } else {
+            score
+        }
+    }
 }
 
 /// Calibration for the shipped model (jina-embeddings-v2-base-code).
@@ -114,5 +137,26 @@ mod tests {
         assert!(c.seed_slot_floor >= 0.50 && c.seed_slot_floor <= 0.54);
         assert!(c.seed_slot_score_floor() > 0.0);
         assert!(c.seed_slot_score_floor() < c.seed_score_cap);
+    }
+
+    #[test]
+    fn description_scores_outrank_partial_matches_not_exact_labels() {
+        let c = &SEMANTIC_CALIBRATION;
+        // Below strong_match: identical to the tie-breaking mapping.
+        assert_eq!(
+            c.description_seed_score(c.noise_floor),
+            c.seed_score(c.noise_floor)
+        );
+        assert_eq!(
+            c.description_seed_score(c.strong_match - 0.01),
+            c.seed_score(c.strong_match - 0.01)
+        );
+        // At/above strong_match: the label-match tier (a full term coverage
+        // scores 2.0 on the lexical scale), capped below an exact label
+        // match (4.0) so token evidence that does exist still wins.
+        assert_eq!(c.description_seed_score(c.strong_match), 2.0);
+        assert!(c.description_seed_score(c.strong_match + 0.1) > 2.0);
+        assert_eq!(c.description_seed_score(1.0), 2.6);
+        assert!(c.description_seed_score(1.0) < 4.0);
     }
 }

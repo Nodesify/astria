@@ -45,7 +45,7 @@ Pipeline stages separate extraction, persistence, and derived outputs. Semantic 
 
 ## Update and query consistency
 
-AST parsing is incremental: unchanged source reuses its versioned extraction cache. The extraction reference pass reconciles the complete current corpus, so adding, removing, or renaming a definition also updates callers from unchanged files. Name-based resolution is still `INFERRED`; deterministic execution does not make a guessed target a declared fact.
+AST parsing is incremental: unchanged source reuses its versioned extraction cache. The extraction reference pass reconciles the complete current corpus, so adding, removing, or renaming a definition also updates callers from unchanged files. A call expression whose bare name binds to exactly one definition carries `RESOLVED` provenance (a source-located call, uniquely bound); calls that cannot resolve stay `INFERRED` stub references — deterministic execution does not make an ambiguous target a declared fact.
 
 Validated file-owned graph facts, the file manifest, and `_meta.graph_published_at` commit in one SQLite transaction. Query freshness (`graph_built_at`) uses that publication timestamp, so a failed later stage does not hide a successful core publication. The build configuration fingerprint includes deduplication options; changing those options triggers reconciliation. Extraction or semantic extraction errors leave that core graph and manifest unadvanced. Derived passes run after the core commit and rerun on subsequent updates, including unchanged updates, so a failed derived pass can be retried. These later passes and exported files are not part of the core transaction.
 
