@@ -63,14 +63,14 @@ CI runners are shared hardware, so treat snapshot numbers as trend data; the man
 
 ## The embedding experiment
 
-`--embed` adds a local embedding model (no API key, offline after a one-time ~90 MB download). Fresh off/on runs on v0.8.0:
+`--embed` adds a local embedding model (no API key, offline after a one-time ~615 MB download; `jina-embeddings-v2-base-code` since the 2026-09 model swap — code + English trained, chosen because a natural-language description must rank its true function among thousands of code nodes, the exact failure measured for the previous general-prose model). The off/on numbers below predate the swap (v0.8.0, bge-small-en-v1.5) and are kept for the structure-size comparison:
 
 | Corpus | without `--embed` | with `--embed` |
 |---|---|---|
 | this repository | 428 communities, 7,546 edges | **201** communities, 10,781 edges (**+3,235** `similar_to`) |
 | original Graphify corpus | 161 communities | **91** communities (**+2,453** `similar_to`) |
 
-Findings: `similar_to` edges consolidate communities by **44–53%** on both corpora, and the token ratio is unchanged (~109× / ~51.5×) — this experiment shows different graph structure and similar output size; it does not establish a retrieval-quality improvement.
+Findings: `similar_to` edges consolidate communities by **44–53%** on both corpora, and the token ratio is unchanged (~109× / ~51.5×) — this experiment shows different graph structure and similar output size; it does not establish a retrieval-quality improvement. The model swap's retrieval effect is measured by the RepoQA embed arm (`scripts/bench/open/repoqa.mjs`, `EMBED=1`) — the reserved semantic-seed needle hit that was 0/10 under bge-small is its headline metric.
 
 ## Retrieval quality — not just compression
 

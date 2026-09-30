@@ -206,6 +206,12 @@ fn dead_code(db: &Connection) -> astria_core::Result<Vec<DeadCodeCandidate>> {
 
 /// Strongly-connected file groups over `calls`/`imports` edges that cross
 /// file boundaries — the import cycles `--detail high` reviews hate.
+///
+/// Only EXTRACTED edges participate: INFERRED call edges are reconstructed
+/// from name references and their direction is not reliable (a guard call
+/// like `if !model_cached()` infers `model_cached -> caller`). An 82-file
+/// "cycle" spanning unrelated crates was one such artifact — SCCs must be
+/// claimed only from edges the source actually contains.
 fn file_cycles(db: &Connection) -> astria_core::Result<Vec<FileCycle>> {
     let file_graph: Vec<(String, String)> = {
         let mut stmt = db.prepare(
@@ -214,7 +220,8 @@ fn file_cycles(db: &Connection) -> astria_core::Result<Vec<FileCycle>> {
              JOIN nodes nf ON nf.id = e.source
              JOIN nodes nt ON nt.id = e.target
              WHERE nf.source_file != nt.source_file
-               AND e.relation IN ('calls', 'imports')",
+               AND e.relation IN ('calls', 'imports')
+               AND e.confidence = 'EXTRACTED'",
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         rows.filter_map(|r| r.ok()).collect()
@@ -467,6 +474,27 @@ mod tests {
         assert!(
             report.cycles.is_empty(),
             "similarity edges are not dependencies"
+        );
+    }
+
+    #[test]
+    fn inferred_call_edges_do_not_create_cycles() {
+        // The measured artifact: INFERRED call edges with unreliable
+        // direction chained dozens of unrelated files into one SCC.
+        // Only edges the source actually contains may claim a cycle.
+        let db = open_db_in_memory().unwrap();
+        seed(
+            &db,
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('a1', 'a()', 'code', 'src/a.rs'), ('b1', 'b()', 'code', 'src/b.rs');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('a1', 'b1', 'calls', 'INFERRED', 'src/a.rs'),
+                ('b1', 'a1', 'calls', 'INFERRED', 'src/b.rs');",
+        );
+        let report = health(&db).unwrap();
+        assert!(
+            report.cycles.is_empty(),
+            "an INFERRED-only cycle is not a source-level dependency cycle"
         );
     }
 

@@ -9,7 +9,7 @@ keywords: [wiki, obsidian, export, html, graphml, neo4j, cypher, visualization]
 
 ## Markdown wiki
 
-`astria wiki` writes a Wikipedia-style markdown wiki into `.astria/wiki/`: an `index.md` entry point, one article per community (key concepts ranked by connections, cross-community links, source files, `EXTRACTED`/`INFERRED`/`AMBIGUOUS` audit trail), and one article per god node (signature, connections grouped by relation). Articles cross-link with relative markdown links, so any agent — or GitHub, or Obsidian — can navigate the graph by reading files instead of running queries:
+`astria wiki` writes a Wikipedia-style markdown wiki into `.astria/wiki/`: an `index.md` entry point, one article per community (key concepts ranked by connections, cross-community links, source files, `EXTRACTED`/`RESOLVED`/`INFERRED`/`AMBIGUOUS` audit trail), and one article per god node (signature, connections grouped by relation). Articles cross-link with relative markdown links, so any agent — or GitHub, or Obsidian — can navigate the graph by reading files instead of running queries:
 
 ```bash
 astria run . --wiki          # build graph + wiki in one step

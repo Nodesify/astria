@@ -103,16 +103,22 @@ async function main() {
   console.log(`${withEvidence.length} evidence-backed QA pairs` +
     (o.limit ? ` (running first ${items.length})` : ''));
 
+  // `astria` from PATH by default; ASTRIA_BIN points at another entrypoint
+  // (a working-tree packages/astria-cli/dist/index.js) to measure a local
+  // build without installing it.
+  const bin = process.env.ASTRIA_BIN
+    ? (process.env.ASTRIA_BIN.endsWith('.js') ? `"${process.execPath}" "${process.env.ASTRIA_BIN}"` : `"${process.env.ASTRIA_BIN}"`)
+    : 'astria';
   if (o.build) {
     console.log('building graph ...');
     const embedFlag = o.embed ? ' --embed' : '';
-    const r = spawnSync(`astria run .${embedFlag}`, { cwd: o.corpus, encoding: 'utf8', shell: true, timeout: 600_000 });
+    const r = spawnSync(`${bin} run .${embedFlag}`, { cwd: o.corpus, encoding: 'utf8', shell: true, timeout: 600_000 });
     if (r.status !== 0) { console.error(r.stderr || r.stdout); process.exit(1); }
   }
 
   const results = [];
   for (const item of items) {
-    const r = spawnSync(`astria query "${item.question}" --budget 4000`, {
+    const r = spawnSync(`${bin} query "${item.question}" --budget 4000`, {
       cwd: o.corpus, encoding: 'utf8', shell: true, timeout: 120_000, maxBuffer: 32 * 1024 * 1024,
     });
     if (!r.stdout) { results.push({ ...item, error: String(r.stderr || r.error).slice(0, 300) }); continue; }

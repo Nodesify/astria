@@ -8,9 +8,10 @@ import {
   injectCodexHook, removeCodexHook,
   injectGeminiHook, removeGeminiHook,
   injectOpenCodePlugin, removeOpenCodePlugin,
+  injectPiExtension, removePiExtension,
   injectCursorRule, removeCursorRule,
   injectKiroSteering, removeKiroSteering,
-  injectAgentMcp, removeAgentMcp, McpFlavor,
+  injectAgentMcp, removeAgentMcp, McpFlavor, cleanupLegacyCopilotMcp,
 } from './settings-inject';
 
 function sectionMessage(result: SectionResult, added: string, updated: string, unchanged: string): string {
@@ -22,6 +23,13 @@ const MCP_LABELS: Record<McpFlavor, { name: string; file: string }> = {
   claude: { name: 'Claude MCP server', file: '.mcp.json' },
   cursor: { name: 'Cursor MCP server', file: '.cursor/mcp.json' },
   gemini: { name: 'Gemini MCP server', file: '.gemini/settings.json' },
+  vscode: { name: 'VS Code MCP server', file: '.vscode/mcp.json' },
+  trae: { name: 'Trae MCP server', file: '.trae/mcp.json' },
+  windsurf: { name: 'Windsurf MCP server', file: '.windsurf/mcp.json' },
+  kiro: { name: 'Kiro MCP server', file: '.kiro/settings/mcp.json' },
+  opencode: { name: 'OpenCode MCP server', file: '.opencode/opencode.json' },
+  pi: { name: 'astria MCP server (pi-mcp-adapter reads it)', file: '.mcp.json' },
+  codex: { name: 'Codex MCP server', file: '~/.codex/config.toml (user-global)' },
 };
 
 function getSkillDir(): string {
@@ -99,7 +107,10 @@ function writeInstallStamp(dir: string) {
 
 /// Pre-1.0 installs wrote skills under `skills/graphify/`. The path carries
 /// exactly one `astria` segment (the skill dir name), so the legacy
-/// destination is derivable by swapping that segment.
+/// destination is derivable by swapping that segment. Layouts whose `astria`
+/// is a file stem rather than a directory (`.clinerules/astria.md`) have no
+/// legacy variant — the swap is a no-op there and must not run, or the
+/// cleanup would delete the freshly installed skill.
 function legacySkillDst(cfg: PlatformConfig): string {
   return cfg.skillDst.replace(/([\\/])astria([\\/])/, '$1graphify$2');
 }
@@ -109,6 +120,7 @@ function legacySkillDst(cfg: PlatformConfig): string {
 function removeLegacySkillFile(platform: string, cfg: PlatformConfig): string[] {
   const messages: string[] = [];
   if (!cfg.skillFile) return messages;
+  if (legacySkillDst(cfg) === cfg.skillDst) return messages;
 
   const targets = [path.join(os.homedir(), legacySkillDst(cfg))];
   if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
@@ -160,6 +172,14 @@ export function installPlatform(platform: string, projectDir: string): string[] 
       messages.push('Kiro steering -> .kiro/steering/astria.md');
     } else {
       messages.push('Kiro steering: already installed');
+    }
+    if (cfg.mcp) {
+      const label = MCP_LABELS[cfg.mcp];
+      messages.push(
+        injectAgentMcp(projectDir, cfg.mcp)
+          ? `${label.name} -> ${label.file}`
+          : `${label.name}: already registered`
+      );
     }
     return messages;
   }
@@ -239,6 +259,12 @@ export function installPlatform(platform: string, projectDir: string): string[] 
           'Copilot instructions: already up to date'
         )
       );
+      // The Copilot coding agent reads MCP config only from repository
+      // Settings (no committed file); a 1.0.9-era install wrote a dead
+      // .github/copilot-mcp.json — clean it up.
+      if (cleanupLegacyCopilotMcp(projectDir)) {
+        messages.push('Legacy Copilot MCP config removed (.github/copilot-mcp.json is read by nothing)');
+      }
     }
   }
 
@@ -262,6 +288,13 @@ export function installPlatform(platform: string, projectDir: string): string[] 
         messages.push('Gemini BeforeTool hook -> .gemini/settings.json');
       } else {
         messages.push('Gemini BeforeTool hook: already installed');
+      }
+      break;
+    case 'pi':
+      if (injectPiExtension()) {
+        messages.push('Pi extension -> ~/.pi/agent/extensions/astria.mjs');
+      } else {
+        messages.push('Pi extension: already installed');
       }
       break;
     case 'opencode':
@@ -315,6 +348,13 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
     } else {
       messages.push('Kiro steering: not found');
     }
+    if (cfg.mcp) {
+      messages.push(
+        removeAgentMcp(projectDir, cfg.mcp)
+          ? 'Kiro MCP server: removed'
+          : 'Kiro MCP server: not found'
+      );
+    }
     return messages;
   }
 
@@ -356,6 +396,9 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
   if (cfg.copilotMd) {
     removeSection(path.join(projectDir, '.github', 'copilot-instructions.md'));
     messages.push('Copilot instructions: astria section removed');
+    if (cleanupLegacyCopilotMcp(projectDir)) {
+      messages.push('Legacy Copilot MCP config removed (.github/copilot-mcp.json is read by nothing)');
+    }
   }
 
   switch (cfg.settingsHook) {

@@ -45,7 +45,7 @@ Pipeline stages separate extraction, persistence, and derived outputs. Semantic 
 
 ## Update and query consistency
 
-AST parsing is incremental: unchanged source reuses its versioned extraction cache. The extraction reference pass reconciles the complete current corpus, so adding, removing, or renaming a definition also updates callers from unchanged files. Name-based resolution is still `INFERRED`; deterministic execution does not make a guessed target a declared fact.
+AST parsing is incremental: unchanged source reuses its versioned extraction cache. The extraction reference pass reconciles the complete current corpus, so adding, removing, or renaming a definition also updates callers from unchanged files. A call expression whose bare name binds to exactly one definition carries `RESOLVED` provenance (a source-located call, uniquely bound); calls that cannot resolve stay `INFERRED` stub references — deterministic execution does not make an ambiguous target a declared fact.
 
 Validated file-owned graph facts, the file manifest, and `_meta.graph_published_at` commit in one SQLite transaction. Query freshness (`graph_built_at`) uses that publication timestamp, so a failed later stage does not hide a successful core publication. The build configuration fingerprint includes deduplication options; changing those options triggers reconciliation. Extraction or semantic extraction errors leave that core graph and manifest unadvanced. Derived passes run after the core commit and rerun on subsequent updates, including unchanged updates, so a failed derived pass can be retried. These later passes and exported files are not part of the core transaction.
 
@@ -62,7 +62,7 @@ CLI and MCP queries use the same hybrid retrieval path. Each request loads a fre
 | `astria-paths` | Path normalization and `.astria` directory management. |
 | `astria-detect` | File system scanning, `.astriaignore` support, and incremental change detection via SHA-256 hashes. |
 | `astria-extract` | Tree-sitter AST traversal logic. Each language defines its own extraction rules (nodes, edges, docstrings). |
-| `astria-embed` | Local embedding model (fastembed/ONNX, `bge-small-en-v1.5`) powering `similar_to` edges and embedding-backed query recall — no API key, offline after the first model download. |
+| `astria-embed` | Local embedding model (fastembed/ONNX, `jina-embeddings-v2-base-code` — code + English trained, so a natural-language description ranks its true function) powering `similar_to` edges and embedding-backed query recall — no API key, offline after the first model download. |
 | `astria-build` | Persistent graph assembly; entity dedup (MinHash/LSH blocking + Jaro-Winkler verify) in `dedup.rs`. |
 | `astria-cluster` | Deterministic community detection (stable labels, cohesion, modularity) using `petgraph`. |
 | `astria-analyze` | God nodes, ranked surprising cross-community connections, blast radius (`affected.rs`, reverse reachability). |

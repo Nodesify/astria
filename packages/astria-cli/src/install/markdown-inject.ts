@@ -141,7 +141,8 @@ export const PROJECT_MD_SECTION = `## astria
 This project has an astria knowledge graph at .astria/.
 Access it through whichever path your agent has:
 - MCP (when an astria MCP server is connected): repo_map, query_graph, explain,
-  get_neighbors, shortest_path, affected.
+  get_neighbors, shortest_path, affected, god_nodes, list_communities,
+  graph_stats, health.
 - CLI (works everywhere): astria map, query, explain, path, affected.
 
 Always-on behaviors:
@@ -151,7 +152,9 @@ Always-on behaviors:
 2. Before running grep/ripgrep to locate code, try astria query first --
    it answers with file:line provenance in one call against the already-built graph.
 3. After modifying code, run astria update . (AST-only, no API cost) so the
-   graph stays fresh; queries then report accurate staleness metadata.`;
+   graph stays fresh; queries then report accurate staleness metadata.
+
+Where slash-skills are supported (Claude Code, ZCode), /astria loads the full usage skill.`;
 
 export const SKILL_REGISTRATION = `
 # astria

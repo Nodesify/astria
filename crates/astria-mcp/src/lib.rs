@@ -17,7 +17,7 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn tools() -> Value {
     json!([
-        {"name": "query_graph", "description": "BFS/DFS traversal of the knowledge graph for a natural-language question. Returns a compact subgraph context.",
+        {"name": "query_graph", "description": "Answer code-locating questions (where/how/what-breaks) with a ranked subgraph: NODE records carry id + src=file:line anchors, EDGE records carry provenance (EXTRACTED/RESOLVED/INFERRED). Prefer over grep for architecture and cross-module questions. An explicit \"No confident match\" means the question's vocabulary is absent from the graph — rephrase toward symbol names or file paths. The header discloses graph age and any files changed since the build.",
          "inputSchema": {"type": "object", "properties": {
             "question": {"type": "string"},
             "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs"},
@@ -34,7 +34,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {
             "budget": {"type": "integer", "default": 2000},
             "detail": {"type": "string", "enum": ["all", "high"], "default": "all"}}}},
-        {"name": "explain", "description": "Explain a node: its metadata and up to 20 neighbors with relations and confidence.",
+        {"name": "explain", "description": "Explain a node: metadata plus its strongest 20 connections with real edge direction (--> it calls/imports the neighbor, <-- the neighbor points back) and evidence tier per connection.",
          "inputSchema": {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}},
         {"name": "get_neighbors", "description": "List a node's neighbors, optionally filtered by relation.",
          "inputSchema": {"type": "object", "properties": {
@@ -46,7 +46,7 @@ fn tools() -> Value {
                 "description": "Follow edges only in their stored direction."},
             "detail": {"type": "string", "enum": ["all", "high"], "default": "all"}},
             "required": ["source", "target"]}},
-        {"name": "affected", "description": "Blast radius: everything impacted by changing a node (reverse reachability over calls/imports/uses).",
+        {"name": "affected", "description": "Blast radius — run BEFORE changing a shared symbol. Reverse reachability over calls/imports/uses; each hop shows its evidence tier (RESOLVED = source-extracted call uniquely bound, INFERRED = no source locus, treat as weaker).",
          "inputSchema": {"type": "object", "properties": {
             "node": {"type": "string"}, "depth": {"type": "integer", "default": 2},
             "relation": {"type": "string"}}, "required": ["node"]}},
@@ -141,16 +141,25 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                     r.label, r.id, r.source_file, r.neighbor_count
                 );
                 for n in &r.neighbors {
-                    out.push_str(&format!(
-                        "  --{} [{}{}]--> {} ({})\n",
-                        n.relation,
-                        n.confidence,
-                        n.confidence_score
-                            .map(|s| format!(":{s:.2}"))
-                            .unwrap_or_default(),
-                        n.neighbor_label,
-                        n.neighbor_file
-                    ));
+                    // Direction is the stored edge's, not display order:
+                    // `--calls [RESOLVED]--> X` means this node calls X;
+                    // `<-calls [RESOLVED]-- X` means X calls this node.
+                    let score = n
+                        .confidence_score
+                        .map(|s| format!(":{s:.2}"))
+                        .unwrap_or_default();
+                    let line = if n.outgoing {
+                        format!(
+                            "  --{} [{}{}]--> {} ({})\n",
+                            n.relation, n.confidence, score, n.neighbor_label, n.neighbor_file
+                        )
+                    } else {
+                        format!(
+                            "  <-{} [{}]-- {} ({})\n",
+                            n.relation, n.confidence, n.neighbor_label, n.neighbor_file
+                        )
+                    };
+                    out.push_str(&line);
                 }
                 text_result(out)
             })
@@ -170,9 +179,13 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                             continue;
                         }
                     }
+                    // `->` the node points at the neighbor; `<-` the
+                    // neighbor points at the node.
+                    let arrow = if n.outgoing { "->" } else { "<-" };
                     out.push_str(&format!(
-                        "{} [{}{}] ({})\n",
+                        "{} {} [{}{}] ({})\n",
                         n.neighbor_label,
+                        arrow,
                         n.relation,
                         n.confidence_score
                             .map(|s| format!(":{s:.2}"))
@@ -224,17 +237,31 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                     "Blast radius of {} ({}, {} hits):\n",
                     r.seed_label, r.seed, r.total
                 );
+                // Hops across INFERRED edges have no source locus (or a
+                // name too common to bind) — visibly weaker evidence than
+                // source-verified hops. RESOLVED hops (call extracted from
+                // source, unique name binding) are trustworthy and carry
+                // no alarm; the provenance is in the per-hit text.
+                if r.hits.iter().any(|h| h.provenance == "INFERRED") {
+                    out.push_str("(hits marked [INFERRED] have no source locus — edges reconstructed from name references)\n");
+                }
                 let mut last_depth = 0;
                 for h in &r.hits {
                     if h.depth != last_depth {
                         last_depth = h.depth;
                         out.push_str(&format!("\ndepth {}:\n", h.depth));
                     }
+                    let provenance = if h.provenance == "EXTRACTED" {
+                        String::new()
+                    } else {
+                        format!(" {}", h.provenance)
+                    };
                     out.push_str(&format!(
-                        "  {} [id={}] ({}) via {}\n",
+                        "  {} [id={}] ({}{}) via {}\n",
                         h.label,
                         h.id,
                         h.relation,
+                        provenance,
                         rel(&h.via_file)
                     ));
                 }

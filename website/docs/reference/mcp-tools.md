@@ -57,7 +57,7 @@ Aider-style repo map: files ranked by PageRank over the reference graph, with to
 
 ### `explain`
 
-Explain a node: its metadata and up to 20 neighbors with relations and confidence. Errors with `node not found` for unknown labels.
+Explain a node: its metadata and up to 20 neighbors with relations, confidence, and direction — `-->` the node calls/imports the neighbor, `<--` the neighbor points back at the node. Errors with `node not found` for unknown labels.
 
 | Argument | Type | Notes |
 |---|---|---|
@@ -65,7 +65,7 @@ Explain a node: its metadata and up to 20 neighbors with relations and confidenc
 
 ### `get_neighbors`
 
-List a node's neighbors, optionally filtered by relation. Returns the strongest 20 neighbors; relation filtering applies after that cap, so a filtered listing can show fewer neighbors than exist.
+List a node's neighbors, optionally filtered by relation, each with its edge direction (`->` out, `<-` in). Returns the strongest 20 neighbors; relation filtering applies after that cap, so a filtered listing can show fewer neighbors than exist.
 
 | Argument | Type | Notes |
 |---|---|---|
@@ -86,6 +86,8 @@ Shortest path between two nodes, with the relation of each hop.
 ### `affected`
 
 Blast radius: everything impacted by changing a node — reverse reachability over the impact relations (`calls`, `references`, `imports`, `imports_from`, `uses`, `depends_on`, `requires`, and `inherits` where a graph carries it). The `relation` argument accepts only these values.
+
+Every hop reports the evidence tier of the edge it was reached through: `RESOLVED` (a call expression extracted from source, name bound to exactly one definition — trustworthy), `EXTRACTED` (directly verified), or `INFERRED` (no source locus, or a name too common to bind — marked with a legend line; treat as weaker evidence when deciding what a change touches).
 
 | Argument | Type | Default | Notes |
 |---|---|---|---|

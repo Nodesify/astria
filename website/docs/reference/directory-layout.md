@@ -22,14 +22,14 @@ Everything astria produces lives in plain files, so it is inspectable, backup-ab
     wiki/                    # (after `wiki` / `run --wiki`) markdown wiki: index.md + articles
     memory/                  # (after `save-result`) curated Q/A docs (also inserted into the graph at save time)
     reflections/             # (after `reflect`) LESSONS.md outcome aggregation
-    transcripts/             # (optional) drop .txt/.md here; ingested as document nodes
+    transcripts/             # (optional) transcripts: drop .txt/.md here or `astria add --transcript`; ingested as document nodes
 ```
 
 Plus, outside the repo:
 
 ```
 ~/.astria/global.db          # Cross-repo global graph store (`global add`, `run --global`)
-~/.astria-embed-cache/       # Local embedding model (~90 MB, downloaded once; override with ASTRIA_EMBED_CACHE_DIR)
+~/.astria-embed-cache/       # Local embedding model (~615 MB, downloaded once; override with ASTRIA_EMBED_CACHE_DIR)
 ```
 
 ## Inside db.sqlite

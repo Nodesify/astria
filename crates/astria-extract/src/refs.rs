@@ -97,8 +97,17 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
                 if let Some(real_id) = real_id {
                     if real_id != &edge.target {
                         edge.target = real_id.clone();
-                        // A unique name match is still a heuristic, not
-                        // compiler-proven binding. Preserve its evidence tier.
+                        // The call expression is extracted from source; the
+                        // unique name match binds it to exactly one
+                        // definition. That is its own evidence tier —
+                        // stronger than the co-occurrence inference behind
+                        // stub-targeted edges, but not compiler-proven
+                        // binding, so it stays below EXTRACTED (and outside
+                        // `--detail high`).
+                        if edge.relation == "calls" && edge.confidence == "INFERRED" {
+                            edge.confidence = "RESOLVED".to_string();
+                            edge.confidence_score = Some(0.85);
+                        }
                     }
                 }
             }
@@ -153,9 +162,35 @@ mod tests {
         ];
         resolve_cross_file_references(&mut results);
         assert_eq!(results[1].edges[0].target, "src_x::run");
-        // Resolving a unique name does not make the binding compiler-proven.
-        assert_eq!(results[1].edges[0].confidence, "INFERRED");
-        assert_eq!(results[1].edges[0].confidence_score, Some(0.7));
+        // A source-extracted call bound to exactly one definition is its
+        // own tier: stronger than co-occurrence, below compiler-proven.
+        assert_eq!(results[1].edges[0].confidence, "RESOLVED");
+        assert_eq!(results[1].edges[0].confidence_score, Some(0.85));
+    }
+
+    #[test]
+    fn resolved_binding_survives_re_resolution() {
+        // Idempotence: an already-RESOLVED edge must not be re-labeled when
+        // resolution runs again (update flows re-resolve cached edges).
+        let mut results = vec![
+            ext(vec![node("src_x::run", "run()")], vec![]),
+            ext(vec![], vec![edge("caller", "run", "calls", "RESOLVED")]),
+        ];
+        resolve_cross_file_references(&mut results);
+        assert_eq!(results[1].edges[0].target, "src_x::run");
+        assert_eq!(results[1].edges[0].confidence, "RESOLVED");
+    }
+
+    #[test]
+    fn extracted_edges_are_never_relabeled() {
+        // An EXTRACTED import edge that happens to resolve must keep its
+        // tier — only INFERRED calls are upgraded.
+        let mut results = vec![
+            ext(vec![node("src_x::mod", "mod")], vec![]),
+            ext(vec![], vec![edge("caller", "mod", "imports", "EXTRACTED")]),
+        ];
+        resolve_cross_file_references(&mut results);
+        assert_eq!(results[1].edges[0].confidence, "EXTRACTED");
     }
 
     #[test]

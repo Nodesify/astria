@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as os from 'os';
+import type { McpFlavor } from './settings-inject';
 
 export interface PlatformConfig {
   skillFile: string;
@@ -9,9 +10,10 @@ export interface PlatformConfig {
   geminiMd: boolean;
   /** Inject the managed section into `<project>/.github/copilot-instructions.md`. */
   copilotMd?: boolean;
-  settingsHook: 'claude' | 'codex' | 'gemini' | 'opencode' | 'none';
-  /** Register the astria MCP server in this platform's project-scoped config. */
-  mcp?: 'zcode' | 'claude' | 'cursor' | 'gemini';
+  settingsHook: 'claude' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'none';
+  /** Register the astria MCP server in this platform's config ('codex' is
+   * user-global TOML; the JSON flavors are project-scoped). */
+  mcp?: McpFlavor;
 }
 
 export const PLATFORMS: Record<string, PlatformConfig> = {
@@ -31,6 +33,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     agentsMd: true,
     geminiMd: false,
     settingsHook: 'codex',
+    mcp: 'codex',
   },
   gemini: {
     skillFile: 'skill-gemini.md',
@@ -50,6 +53,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     agentsMd: true,
     geminiMd: false,
     settingsHook: 'opencode',
+    mcp: 'opencode',
   },
   cursor: {
     skillFile: '',
@@ -67,6 +71,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     agentsMd: false,
     geminiMd: false,
     settingsHook: 'none',
+    mcp: 'kiro',
   },
   aider: {
     skillFile: 'skill-aider.md',
@@ -86,6 +91,11 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     // AGENTS.md support varies by Copilot version, so write both.
     copilotMd: true,
     settingsHook: 'none',
+    // No MCP registration: the Copilot coding agent has no committed repo
+    // config file — repository-level MCP is JSON pasted into the repository
+    // Settings UI (docs.github.com). The dead .github/copilot-mcp.json a
+    // 1.0.9-era install wrote is cleaned up on install/uninstall (VS Code
+    // users get MCP via the separate vscode platform).
   },
   trae: {
     skillFile: 'skill-trae.md',
@@ -94,6 +104,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     agentsMd: true,
     geminiMd: false,
     settingsHook: 'none',
+    mcp: 'trae',
   },
   zcode: {
     // skill-codex.md is CLI-oriented, which is what ZCode sessions use
@@ -105,6 +116,66 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
     geminiMd: false,
     settingsHook: 'none',
     mcp: 'zcode',
+  },
+  // VS Code native workspace MCP — covers every editor based on it,
+  // including GitHub Copilot inside VS Code. No skill file mechanism:
+  // VS Code agents read workspace instructions via other platforms' files.
+  vscode: {
+    skillFile: '',
+    skillDst: '',
+    claudeMd: false,
+    agentsMd: false,
+    geminiMd: false,
+    settingsHook: 'none',
+    mcp: 'vscode',
+  },
+  windsurf: {
+    skillFile: '',
+    skillDst: '',
+    claudeMd: false,
+    agentsMd: false,
+    geminiMd: false,
+    settingsHook: 'none',
+    mcp: 'windsurf',
+  },
+  // Cline workspace rules (~/.clinerules) — CLI-oriented skill, same as codex.
+  cline: {
+    skillFile: 'skill-codex.md',
+    skillDst: path.join('.clinerules', 'astria.md'),
+    claudeMd: false,
+    agentsMd: true,
+    geminiMd: false,
+    settingsHook: 'none',
+  },
+  // Roo Code global rules directory.
+  roo: {
+    skillFile: 'skill-codex.md',
+    skillDst: path.join('.roo', 'rules', 'astria.md'),
+    claudeMd: false,
+    agentsMd: true,
+    geminiMd: false,
+    settingsHook: 'none',
+  },
+  // Pi: extension file (freshness + /astria command) in ~/.pi/agent/extensions,
+  // AGENTS.md section, and the standard .mcp.json — the pi-mcp-adapter
+  // extension reads it automatically, giving Pi the full MCP tool surface.
+  pi: {
+    skillFile: '',
+    skillDst: '',
+    claudeMd: false,
+    agentsMd: true,
+    geminiMd: false,
+    settingsHook: 'pi',
+    mcp: 'pi',
+  },
+  // Amp reads AGENTS.md — the managed astria section is the whole install.
+  amp: {
+    skillFile: '',
+    skillDst: '',
+    claudeMd: false,
+    agentsMd: true,
+    geminiMd: false,
+    settingsHook: 'none',
   },
 };
 

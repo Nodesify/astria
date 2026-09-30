@@ -536,6 +536,9 @@ pub struct EdgeInfoJs {
     pub neighbor_label: String,
     pub neighbor_file: String,
     pub neighbor_line: Option<i64>,
+    /// True when the edge points from the explained node to the neighbor
+    /// (it calls/imports the neighbor); false when the neighbor points back.
+    pub outgoing: bool,
     pub relation: String,
     pub confidence: String,
     pub confidence_score: Option<f64>,
@@ -577,6 +580,9 @@ pub struct AffectedHitJs {
     pub label: String,
     pub depth: i32,
     pub relation: String,
+    /// `EXTRACTED` (edge present in the source) or `INFERRED` (reconstructed
+    /// from name references — direction not guaranteed).
+    pub provenance: String,
     pub via_file: String,
 }
 
@@ -1055,6 +1061,7 @@ pub fn explain_node(root: String, node_id: String) -> napi::Result<Option<Explai
                 neighbor_label: n.neighbor_label,
                 neighbor_file: n.neighbor_file,
                 neighbor_line: n.neighbor_line,
+                outgoing: n.outgoing,
                 relation: n.relation,
                 confidence: n.confidence,
                 confidence_score: n.confidence_score,
@@ -1093,6 +1100,7 @@ pub fn affected_node(
                 label: h.label,
                 depth: h.depth as i32,
                 relation: h.relation,
+                provenance: h.provenance,
                 via_file: astria_paths::relative_display(&h.via_file, &root_str),
             })
             .collect(),
@@ -1224,6 +1232,108 @@ pub fn ingest_url(
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     // Incremental update picks the new file up (hash manifest sees it as new)
+    pipeline::run_pipeline_with(&root_pb, true, false, false, false, None)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(IngestResultJs {
+        saved_path: astria_paths::normalize(&saved),
+        graph_updated: true,
+    })
+}
+
+/// File-system-safe transcript name: alphanumerics, `-`, `_`, and the
+/// extension dot; everything else collapses to `-`. Preserves the original
+/// name so re-adding the same source overwrites idempotently instead of
+/// stacking timestamped copies.
+fn transcript_file_name(source_name: &str) -> String {
+    let sanitized: String = source_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Edge dashes and dots go too: a leading dot would hide the file on
+    // unix, and trailing separators survive as noise.
+    let sanitized = sanitized
+        .trim_matches(|c: char| matches!(c, '-' | '.' | '_'))
+        .to_string();
+    let has_ext = sanitized.rsplit('.').next().is_some_and(|ext| {
+        !ext.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric())
+    });
+    if has_ext {
+        sanitized
+    } else {
+        format!("{sanitized}.md")
+    }
+}
+
+/// Save a transcript into `.astria/transcripts/` and update the graph —
+/// the writer side of the transcript-sidecar contract (any external
+/// transcriber can also drop files there directly; this is the built-in
+/// path, e.g. `astria add --transcript -` piping from a tool).
+///
+/// Exactly one of `source` (a file path; the basename is kept) or
+/// `content` (raw text; stored under a timestamped name) is required.
+#[napi]
+pub fn save_transcript(
+    root: String,
+    source: Option<String>,
+    content: Option<String>,
+) -> napi::Result<IngestResultJs> {
+    let root_pb = PathBuf::from(&root);
+    if !root_pb.exists() {
+        return Err(napi::Error::from_reason(format!(
+            "path does not exist: {}",
+            root_pb.display()
+        )));
+    }
+    let (name, text) = match (source, content) {
+        (Some(source), None) => {
+            let path = PathBuf::from(&source);
+            let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+                napi::Error::from_reason(format!("transcript path has no file name: {source}"))
+            })?;
+            let text = std::fs::read_to_string(&path).map_err(|e| {
+                napi::Error::from_reason(format!("cannot read transcript {source}: {e}"))
+            })?;
+            (transcript_file_name(name), text)
+        }
+        (None, Some(content)) => {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            (format!("transcript-{ts}.md"), content)
+        }
+        (Some(_), Some(_)) => {
+            return Err(napi::Error::from_reason(
+                "pass either a transcript source file or inline content, not both",
+            ))
+        }
+        (None, None) => {
+            return Err(napi::Error::from_reason(
+                "nothing to save: pass a transcript source file or inline content",
+            ))
+        }
+    };
+    if text.trim().is_empty() {
+        return Err(napi::Error::from_reason(
+            "transcript is empty; refusing to save an empty sidecar",
+        ));
+    }
+    let dir = root_pb.join(".astria").join("transcripts");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| napi::Error::from_reason(format!("cannot create {}: {e}", dir.display())))?;
+    let saved = dir.join(&name);
+    std::fs::write(&saved, &text)
+        .map_err(|e| napi::Error::from_reason(format!("cannot write {}: {e}", saved.display())))?;
+
+    // Incremental update picks the sidecar up as a document (the detect
+    // walk covers .astria/transcripts explicitly).
     pipeline::run_pipeline_with(&root_pb, true, false, false, false, None)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
@@ -1365,6 +1475,7 @@ pub fn graph_history(root: String, limit: i64) -> napi::Result<Vec<HistoryEntryJ
 mod tests {
     use crate::pipeline;
     use crate::query;
+    use crate::transcript_file_name;
     use astria_core::db::open_db_in_memory;
 
     fn seed_graph(
@@ -1589,5 +1700,28 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert!(parsed["nodes"].as_array().unwrap().len() == 1);
         assert!(parsed["edges"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn transcript_names_stay_filesystem_safe() {
+        // recognized extensions pass through with the original name intact
+        assert_eq!(
+            transcript_file_name("conv26-session01.md"),
+            "conv26-session01.md"
+        );
+        assert_eq!(transcript_file_name("notes.txt"), "notes.txt");
+        // path separators and spaces collapse to dashes; leading traversal
+        // segments are trimmed, so nothing escapes the transcripts dir and
+        // no dot-prefixed hidden file appears
+        assert_eq!(transcript_file_name("../evil name"), "evil-name.md");
+        assert_eq!(
+            transcript_file_name("..\\evil\\\\name with spaces"),
+            "evil--name-with-spaces.md"
+        );
+        // no recognizable extension gains .md
+        assert_eq!(
+            transcript_file_name("standup-2026-09-30"),
+            "standup-2026-09-30.md"
+        );
     }
 }

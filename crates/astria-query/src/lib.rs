@@ -69,10 +69,12 @@ impl EdgeData {
 /// edges start at 0.7 (INFERRED), so plain graphs never produce weak nodes.
 const SEMANTIC_WEAK_FLOOR: f64 = 0.65;
 
-/// Minimum rescaled embedding score for the semantic-only seed reservation
-/// (≈ cosine 0.63 on the rescale): strong enough that the candidate is
-/// genuinely about the question, not a distant neighbor.
-const SEMANTIC_SEED_FLOOR: f64 = 0.12;
+/// Minimum rescaled embedding score for the semantic-only seed reservation:
+/// the measured slot floor from `astria_core::calibration` (raw cosine 0.52
+/// on the shipped model) — strong enough that the candidate is genuinely
+/// about the question, not a distant neighbor.
+const SEMANTIC_SEED_FLOOR: f64 =
+    astria_core::calibration::SEMANTIC_CALIBRATION.seed_slot_score_floor();
 
 /// Fallback strength for edges without a numeric score. Alphabetical
 /// string comparison of confidence labels does NOT order by strength
@@ -81,6 +83,11 @@ fn confidence_rank(confidence: &str) -> f64 {
     match confidence.to_uppercase().as_str() {
         "DECLARED" => 1.0,
         "EXTRACTED" => 0.9,
+        // A call expression extracted from source whose bare name bound to
+        // exactly one definition: stronger than co-occurrence inference,
+        // deliberately below the EXTRACTED/DECLARED tier so `--detail high`
+        // (compiler-grade facts) still excludes it.
+        "RESOLVED" => 0.85,
         "INFERRED" => 0.7,
         "SEMANTIC" => 0.6,
         _ => 0.5,
@@ -452,15 +459,33 @@ fn is_testish_path(path: &str) -> bool {
     })
 }
 
-/// Phrases whose presence marks a question as asking for the program's
-/// starting file rather than a concept.
-const ENTRY_INTENT_PHRASES: &[&str] = &[
-    "entry point",
-    "entrypoint",
-    "main file",
-    "starting point",
-    "bootstrap",
+/// Word sequences whose presence marks a question as asking for the
+/// program's starting file rather than a concept. Matched as intact,
+/// stem-equal token runs — never as substrings: "main file" must not fire
+/// inside "domain files". Bare "bootstrap" is deliberately absent: too
+/// many repos contain the CSS framework of that name, and a false entry
+/// intent re-ranks import roots above every lexical match the question
+/// actually earned.
+const ENTRY_INTENT_PHRASES: &[&[&str]] = &[
+    &["entry", "point"],
+    &["entrypoint"],
+    &["main", "file"],
+    &["starting", "point"],
 ];
+
+/// True when `tokens` contains an entry-intent phrase as a contiguous word
+/// run, plural stems included ("entry points", "the entrypoints").
+fn has_entry_intent(tokens: &[String]) -> bool {
+    ENTRY_INTENT_PHRASES.iter().any(|phrase| {
+        !phrase.is_empty()
+            && tokens.windows(phrase.len()).any(|window| {
+                window
+                    .iter()
+                    .zip(phrase.iter())
+                    .all(|(token, word)| token.as_str() == *word || stem(token) == stem(word))
+            })
+    })
+}
 
 /// Minimum outgoing imports for a file to count as an entry candidate —
 /// below this it is a leaf module, not a front door.
@@ -542,8 +567,8 @@ fn is_semantic_type(file_type: &str) -> bool {
 
 /// Share of prose-like nodes: documents plus semantic-derived summaries. On
 /// an LLM-enriched docs-only corpus the concept/code nodes the extractor adds
-/// would otherwise push the document share under the doc-only threshold and
-/// strand the corpus with two prose seeds.
+/// would otherwise push the document share under `DOCS_MAJORITY_PROSE_SHARE`
+/// and strand the corpus with two prose seeds.
 fn prose_share(loaded: &LoadedGraph) -> f64 {
     let prose = loaded
         .graph
@@ -555,6 +580,64 @@ fn prose_share(loaded: &LoadedGraph) -> f64 {
     prose as f64 / loaded.graph.node_count().max(1) as f64
 }
 
+/// Which corpus a query runs against — the designed distinction that
+/// decides whether prose nodes (documents, chunks) rank as first-class
+/// content or under code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CorpusMode {
+    /// Code-majority graph: code symbols rank first, doc seeds are capped,
+    /// chunk bodies score under code.
+    CodeMajority,
+    /// Docs-majority graph (transcript corpora, docs-only sites): there is
+    /// no code to protect, so prose nodes ARE the corpus — the doc-seed
+    /// quota opens and chunks rank like documents.
+    DocsMajority,
+}
+
+/// Prose share at and above which auto-detection calls a graph
+/// docs-majority. A designed threshold, not a tuning knob: mixed graphs
+/// (real repos — mostly code plus docs) stay code-majority; corpora that
+/// are effectively all prose cross it. Pin either way with
+/// `ASTRIA_CORPUS_MODE=docs|code` when auto-detection guesses wrong.
+const DOCS_MAJORITY_PROSE_SHARE: f64 = 0.95;
+
+/// Parsed `ASTRIA_CORPUS_MODE=docs|code` pin. Unrecognized values warn and
+/// fall back to auto-detection — a typo must not silently pin a mode.
+fn corpus_mode_pin() -> Option<CorpusMode> {
+    let value = astria_core::env_var("CORPUS_MODE")?;
+    match corpus_mode_pin_value(value.trim()) {
+        Some(mode) => Some(mode),
+        None => {
+            eprintln!(
+                "warning: ASTRIA_CORPUS_MODE={value:?} not recognized (docs|code); using auto-detection"
+            );
+            None
+        }
+    }
+}
+
+fn corpus_mode_pin_value(value: &str) -> Option<CorpusMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "docs" | "doc" | "documents" => Some(CorpusMode::DocsMajority),
+        "code" => Some(CorpusMode::CodeMajority),
+        _ => None,
+    }
+}
+
+/// The corpus mode for one loaded graph: the env pin when set, otherwise
+/// auto-detection from the prose share.
+fn corpus_mode(loaded: &LoadedGraph) -> CorpusMode {
+    corpus_mode_from(prose_share(loaded), corpus_mode_pin())
+}
+
+fn corpus_mode_from(share: f64, pin: Option<CorpusMode>) -> CorpusMode {
+    pin.unwrap_or(if share >= DOCS_MAJORITY_PROSE_SHARE {
+        CorpusMode::DocsMajority
+    } else {
+        CorpusMode::CodeMajority
+    })
+}
+
 fn wants_docs(terms: &[String]) -> bool {
     terms.iter().flat_map(|t| tokenize(t)).any(|t| {
         matches!(
@@ -564,7 +647,28 @@ fn wants_docs(terms: &[String]) -> bool {
     })
 }
 
-fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> {
+/// Ranked nodes plus the evidence the ranking was built on.
+///
+/// `salient_terms` are the query's highest-IDF terms — the ones that
+/// identify the answer — and `max_salient_hits` is the best salient-term
+/// coverage any node achieved. `max_matched_terms` of `effective_count`
+/// is the best term coverage any node achieved at all, `entry_intent`
+/// records whether structural entry-point candidates exist (those queries
+/// are lexical-by-design). `missing_terms` are the effective terms that
+/// matched nothing anywhere. Together these let callers tell "the graph
+/// has evidence for what the question is about" from "nothing matched the
+/// question's identifying terms" (the no-confident-match case).
+struct ScoredNodes {
+    ranked: Vec<(f64, NodeIndex)>,
+    salient_terms: Vec<String>,
+    max_salient_hits: usize,
+    max_matched_terms: usize,
+    effective_count: usize,
+    entry_intent: bool,
+    missing_terms: Vec<String>,
+}
+
+fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes {
     // IDF weights + per-node lowercase labels, one shared pre-pass.
     let n_nodes = loaded.graph.node_count().max(1) as f64;
     let ln_nodes = n_nodes.ln().max(1.0);
@@ -574,6 +678,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         .map(|idx| loaded.graph[idx].label.to_lowercase())
         .collect();
     let doc_share = prose_share(loaded);
+    let docs_majority = doc_share >= DOCS_MAJORITY_PROSE_SHARE;
     let label_components: Vec<Vec<String>> = loaded
         .graph
         .node_indices()
@@ -612,6 +717,9 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         }
         effective.push(term);
     }
+    // Effective terms with zero coverage hits anywhere — the question's
+    // vocabulary the graph does not share, named in a refusal message.
+    let mut missing_terms: Vec<String> = Vec::new();
     for term in &effective {
         let parts = tokenize(term);
         let hits = label_components
@@ -624,6 +732,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             })
             .count();
         let w = if hits == 0 {
+            missing_terms.push((*term).clone());
             1.0
         } else {
             ((n_nodes / hits as f64).ln() / ln_nodes).clamp(IDF_FLOOR, 1.0)
@@ -651,10 +760,12 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
     salient_terms.truncate(salient_k);
     let salient_set: std::collections::HashSet<&str> =
         salient_terms.iter().map(|t| t.as_str()).collect();
+    let salient_owned: Vec<String> = salient_terms.iter().map(|t| (*t).clone()).collect();
 
     // Entry-point intent: detect once, pay for the degree maps only then.
-    let joined = terms.join(" ").to_lowercase();
-    let wants_tests = terms.iter().flat_map(|t| tokenize(t)).any(|t| {
+    // Phrase runs are matched over the token stream, not a joined string.
+    let question_tokens: Vec<String> = terms.iter().flat_map(|t| tokenize(t)).collect();
+    let wants_tests = question_tokens.iter().any(|t| {
         matches!(
             t.as_str(),
             "test"
@@ -669,7 +780,7 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         )
     });
     let wants_docs = wants_docs(terms);
-    let wants_entry = ENTRY_INTENT_PHRASES.iter().any(|p| joined.contains(p));
+    let wants_entry = has_entry_intent(&question_tokens);
     let (imports_out, imports_in) = if wants_entry {
         import_degrees(loaded)
     } else {
@@ -684,6 +795,8 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
     let debug_scores = debug_scores_enabled();
     // Per-node (matched_terms, salient_hits) in node-index order, for the dump.
     let mut debug_rows: Vec<(usize, usize)> = Vec::new();
+    let mut max_salient_hits = 0usize;
+    let mut max_matched_terms = 0usize;
     let effective_terms_count = terms
         .iter()
         .filter(|t| {
@@ -714,9 +827,9 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         } else if is_chunk {
             // Chunked prose out-scoring code on body-term luck displaced
             // exact code answers by a couple of ranks; in code-majority
-            // graphs chunks rank under documents, while on doc-only graphs
-            // they ARE the corpus and rank like any document.
-            if doc_share > 0.95 {
+            // graphs chunks rank under documents, while on docs-majority
+            // graphs they ARE the corpus and rank like any document.
+            if docs_majority {
                 if wants_docs {
                     1.25
                 } else {
@@ -868,6 +981,8 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
         if score > 0.0 || entry_candidates.contains(&idx) {
             scored.push(((score + phrase_bonus) * prior, idx));
         }
+        max_salient_hits = max_salient_hits.max(salient_hits);
+        max_matched_terms = max_matched_terms.max(matched_terms);
         if debug_scores {
             debug_rows.push((matched_terms, salient_hits));
         }
@@ -915,7 +1030,15 @@ fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> Vec<(f64, NodeIndex)> 
             );
         }
     }
-    scored
+    ScoredNodes {
+        ranked: scored,
+        salient_terms: salient_owned,
+        max_salient_hits,
+        max_matched_terms,
+        effective_count: effective_terms_count,
+        entry_intent: !entry_candidates.is_empty(),
+        missing_terms,
+    }
 }
 
 /// `(visited nodes, observed edges, hop distance from the seeds)`.
@@ -1161,6 +1284,29 @@ pub fn count_response_tokens(text: &str) -> usize {
         .len()
 }
 
+/// Count manifest files modified after the graph was published (with a
+/// small skew so same-second writes do not cry stale). Stat-only: this runs
+/// on every query. `None` when the manifest is unreadable — disclosure is
+/// best-effort and must never fail a query.
+fn files_changed_since(db: &Connection, built_at_secs: u64) -> Option<usize> {
+    let cutoff = std::time::UNIX_EPOCH + std::time::Duration::from_secs(built_at_secs + 2);
+    let mut stmt = db.prepare("SELECT file_path FROM file_manifest").ok()?;
+    let paths: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .ok()?
+        .flatten()
+        .collect();
+    let mut changed = 0usize;
+    for path in &paths {
+        if let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) {
+            if modified > cutoff {
+                changed += 1;
+            }
+        }
+    }
+    Some(changed)
+}
+
 fn render_page(
     header: &str,
     records: &[String],
@@ -1363,11 +1509,14 @@ pub fn query_graph_with_metadata(
     .map(|result| (result, graph_built_at))
 }
 
-/// Rescale a cosine in [0.55, 1.0] into the seed-score scale: a perfect
-/// semantic match (1.0) lands just under an exact label match (1.0+),
-/// mid-range matches land near the path/docstring layer.
+/// Rescale a raw query→node cosine into the seed-score scale via the
+/// measured calibration: the noise floor scores 0, a strong match reaches
+/// the cap (just under an exact label match, so token evidence always
+/// outranks pure embedding recall), mid-range matches land near the
+/// path/docstring layer. The anchors are model-specific — see
+/// `astria_core::calibration`.
 fn semantic_seed_score(cosine: f64) -> f64 {
-    ((cosine - 0.55) * 1.5).clamp(0.0, 0.67)
+    astria_core::calibration::SEMANTIC_CALIBRATION.seed_score(cosine)
 }
 
 /// `ASTRIA_EMBED=off|0|false|no` stops queries from auto-merging embedding
@@ -1388,6 +1537,17 @@ fn semantic_seeds_disabled_value(value: Option<&str>) -> bool {
         ),
         None => false,
     }
+}
+
+/// `ASTRIA_QUERY_SEED_FLOOR=off|0|false|no` disables the no-confident-match
+/// guard so a traversal always runs, however weak the seed evidence — the
+/// historical behavior, kept reachable for measurement and IR-style recall.
+fn seed_floor_enabled() -> bool {
+    seed_floor_enabled_value(std::env::var("ASTRIA_QUERY_SEED_FLOOR").ok().as_deref())
+}
+
+fn seed_floor_enabled_value(value: Option<&str>) -> bool {
+    !semantic_seeds_disabled_value(value)
 }
 
 /// `query_graph` plus semantic seed candidates: `(node_id, cosine)` pairs
@@ -1447,7 +1607,8 @@ fn query_graph_loaded(
     }
 
     let terms: Vec<String> = question.split_whitespace().map(|s| s.to_string()).collect();
-    let mut scored = score_nodes(&loaded, &terms);
+    let scored_nodes = score_nodes(&loaded, &terms);
+    let mut scored = scored_nodes.ranked;
     // Opt-in hard floor for SEMANTIC edges; 0.0 keeps every edge (the
     // historical behavior). Read per query so agents can retune without
     // a restart.
@@ -1461,6 +1622,15 @@ fn query_graph_loaded(
     // Token evidence is snapshotted first so semantic-only candidates (nodes
     // the embeddings surface but no query term touches) stay identifiable —
     // they qualify for the seed reservation below.
+    //
+    // Description-shaped questions — the ones whose identifying (salient)
+    // terms have no lexical evidence anywhere, like "auth flow" against a
+    // graph that never uses those words — are where embeddings are the
+    // whole point, and there a strong calibrated cosine ranks like a label
+    // match instead of capping below every partial token match. When the
+    // graph does answer the question's vocabulary, the tie-breaking cap
+    // stands: token evidence always outranks pure embedding recall.
+    let description_shaped = scored_nodes.max_salient_hits == 0;
     let token_scores: std::collections::HashMap<NodeIndex, f64> = if semantic.is_empty() {
         std::collections::HashMap::new()
     } else {
@@ -1471,8 +1641,13 @@ fn query_graph_loaded(
             scored.iter().map(|(s, i)| (*i, *s)).collect();
         for (node_id, cosine) in semantic {
             if let Some(&idx) = loaded.id_to_idx.get(node_id) {
+                let rescaled = if description_shaped {
+                    astria_core::calibration::SEMANTIC_CALIBRATION.description_seed_score(*cosine)
+                } else {
+                    semantic_seed_score(*cosine)
+                };
                 let entry = by_index.entry(idx).or_insert(0.0);
-                *entry = (*entry).max(semantic_seed_score(*cosine));
+                *entry = (*entry).max(rescaled);
             }
         }
         scored = by_index.into_iter().map(|(i, s)| (s, i)).collect();
@@ -1494,6 +1669,56 @@ fn query_graph_loaded(
                 suggestions.join(", ")
             )
         };
+        let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
+        return Ok((text, 0, 0, None));
+    }
+
+    // Seed-confidence floor: when no node in the graph matches any of the
+    // query's salient (highest-IDF, answer-identifying) terms AND no node
+    // matched even half of the effective terms, every hit is an incidental
+    // word match — "OAuth handled" seeding handle_message() off the stem
+    // "handl", or a payroll question seeding index.module.css on "module" —
+    // and a full-budget traversal from it is authoritative noise. Return an
+    // explicit miss naming the missing vocabulary instead. The half-of-terms
+    // bar is what separates a weak-but-on-topic match (SessionManager on
+    // "session handling") from an incidental one (one common word of five):
+    // a single ubiquitous term fully covering one label is real evidence,
+    // but it does not identify an answer. Entry-intent queries are exempt —
+    // their terms match nothing by design and the import DAG answers them.
+    // A qualifying semantic-only candidate overrides the floor: conceptual
+    // questions with zero vocabulary overlap are exactly what embeddings
+    // are for. Docs-majority corpora (transcripts, QA datasets) run on weak
+    // lexical matches by design, so the floor applies to code-majority
+    // graphs only. ASTRIA_QUERY_SEED_FLOOR=off restores the historical
+    // always-traverse behavior.
+    let docs_majority = matches!(corpus_mode(&loaded), CorpusMode::DocsMajority);
+    // Kept for the corpus-mode disclosure header below (pin vs auto).
+    let corpus_pin = corpus_mode_pin();
+    let semantic_qualifies = semantic
+        .iter()
+        .any(|(_, cosine)| semantic_seed_score(*cosine) >= SEMANTIC_SEED_FLOOR);
+    if seed_floor_enabled()
+        && !semantic_qualifies
+        && !docs_majority
+        && !scored_nodes.entry_intent
+        && !scored_nodes.salient_terms.is_empty()
+        && scored_nodes.max_salient_hits == 0
+        && scored_nodes.max_matched_terms * 2 < scored_nodes.effective_count
+    {
+        let suggestions = nearest_labels(&loaded, question, SUGGESTION_COUNT);
+        let missing = scored_nodes
+            .missing_terms
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut msg = format!(
+            "No confident match: none of the question's key terms ({missing}) appear in the graph's labels, docstrings, or ids, so every candidate is an incidental word match. Try a symbol name, a file path, or vocabulary the code itself uses."
+        );
+        if !suggestions.is_empty() {
+            msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
+        }
         let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
         return Ok((text, 0, 0, None));
     }
@@ -1531,12 +1756,11 @@ fn query_graph_loaded(
     }
     let seed_limit = 5.max(seed_nodes.len());
     // Doc-seed quota: on code corpora two prose seeds already outrank
-    // silence, and more would crowd code out of the seed set. On effectively
-    // doc-only graphs (transcript corpora, docs sites with no code) the
-    // quota would leave the traversal nearly seedless — there is no code to
-    // protect, so the quota opens up to the full seed limit.
-    let doc_share = prose_share(&loaded);
-    let doc_seed_quota = if doc_share > 0.95 { seed_limit } else { 2 };
+    // silence, and more would crowd code out of the seed set. On
+    // docs-majority graphs (transcript corpora, docs sites with no code)
+    // the quota would leave the traversal nearly seedless — there is no
+    // code to protect, so the quota opens up to the full seed limit.
+    let doc_seed_quota = if docs_majority { seed_limit } else { 2 };
     let mut doc_seeds = seed_nodes
         .iter()
         .filter(|&&idx| {
@@ -1653,6 +1877,39 @@ fn query_graph_loaded(
     );
     if let Some(timestamp) = graph_built_at {
         header.push_str(&format!("# graph built at {timestamp}\n"));
+        // Staleness disclosure: hooked editors and the git hook keep the
+        // graph fresh, but edits through other paths (print-mode sessions,
+        // editors without hooks, plain typing) do not — and an agent that
+        // does not notice the timestamp answers from the past. Stat-only
+        // (no re-hashing), so this costs milliseconds even on large repos.
+        if let Ok(built) = timestamp.parse::<u64>() {
+            if let Some(changed) = files_changed_since(db, built) {
+                if changed > 0 {
+                    header.push_str(&format!(
+                        "# {changed} file(s) changed since this build — run `astria update` before trusting answers\n"
+                    ));
+                }
+            }
+        }
+    }
+    // Corpus-mode disclosure: the ranking rules differ between modes, so a
+    // mode other than auto-detected code-majority is stated in the header
+    // instead of silently changing the answer's shape.
+    if docs_majority || corpus_pin.is_some() {
+        let mode_name = if docs_majority {
+            "docs-majority"
+        } else {
+            "code-majority"
+        };
+        let pin_note = if corpus_pin.is_some() {
+            ", pinned via ASTRIA_CORPUS_MODE"
+        } else {
+            ""
+        };
+        header.push_str(&format!(
+            "# corpus: {mode_name} ({:.0}% prose{pin_note})\n",
+            prose_share(&loaded) * 100.0
+        ));
     }
     let relevance: HashMap<NodeIndex, f64> = scored.iter().map(|(s, i)| (*i, *s)).collect();
     let (result_text, next_cursor) = subgraph_to_text(
@@ -1844,7 +2101,7 @@ pub fn find_shortest_path(
                 .map(|s| s.to_string())
                 .collect();
             let src_scored = score_nodes(&loaded, &src_terms);
-            match src_scored.first() {
+            match src_scored.ranked.first() {
                 Some((_, idx)) => *idx,
                 None => {
                     let mut msg = format!("No matching node for '{}'.", source_query);
@@ -1865,7 +2122,7 @@ pub fn find_shortest_path(
                 .map(|s| s.to_string())
                 .collect();
             let tgt_scored = score_nodes(&loaded, &tgt_terms);
-            match tgt_scored.first() {
+            match tgt_scored.ranked.first() {
                 Some((_, idx)) => *idx,
                 None => {
                     let mut msg = format!("No matching node for '{}'.", target_query);
@@ -2078,7 +2335,7 @@ pub fn explain_with_neighbors(
                 .map(|s| s.to_string())
                 .collect();
             let scored = score_nodes(&loaded, &terms);
-            match scored.first() {
+            match scored.ranked.first() {
                 Some((_, idx)) => *idx,
                 None => return Ok(None),
             }
@@ -2094,12 +2351,24 @@ pub fn explain_with_neighbors(
             continue;
         }
         let neighbor_data = &loaded.graph[neighbor];
-        let edge = edge_between(&loaded.graph, idx, neighbor);
+        // The stored orientation says which way the edge points: outgoing
+        // (this node → neighbor, e.g. it calls the neighbor) or incoming
+        // (neighbor → this node, e.g. the neighbor calls it). Rendering
+        // every connection as if the explained node were the source
+        // inverts caller/callee and misleads agents reading it.
+        let forward = loaded
+            .graph
+            .edges_directed(idx, Direction::Outgoing)
+            .find(|e| e.target() == neighbor)
+            .map(|e| e.weight());
+        let outgoing = forward.is_some();
+        let edge = forward.or_else(|| edge_between(&loaded.graph, idx, neighbor));
         neighbors.push(EdgeInfoResult {
             neighbor_id: neighbor_data.id.clone(),
             neighbor_label: neighbor_data.label.clone(),
             neighbor_file: loaded.display_path(&neighbor_data.source_file),
             neighbor_line: neighbor_data.source_line,
+            outgoing,
             relation: edge.map_or("?".to_string(), |e| e.relation.clone()),
             confidence: edge.map_or("?".to_string(), |e| e.confidence.clone()),
             strength: edge.map_or(0.0, |e| e.strength()),
@@ -2153,6 +2422,10 @@ pub struct EdgeInfoResult {
     pub neighbor_label: String,
     pub neighbor_file: String,
     pub neighbor_line: Option<i64>,
+    /// True when the stored edge points from the explained node to this
+    /// neighbor (it calls/imports the neighbor); false when the neighbor
+    /// points back (the neighbor calls/imports the explained node).
+    pub outgoing: bool,
     pub relation: String,
     pub confidence: String,
     pub strength: f64,
@@ -2216,7 +2489,7 @@ pub fn callflow_mermaid(
             return Some(idx);
         }
         let terms: Vec<String> = q.split_whitespace().map(|s| s.to_string()).collect();
-        score_nodes(&loaded, &terms).first().map(|(_, i)| *i)
+        score_nodes(&loaded, &terms).ranked.first().map(|(_, i)| *i)
     };
 
     let seed = resolve(seed_query).ok_or_else(|| {
@@ -2396,10 +2669,13 @@ mod tests {
 
         // the anchor node matches the question; both discovered nodes tie at
         // zero relevance, so the file preference decides which surfaces first
+        // ("unrelated" label + "anchor" id give the seed majority evidence —
+        // the no-confident-match floor only refuses questions whose terms
+        // the graph cannot see at all)
         let (text_files, _, _, _) = query_graph(
             &db,
             "pf-files",
-            "unrelated query words",
+            "unrelated anchor reference",
             "bfs",
             1,
             4000,
@@ -2423,7 +2699,7 @@ mod tests {
         let (plain, _, _, _) = query_graph(
             &db,
             "pf-plain",
-            "unrelated query words",
+            "unrelated anchor reference",
             "bfs",
             1,
             4000,
@@ -2703,7 +2979,7 @@ at the lake house');",
         .unwrap();
 
         let loaded = load_graph_snapshot(&db, "scorer-prior-test").unwrap();
-        let scored = score_nodes(&loaded, &["validation".to_string()]);
+        let scored = score_nodes(&loaded, &["validation".to_string()]).ranked;
         assert!(scored.len() >= 2);
         // equal term evidence (both labels contain "validation") — the code
         // symbol must outrank the prose node
@@ -2711,7 +2987,7 @@ at the lake house');",
 
         // question words alone match nothing
         let empty = score_nodes(&loaded, &["where".to_string(), "does".to_string()]);
-        assert!(empty.is_empty());
+        assert!(empty.ranked.is_empty());
     }
 
     #[test]
@@ -2745,7 +3021,8 @@ at the lake house');",
                 "index".to_string(),
                 "ingestion".to_string(),
             ],
-        );
+        )
+        .ranked;
         assert!(!scored.is_empty());
         assert_eq!(
             loaded.graph[scored[0].1].label, "scip.rs",
@@ -2788,7 +3065,8 @@ at the lake house');",
                 "entry".to_string(),
                 "point".to_string(),
             ],
-        );
+        )
+        .ranked;
         assert!(!scored.is_empty());
         let top: Vec<&str> = scored
             .iter()
@@ -2799,6 +3077,131 @@ at the lake house');",
             top.contains(&"entry"),
             "the import root must seed on entry-point intent; top3 = {top:?}"
         );
+    }
+
+    #[test]
+    fn entry_intent_requires_an_intact_phrase() {
+        // "domain files" contains the substring "main file"; the intent must
+        // not fire on it. A false intent boosts the import root above every
+        // lexical match the question earned.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('entry', 'index.ts', 'code', 'packages/cli/src/index.ts'),
+                ('noise', 'cli.test.ts', 'code', 'packages/cli/src/__tests__/cli.test.ts'),
+                ('cmd1', 'run.ts', 'code', 'packages/cli/src/commands/run.ts'),
+                ('cmd2', 'query.ts', 'code', 'packages/cli/src/commands/query.ts'),
+                ('cmd3', 'map.ts', 'code', 'packages/cli/src/commands/map.ts'),
+                ('cmd4', 'export.ts', 'code', 'packages/cli/src/commands/export.ts');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('entry', 'cmd1', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts'),
+                ('entry', 'cmd2', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts'),
+                ('entry', 'cmd3', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts'),
+                ('entry', 'cmd4', 'imports', 'EXTRACTED', 'packages/cli/src/index.ts');",
+        )
+        .unwrap();
+
+        let loaded = load_graph_snapshot(&db, "entry-substring-test").unwrap();
+        let scored = score_nodes(
+            &loaded,
+            &["how", "does", "query", "handle", "domain", "files"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .ranked;
+        // "query" genuinely matches cmd2 — the ranked list is non-empty...
+        assert!(
+            scored
+                .iter()
+                .any(|(_, idx)| loaded.graph[*idx].id == "cmd2"),
+            "the lexically matching command must be ranked: {:?}",
+            scored
+                .iter()
+                .take(3)
+                .map(|(_, i)| loaded.graph[*i].id.clone())
+                .collect::<Vec<_>>()
+        );
+        // ...but the import root must not be boosted into it by a substring.
+        assert!(
+            scored
+                .iter()
+                .all(|(_, idx)| loaded.graph[*idx].id != "entry"),
+            "'main file' as a substring of 'domain files' must not fire entry intent: {:?}",
+            scored
+                .iter()
+                .take(3)
+                .map(|(_, i)| loaded.graph[*i].id.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bootstrap_word_alone_does_not_fire_entry_intent() {
+        // "bootstrap" names a CSS framework in plenty of repos; as a bare
+        // word it must not re-rank import roots above the lexically
+        // matching nodes. (It was removed from the phrase list for exactly
+        // this failure mode.)
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('entry', 'index.ts', 'code', 'src/index.ts'),
+                ('boot', 'bootstrap.scss', 'code', 'web/static/bootstrap.scss'),
+                ('cmd1', 'run.ts', 'code', 'src/commands/run.ts'),
+                ('cmd2', 'query.ts', 'code', 'src/commands/query.ts'),
+                ('cmd3', 'map.ts', 'code', 'src/commands/map.ts');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('entry', 'cmd1', 'imports', 'EXTRACTED', 'src/index.ts'),
+                ('entry', 'cmd2', 'imports', 'EXTRACTED', 'src/index.ts'),
+                ('entry', 'cmd3', 'imports', 'EXTRACTED', 'src/index.ts');",
+        )
+        .unwrap();
+
+        let loaded = load_graph_snapshot(&db, "entry-bootstrap-test").unwrap();
+        let scored = score_nodes(
+            &loaded,
+            &["how", "does", "the", "app", "load", "bootstrap", "styles"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .ranked;
+        assert!(
+            !scored.is_empty(),
+            "the stylesheet node matches 'bootstrap' lexically"
+        );
+        assert_eq!(
+            loaded.graph[scored[0].1].id,
+            "boot",
+            "the lexically matching stylesheet must outrank everything: {:?}",
+            scored
+                .iter()
+                .take(3)
+                .map(|(_, i)| loaded.graph[*i].id.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            scored
+                .iter()
+                .all(|(_, idx)| loaded.graph[*idx].id != "entry"),
+            "bare 'bootstrap' must not fire entry intent"
+        );
+    }
+
+    #[test]
+    fn corpus_mode_auto_detects_and_pins() {
+        use CorpusMode::{CodeMajority, DocsMajority};
+        // auto-detection at the designed threshold
+        assert_eq!(corpus_mode_from(0.94, None), CodeMajority);
+        assert_eq!(corpus_mode_from(0.95, None), DocsMajority);
+        assert_eq!(corpus_mode_from(1.00, None), DocsMajority);
+        // the pin overrides the share in both directions
+        assert_eq!(corpus_mode_from(1.00, Some(CodeMajority)), CodeMajority);
+        assert_eq!(corpus_mode_from(0.10, Some(DocsMajority)), DocsMajority);
+        // recognized pin values, case- and padding-insensitive
+        assert_eq!(corpus_mode_pin_value("docs"), Some(DocsMajority));
+        assert_eq!(corpus_mode_pin_value(" CODE "), Some(CodeMajority));
+        assert_eq!(corpus_mode_pin_value("bogus"), None);
     }
 
     #[test]
@@ -2861,12 +3264,16 @@ at the lake house');",
 
     #[test]
     fn semantic_score_rescales_below_exact_label_match() {
-        // a perfect cosine (1.0) caps at 0.67 — under an exact label hit
+        // a perfect cosine (1.0) caps at the calibration cap — under an exact label hit
+        let c = &astria_core::calibration::SEMANTIC_CALIBRATION;
         assert!(semantic_seed_score(1.0) < 1.0);
-        assert!((semantic_seed_score(1.0) - 0.675).abs() < 0.01);
-        // below the noise floor it contributes nothing
-        assert_eq!(semantic_seed_score(0.55), 0.0);
-        assert_eq!(semantic_seed_score(0.3), 0.0);
+        assert!((semantic_seed_score(1.0) - c.seed_score_cap).abs() < 1e-9);
+        // at or below the measured noise floor it contributes nothing
+        assert_eq!(semantic_seed_score(c.noise_floor), 0.0);
+        assert_eq!(semantic_seed_score(c.noise_floor - 0.15), 0.0);
+        // between the anchors it is positive and monotone
+        assert!(semantic_seed_score((c.noise_floor + c.strong_match) / 2.0) > 0.0);
+        assert!(semantic_seed_score(c.noise_floor + 0.05) < semantic_seed_score(c.strong_match));
     }
 
     #[test]
@@ -3029,7 +3436,7 @@ at the lake house');",
         let g = loaded(&db, "camel");
         let scored = score_nodes(&g, &["parseExtractionText".to_string()]);
         assert_eq!(
-            scored.len(),
+            scored.ranked.len(),
             1,
             "camelCase query should match snake_case label"
         );
@@ -3066,11 +3473,11 @@ at the lake house');",
             .map(String::from)
             .collect();
         let scored = score_nodes(&g, &terms);
-        assert!(!scored.is_empty());
+        assert!(!scored.ranked.is_empty());
         assert_eq!(
-            scored[0].1, g.id_to_idx["target"],
+            scored.ranked[0].1, g.id_to_idx["target"],
             "rare-term matcher must outrank the common-term diluter; got {:?}",
-            g.graph[scored[0].1].label
+            g.graph[scored.ranked[0].1].label
         );
     }
 
@@ -3298,8 +3705,8 @@ at the lake house');",
         )
         .unwrap();
         let g = loaded(&db, "ties");
-        let s1 = score_nodes(&g, &["handler".to_string()]);
-        let s2 = score_nodes(&g, &["handler".to_string()]);
+        let s1 = score_nodes(&g, &["handler".to_string()]).ranked;
+        let s2 = score_nodes(&g, &["handler".to_string()]).ranked;
         let ids = |s: &[(f64, NodeIndex)]| -> Vec<String> {
             s.iter().map(|(_, i)| g.graph[*i].id.clone()).collect()
         };
@@ -3311,6 +3718,86 @@ at the lake house');",
         assert!(confidence_rank("DECLARED") > confidence_rank("EXTRACTED"));
         assert!(confidence_rank("EXTRACTED") > confidence_rank("INFERRED"));
         assert!(confidence_rank("INFERRED") > confidence_rank("SEMANTIC"));
+    }
+
+    #[test]
+    fn stale_graph_discloses_changed_files() {
+        // An agent that cannot tell the graph predicates its answers on an
+        // old build answers confidently from the past. A file in the
+        // manifest modified after publication must be disclosed; a fresh
+        // graph must stay quiet.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("app.rs");
+        std::fs::write(&file, "fn a() {}\n").unwrap();
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('a', 'alpha()', 'code', 'src/a.rs');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('a', 'a', 'calls', 'EXTRACTED', 'src/a.rs');",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO file_manifest (file_path, content_hash, file_type, last_seen_at, size_bytes)
+             VALUES (?1, 'x', 'code', '2026-01-01', 9)",
+            rusqlite::params![file.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
+        // Published long ago, file written now → stale disclosure.
+        db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_published_at', '1000')",
+            [],
+        )
+        .unwrap();
+        let g = load_graph_snapshot(&db, "stale-yes").unwrap();
+        let (text, _, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "alpha",
+            "bfs",
+            1,
+            2000,
+            false,
+            0.0,
+            0,
+            &[],
+            false,
+            Some("1000"),
+        )
+        .unwrap();
+        assert!(
+            text.contains("changed since this build"),
+            "stale graph must disclose: {text}"
+        );
+
+        // Published in the future (or just now) → quiet.
+        let fresh_ts = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 60)
+            .to_string();
+        let g2 = load_graph_snapshot(&db, "stale-no").unwrap();
+        let (text2, _, _, _) = query_graph_loaded(
+            &db,
+            g2,
+            "alpha",
+            "bfs",
+            1,
+            2000,
+            false,
+            0.0,
+            0,
+            &[],
+            false,
+            Some(fresh_ts.as_str()),
+        )
+        .unwrap();
+        assert!(
+            !text2.contains("changed since this build"),
+            "fresh graph must stay quiet: {text2}"
+        );
     }
 
     #[test]
@@ -3349,6 +3836,223 @@ at the lake house');",
         assert!(
             sugg.iter().any(|s| s.contains("Alpha")),
             "nearest_labels should surface Alpha, got: {sugg:?}"
+        );
+    }
+
+    #[test]
+    fn seed_floor_env_values() {
+        assert!(seed_floor_enabled_value(None));
+        assert!(seed_floor_enabled_value(Some("on")));
+        assert!(seed_floor_enabled_value(Some("1")));
+        assert!(seed_floor_enabled_value(Some("")));
+        assert!(!seed_floor_enabled_value(Some("off")));
+        assert!(!seed_floor_enabled_value(Some("OFF")));
+        assert!(!seed_floor_enabled_value(Some(" false ")));
+        assert!(!seed_floor_enabled_value(Some("no")));
+        assert!(!seed_floor_enabled_value(Some("0")));
+    }
+
+    #[test]
+    fn incidental_word_matches_refuse_to_seed_traversal() {
+        // The measured failure: "Where is OAuth authentication handled?"
+        // against a graph with no auth code. The only evidence is a fuzzy
+        // hit of "handled" on handle_message() — an incidental word match,
+        // not an answer. The traversal must return an explicit miss instead
+        // of a full budget of authoritative-looking noise.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('h', 'handle_message()', 'code', 'src/msg.rs'),
+                ('s', 'sanitize_inputs()', 'code', 'src/io.rs');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('h', 's', 'calls', 'EXTRACTED', 'src/msg.rs');",
+        )
+        .unwrap();
+        let g = loaded(&db, "floor-refuse");
+        let (text, nodes, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "Where is OAuth authentication handled?",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            &[],
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(nodes, 0, "an incidental match must not seed a traversal");
+        assert!(
+            text.contains("No confident match"),
+            "the miss must be explicit, got: {text}"
+        );
+        assert!(
+            text.contains("authentication"),
+            "the miss should name the key terms it could not find, got: {text}"
+        );
+    }
+
+    #[test]
+    fn semantic_candidate_overrides_seed_floor() {
+        // Same incidental-only question, but embedding evidence (cosine
+        // 0.9) points at a node no query term touches. Zero-overlap
+        // conceptual queries are exactly what embeddings are for — the
+        // floor must yield to a qualifying semantic candidate.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
+                ('h', 'handle_message()', 'code', 'src/msg.rs', NULL),
+                ('s', 'sanitize_inputs()', 'code', 'src/io.rs', NULL);
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('h', 's', 'calls', 'EXTRACTED', 'src/msg.rs');",
+        )
+        .unwrap();
+        let g = loaded(&db, "floor-semantic");
+        let (text, nodes, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "Where is OAuth authentication handled?",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            &[("s".to_string(), 0.9)],
+            false,
+            None,
+        )
+        .unwrap();
+        assert!(nodes > 0, "a semantic candidate must still traverse");
+        assert!(
+            text.contains("sanitize_inputs"),
+            "the semantic candidate's neighborhood should be returned, got: {text}"
+        );
+    }
+
+    #[test]
+    fn single_common_word_does_not_rescue_an_absent_topic() {
+        // The payroll probe: "How does the payroll module calculate
+        // overtime pay?" against a graph with no payroll code. "module"
+        // fully covers some labels — real evidence, but one common word of
+        // five effective terms does not identify an answer, and the
+        // identifying terms (payroll, overtime) match nothing. The floor
+        // must refuse instead of traversing from index.module.css.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('css', 'index.module.css', 'code', 'web/src/index.module.css'),
+                ('imp', 'extract_import_module()', 'code', 'src/walkers.rs');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('imp', 'css', 'references', 'EXTRACTED', 'src/walkers.rs');",
+        )
+        .unwrap();
+        let g = loaded(&db, "floor-payroll");
+        let (text, nodes, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "How does the payroll module calculate overtime pay?",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            &[],
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(nodes, 0, "a lone common-word match must not seed");
+        assert!(
+            text.contains("No confident match"),
+            "the miss must be explicit, got: {text}"
+        );
+    }
+
+    #[test]
+    fn description_shaped_queries_rank_semantic_evidence_first() {
+        // "What handles the graviton phase" style: the question's
+        // identifying terms exist nowhere in the graph, the only lexical
+        // hits are one common word, and the embedding model points at the
+        // real answer with a strong calibrated cosine. There the semantic
+        // evidence must OUTRANK the partial token matches (lead the
+        // response), instead of capping below them and waiting for the
+        // reservation slot.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('l1', 'list_one', 'code', 'src/1.rs'),
+                ('l2', 'list_two', 'code', 'src/2.rs'),
+                ('l3', 'list_three', 'code', 'src/3.rs'),
+                ('l4', 'list_four', 'code', 'src/4.rs'),
+                ('l5', 'list_five', 'code', 'src/5.rs'),
+                ('target', 'maybe_install_helper', 'code', 'src/h.rs');",
+        )
+        .unwrap();
+        let g = loaded(&db, "adaptive-semantic");
+        let (text, _, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "zanzibar graviton list",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            &[("target".to_string(), 0.9)],
+            false,
+            None,
+        )
+        .unwrap();
+        let first_node = text
+            .lines()
+            .find(|l| l.starts_with("NODE "))
+            .expect("the semantic answer's neighborhood should be returned");
+        assert!(
+            first_node.contains("maybe_install_helper"),
+            "with zero salient evidence a strong cosine must lead, got: {first_node}"
+        );
+    }
+
+    #[test]
+    fn salient_evidence_traverses_despite_weak_scores() {
+        // A weak but on-topic match must NOT be refused: the question's key
+        // term has real evidence in the graph, so the traversal runs even
+        // though the scores are small. The floor only fires on zero salient
+        // evidence, not on low absolute scores.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, docstring) VALUES
+                ('h', 'handle_message()', 'code', 'src/msg.rs', 'Handles the OAuth token exchange flow.');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('h', 'h', 'calls', 'EXTRACTED', 'src/msg.rs');",
+        )
+        .unwrap();
+        let g = loaded(&db, "floor-salient");
+        let (text, nodes, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "Where is OAuth authentication handled?",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            &[],
+            false,
+            None,
+        )
+        .unwrap();
+        assert!(nodes > 0, "salient evidence must allow the traversal");
+        assert!(
+            text.contains("handle_message"),
+            "the on-topic node should be returned, got: {text}"
         );
     }
 

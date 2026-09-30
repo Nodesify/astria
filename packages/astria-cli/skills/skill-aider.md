@@ -23,7 +23,7 @@ node -e "const fs=require('fs');if(!fs.existsSync('.astria/graph.json')){console
 Read `.astria/graph_report.md` and summarize: hub nodes, communities, surprising connections.
 ## Prefer MCP tools when connected
 
-If the `astria` MCP server is connected (registered by `astria install` for claude, cursor, gemini, and zcode), prefer its native tools over shell commands: `repo_map` to orient, `query_graph` for a natural-language question, `explain`/`get_neighbors` for one symbol, `shortest_path` to trace a connection, `affected` before changing a shared symbol. Use the CLI commands below only when the server is not connected.
+If the `astria` MCP server is connected (registered by `astria install` for most coding tools — claude, cursor, gemini, zcode, vscode, codex, trae, kiro, windsurf, opencode, and the Copilot coding agent)), prefer its native tools over shell commands: `repo_map` to orient, `query_graph` for a natural-language question, `explain`/`get_neighbors` for one symbol, `shortest_path` to trace a connection, `affected` before changing a shared symbol. Use the CLI commands below only when the server is not connected.
 
 
 ## Usage with Aider

@@ -32,7 +32,7 @@ Builds also pick up, automatically:
 
 - **Cargo workspaces** — when a `Cargo.toml` is present, workspace members and internal path dependencies become `crate::*` nodes with `crate_depends_on` edges (honoring `package =` renames and `workspace = true` inheritance). No LLM involved — dependency structure is fact.
 - **MCP configs** — `.mcp.json`, `mcp_servers.json`, and `claude_desktop_config.json` become `mcp_server`/`mcp_command`/`mcp_package` nodes with `requires_env` edges (env **names only** — values are never read).
-- **Transcript sidecars** — any `.txt`/`.md` you drop into `.astria/transcripts/` is ingested as document nodes on the next run/update. The contract for external transcribers: run any tool you like, write the text there, let the graph index it.
+- **Transcript sidecars** — any `.txt`/`.md` you drop into `.astria/transcripts/` is ingested as document nodes on the next run/update. The contract for external transcribers: run any tool you like, write the text there, let the graph index it — or pipe it through the built-in writer: `astria add --transcript <file>` keeps the file's name, `astria add --transcript -` reads piped stdin (e.g. `whisper ... | astria add --transcript -`) and stores it under a timestamped name.
 
 ## Querying
 
@@ -60,7 +60,9 @@ astria history [--limit 20] [--graph .]        # Show recent query history
 - `--detail high` — fidelity tier: only `EXTRACTED`/`DECLARED` facts (a provenance-class filter, not a numeric threshold), dropping inferred, semantic and learned edges, regardless of usage-adjusted confidence scores
 - `--cursor N` — continuation cursor for truncated traversals; use the returned value, which advances through node and edge records
 - `--no-embed` — skip auto-merged embedding seeds even when the graph carries vectors (same switch as `ASTRIA_EMBED=off`; see [Environment variables](./env-vars))
-- `--json` — machine-readable output instead of prose: `query` reports counts, the continuation cursor, build provenance, and the answer text; `explain`/`neighbors` return the strongest 20 neighbors (the native layer caps the list — `explain --json` also reports `neighborCount`, the true total); `affected` returns every hit with depth and relation; `stats` returns counts and type breakdown
+- `--json` — machine-readable output instead of prose: `query` reports counts, the continuation cursor, build provenance, and the answer text; `explain`/`neighbors` return the strongest 20 neighbors, each with its edge direction in `outgoing` (the native layer caps the list — `explain --json` also reports `neighborCount`, the true total); `affected` returns every hit with depth, relation, and edge provenance; `stats` returns counts and type breakdown
+
+`affected` reports the evidence tier of every hop. `RESOLVED` (the default case) marks a call expression extracted from source whose name bound to exactly one definition — trustworthy for impact analysis. `EXTRACTED` marks directly-verified facts (contains/imports). Hops reached through `INFERRED` edges — no source locus, or a name too common to bind — are marked with a legend line, so a blast radius never presents guesswork as verified.
 
 `god-nodes`, `communities`, and `neighbors` give the CLI the same answers the [MCP tools](./mcp-tools) expose, so scripts and non-MCP agents can reach them too.
 
@@ -159,6 +161,7 @@ astria query "where is the shared auth type" --graph ~/.astria/global.db
 astria add <url> [--author <name>] [--contributor <name>]  # Fetch arXiv/tweet/webpage/image/PDF into ./raw + update graph
 astria add --scip <index.json>                      # Ingest a simplified SCIP JSON index (rust-analyzer & co.)
 astria add --postgres <dsn>                         # Introspect a live PostgreSQL schema (requires psql on PATH)
+astria add --transcript <file|->                    # Save a transcript into .astria/transcripts/ + update graph
 ```
 
 Both `--scip` and `--postgres` are offline/local alternatives to URL fetching: SCIP indexes bring external toolchain symbols into the graph (`scip_impl`/`scip_typed`/`scip_def`/`scip_ref` edges, deterministic ids); Postgres introspection is read-only over the pg system catalogs (`pg_class`/`pg_namespace`/`pg_constraint` — tables/views/FKs → `contains` + `references` edges, no credentials stored). The Postgres DSN is opt-in by flag — nothing calls the network by default.
@@ -169,13 +172,13 @@ URL fetching is SSRF-guarded: only `http`/`https` schemes are accepted; each hos
 
 ```bash
 astria mcp [--graph .]              # Run MCP stdio server - query the graph from any AI agent
-astria install [--platform claude]  # Install skill files for AI coding assistants
-astria uninstall [--platform claude]  # Uninstall skill files
+astria install [--platform claude] [--all]  # Skill + MCP registration for one AI platform or all (claude, codex, gemini, cursor, copilot, aider, opencode, kiro, trae, zcode, vscode, windsurf, cline, roo, amp, pi)
+astria uninstall [--platform claude] [--all]  # Remove the install for one platform or all
 astria hook install|uninstall|status  # Git hook management
 astria hook-guard <mode>            # Editor PreToolUse guard (search | read | gemini) — installed into .claude/settings.json
 ```
 
-Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`. Setup walkthrough in [Agent integration](../guides/mcp-and-agents); the ten MCP tools are documented in the [MCP tools reference](./mcp-tools).
+Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`, `vscode`, `windsurf`, `cline`, `roo`, `amp`, `pi`. Setup walkthrough in [Agent integration](../guides/mcp-and-agents); the ten MCP tools are documented in the [MCP tools reference](./mcp-tools).
 
 `install` also injects an always-on `## astria` instruction block into `AGENTS.md`/`CLAUDE.md` (query before grep, run `update` after edits) — idempotent, removed by `uninstall`. `hook-guard` is the editor-side companion to git hooks: it nudges agents toward `query` before raw searches and can (strict mode, opt-in) gate un-indexed reads. It fails open — any error means the tool call proceeds untouched.
 
