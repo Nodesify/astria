@@ -39,6 +39,17 @@ jobs:
         # release without curated notes. The publish job feeds the extracted
         # section to the GitHub Release body.
         run: node scripts/extract-changelog.mjs "${GITHUB_REF_NAME#v}" --check
+      - name: Verify MCP Registry server.json matches the tag
+        # The official MCP Registry requires server.json, package.json and the
+        # npm package to agree on the version (and package.json carries the
+        # matching mcpName). Fail fast like the two checks above.
+        run: |
+          server_version=$(node -p "JSON.parse(require('fs').readFileSync('server.json', 'utf8')).version")
+          pkg_version=$(node -p "require('./packages/astria-cli/package.json').version")
+          if [ "$server_version" != "$pkg_version" ]; then
+            echo "::error::server.json version ${server_version} does not match packages/astria-cli/package.json version ${pkg_version}"
+            exit 1
+          fi
 
   build:
     runs-on: ${{ matrix.os }}
@@ -213,6 +224,17 @@ jobs:
               fi
             }
           fi
+      - name: Publish to the official MCP Registry
+        # Runs after the npm publishes (the registry validates mcpName in the
+        # published package) and before the GitHub Release, so a Release never
+        # announces an unlisted server. `login github-oidc` exchanges the
+        # job's OIDC token (id-token: write above) for a registry token and
+        # only allows publishing under io.github.<owner>/ — which is the
+        # namespace server.json uses.
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
       - name: Debug npm auth failure
         if: failure()
         run: |

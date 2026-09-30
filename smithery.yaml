@@ -1,0 +1,20 @@
+# Smithery registry configuration (https://smithery.ai) — submitted via
+# https://smithery.ai/servers/new with this repo connected.
+# Serves the published npm package; the astria MCP server runs on stdio and
+# reads the graph from the project directory's `.astria/` folder.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      projectPath:
+        type: string
+        title: Project path
+        description: Path to the project whose .astria knowledge graph should be served
+        default: .
+    required: []
+  commandFunction: |-
+    (config) => ({
+      command: 'npx',
+      args: ['-y', '@nodesify/astria', 'mcp', '--graph', (config && config.projectPath) || '.']
+    })
