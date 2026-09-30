@@ -19,6 +19,7 @@ import {
   injectKiroSteering, removeKiroSteering,
   injectZcodeMcp, removeZcodeMcp,
   injectCodexMcp, removeCodexMcp,
+  injectPiExtension, removePiExtension,
   injectAgentMcp, removeAgentMcp,
 } from '../install/settings-inject';
 import type { McpFlavor } from '../install/settings-inject';
@@ -872,6 +873,45 @@ function testFileStemSkillLayouts() {
   }
 }
 
+// ---- Pi extension (~/.pi/agent/extensions/astria.mjs) ----
+
+function testPiExtension() {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-pi-home-'));
+  const prevUserProfile = process.env.USERPROFILE;
+  const prevHome = process.env.HOME;
+  process.env.USERPROFILE = fakeHome;
+  process.env.HOME = fakeHome;
+  try {
+    assert(injectPiExtension() === true, 'Pi: first inject returns true');
+    const extPath = path.join(fakeHome, '.pi', 'agent', 'extensions', 'astria.mjs');
+    const content = fs.readFileSync(extPath, 'utf-8');
+    // The generated extension must be valid ESM (static imports, no
+    // require) and use pi's real API surface — native tools above all:
+    // pi's own philosophy is CLI-backed registered tools over MCP
+    // definitions, so the graph must be exposed as first-class pi tools.
+    assert(content.includes('from "node:child_process"'), 'Pi: ESM static import');
+    assert(!content.includes('require('), 'Pi: no require in .mjs');
+    assert(content.includes('export default function'), 'Pi: default-export entry shape');
+    assert(content.includes('registerTool'), 'Pi: native tools registered (pi-idiomatic)');
+    for (const tool of ['astria_query', 'astria_map', 'astria_explain', 'astria_path', 'astria_affected']) {
+      assert(content.includes('"' + tool + '"'), 'Pi: ' + tool + ' registered');
+    }
+    assert(content.includes('"tool_result"'), 'Pi: freshness listens on tool_result');
+    assert(content.includes('registerCommand("astria"'), 'Pi: /astria command registered');
+    assert(content.includes('update .'), 'Pi: refreshes via the update command');
+
+    assert(injectPiExtension() === false, 'Pi: second inject returns false (idempotent)');
+
+    assert(removePiExtension() === true, 'Pi: remove returns true');
+    assert(!fs.existsSync(extPath), 'Pi: extension file deleted');
+    assert(removePiExtension() === false, 'Pi: second remove returns false');
+  } finally {
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+  }
+}
+
 // ---- Run all ----
 
 testClaudeHook();
@@ -884,6 +924,7 @@ testZcodeMcp();
 testAgentMcp();
 testOpenCodeMcpShape();
 testCodexMcpToml();
+testPiExtension();
 testFileStemSkillLayouts();
 testMarkdownInject();
 testLegacyMigration();
