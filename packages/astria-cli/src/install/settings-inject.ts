@@ -222,7 +222,13 @@ export function injectOpenCodePlugin(projectDir: string): boolean {
   const pluginDir = path.join(projectDir, '.opencode', 'plugins');
   const pluginPath = path.join(pluginDir, 'astria.js');
   const legacyDir = path.join(projectDir, '.opencode', 'plugin');
-  const legacyPaths = [path.join(legacyDir, 'graphify.js'), path.join(legacyDir, 'astria.js')];
+  const legacyPaths = [
+    // 1.0.9-era singular directory, both names.
+    path.join(legacyDir, 'graphify.js'),
+    path.join(legacyDir, 'astria.js'),
+    // pre-1.0.9 wrote the old graphify name into the plural directory.
+    path.join(pluginDir, 'graphify.js'),
+  ];
 
   let changed = false;
   for (const legacy of legacyPaths) {

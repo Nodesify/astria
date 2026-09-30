@@ -20,7 +20,7 @@ import {
   injectZcodeMcp, removeZcodeMcp,
   injectCodexMcp, removeCodexMcp,
   injectPiExtension, removePiExtension,
-  injectAgentMcp, removeAgentMcp,
+  injectAgentMcp, removeAgentMcp, cleanupLegacyCopilotMcp,
 } from '../install/settings-inject';
 import type { McpFlavor } from '../install/settings-inject';
 import {
@@ -167,10 +167,11 @@ function testOpenCodePlugin() {
   const result1 = injectOpenCodePlugin(dir);
   assert(result1 === true, 'OpenCode: first inject returns true');
 
-  // Plugins auto-discover from .opencode/plugin/ (singular) — and a
+  // Plugins auto-discover from .opencode/plugins/ (the documented
+  // convention; verified against opencode 1.17.8's resolved config) — and a
   // `plugins` key in opencode.json is REJECTED by opencode 1.17+.
-  const pluginPath = path.join(dir, '.opencode', 'plugin', 'astria.js');
-  assert(fs.existsSync(pluginPath), 'OpenCode: plugin file created in plugin/');
+  const pluginPath = path.join(dir, '.opencode', 'plugins', 'astria.js');
+  assert(fs.existsSync(pluginPath), 'OpenCode: plugin file created in plugins/');
   const pluginContent = fs.readFileSync(pluginPath, 'utf-8');
   assert(pluginContent.includes('"view", "grep", "glob", "ls", "bash"'), 'OpenCode: plugin matches view|grep|glob|ls|bash');
   assert(pluginContent.includes('MUST'), 'OpenCode: plugin uses MUST language');
@@ -184,20 +185,21 @@ function testOpenCodePlugin() {
     'OpenCode: no plugins key in opencode.json'
   );
 
-  // Upgrades: the legacy plugins/ dir and invalid plugins key are cleaned.
+  // Upgrades: the 1.0.9-era singular plugin/ dir and invalid plugins key
+  // are cleaned.
   const dir2 = tmpDir();
-  fs.mkdirSync(path.join(dir2, '.opencode', 'plugins'), { recursive: true });
-  fs.writeFileSync(path.join(dir2, '.opencode', 'plugins', 'astria.js'), 'old');
+  fs.mkdirSync(path.join(dir2, '.opencode', 'plugin'), { recursive: true });
+  fs.writeFileSync(path.join(dir2, '.opencode', 'plugin', 'astria.js'), 'old');
   fs.writeFileSync(
     path.join(dir2, '.opencode', 'opencode.json'),
-    JSON.stringify({ plugins: ['./plugins/astria.js'], theme: 'dark' })
+    JSON.stringify({ plugins: ['./plugin/astria.js'], theme: 'dark' })
   );
   injectOpenCodePlugin(dir2);
-  assert(!fs.existsSync(path.join(dir2, '.opencode', 'plugins', 'astria.js')), 'OpenCode: legacy plugins file removed');
+  assert(!fs.existsSync(path.join(dir2, '.opencode', 'plugin', 'astria.js')), 'OpenCode: legacy singular plugin file removed');
   const upgraded = readJson(path.join(dir2, '.opencode', 'opencode.json'));
   assert(!upgraded.plugins, 'OpenCode: invalid plugins key stripped on upgrade');
   assert(upgraded.theme === 'dark', 'OpenCode: unrelated config preserved on upgrade');
-  assert(fs.existsSync(path.join(dir2, '.opencode', 'plugin', 'astria.js')), 'OpenCode: plugin placed in plugin/');
+  assert(fs.existsSync(path.join(dir2, '.opencode', 'plugins', 'astria.js')), 'OpenCode: plugin placed in plugins/');
   fs.rmSync(dir2, { recursive: true, force: true });
 
   const removed = removeOpenCodePlugin(dir);
@@ -325,10 +327,11 @@ function testAgentMcp() {
     ['vscode', path.join('.vscode', 'mcp.json'), ['servers'], {}],
     ['trae', path.join('.trae', 'mcp.json'), ['mcpServers'], {}],
     ['windsurf', path.join('.windsurf', 'mcp.json'), ['mcpServers'], {}],
-    ['kiro', 'mcp.json', ['mcpServers'], {}],
+    // Kiro's workspace MCP config lives in .kiro/settings/mcp.json
+    // (kiro.dev docs, verified 2026-09-30) — not a bare root mcp.json.
+    ['kiro', path.join('.kiro', 'settings', 'mcp.json'), ['mcpServers'], {}],
     // OpenCode keys servers directly under `mcp` — its dedicated shape test
     // below asserts the local-command server object.
-    ['copilot', path.join('.github', 'copilot-mcp.json'), ['servers'], {}],
   ];
 
   const serversOf = (config: any, keyPath: string[]): any =>
@@ -441,6 +444,94 @@ function testOpenCodeMcpShape() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// A 1.0.9-era dev build registered Kiro in a bare root mcp.json, a path no
+// Kiro version reads — the documented workspace config is
+// .kiro/settings/mcp.json. Installs and uninstalls migrate away from the
+// dead file; user content in it is never touched.
+function testKiroLegacyRootMcpMigration() {
+  const dir = tmpDir();
+  fs.writeFileSync(
+    path.join(dir, 'mcp.json'),
+    JSON.stringify({ mcpServers: { astria: { type: 'stdio', command: 'astria', args: ['mcp'] } } })
+  );
+  assert(injectAgentMcp(dir, 'kiro') === true, 'Kiro legacy: inject returns true');
+  assert(!fs.existsSync(path.join(dir, 'mcp.json')), 'Kiro legacy: dead root mcp.json removed');
+  const kiro = readJson(path.join(dir, '.kiro', 'settings', 'mcp.json'));
+  assert(kiro.mcpServers.astria.command === 'astria', 'Kiro legacy: entry registered at documented path');
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  // A root mcp.json with foreign servers stays; only our entry would go.
+  const dir2 = tmpDir();
+  fs.writeFileSync(
+    path.join(dir2, 'mcp.json'),
+    JSON.stringify({ mcpServers: {
+      astria: { type: 'stdio', command: 'astria', args: ['mcp'] },
+      other: { type: 'stdio', command: 'other-cli', args: [] },
+    } })
+  );
+  injectAgentMcp(dir2, 'kiro');
+  const stayed = readJson(path.join(dir2, 'mcp.json'));
+  assert(stayed.mcpServers.other.command === 'other-cli', 'Kiro legacy: foreign server preserved in root mcp.json');
+  assert(!('astria' in stayed.mcpServers), 'Kiro legacy: our entry removed from root mcp.json');
+  assert(readJson(path.join(dir2, '.kiro', 'settings', 'mcp.json')).mcpServers.astria, 'Kiro legacy: registered at documented path');
+  fs.rmSync(dir2, { recursive: true, force: true });
+
+  // Straight uninstall with only the legacy file present (install happened
+  // before the path correction, current target never created).
+  const dir3 = tmpDir();
+  fs.writeFileSync(
+    path.join(dir3, 'mcp.json'),
+    JSON.stringify({ mcpServers: { astria: { type: 'stdio', command: 'astria', args: ['mcp'] } } })
+  );
+  assert(removeAgentMcp(dir3, 'kiro') === true, 'Kiro legacy: remove with only legacy file returns true');
+  assert(!fs.existsSync(path.join(dir3, 'mcp.json')), 'Kiro legacy: dead root mcp.json removed on uninstall');
+  fs.rmSync(dir3, { recursive: true, force: true });
+}
+
+// The Copilot coding agent reads MCP config only from repository Settings
+// (JSON pasted in the GitHub UI) — a 1.0.9-era dev build wrote a dead
+// .github/copilot-mcp.json. It is cleaned when it only carries our entry;
+// foreign content stays.
+function testCopilotLegacyMcpCleanup() {
+  const dir = tmpDir();
+  fs.mkdirSync(path.join(dir, '.github'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, '.github', 'copilot-mcp.json'),
+    JSON.stringify({ servers: { astria: { command: 'astria', args: ['mcp'] } } })
+  );
+  assert(cleanupLegacyCopilotMcp(dir) === true, 'Copilot legacy: cleanup returns true');
+  assert(!fs.existsSync(path.join(dir, '.github', 'copilot-mcp.json')), 'Copilot legacy: dead file removed');
+  assert(cleanupLegacyCopilotMcp(dir) === false, 'Copilot legacy: second cleanup returns false');
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  // Foreign servers in the file are preserved; only our entries go.
+  const dir2 = tmpDir();
+  fs.mkdirSync(path.join(dir2, '.github'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir2, '.github', 'copilot-mcp.json'),
+    JSON.stringify({ servers: {
+      astria: { command: 'astria', args: ['mcp'] },
+      other: { command: 'other-cli', args: [] },
+    } })
+  );
+  assert(cleanupLegacyCopilotMcp(dir2) === true, 'Copilot legacy: mixed cleanup returns true');
+  const stayed = readJson(path.join(dir2, '.github', 'copilot-mcp.json'));
+  assert(stayed.servers.other.command === 'other-cli', 'Copilot legacy: foreign server preserved');
+  assert(!('astria' in stayed.servers), 'Copilot legacy: our entry removed');
+  fs.rmSync(dir2, { recursive: true, force: true });
+
+  // A customized astria entry (foreign command) is left untouched.
+  const dir3 = tmpDir();
+  fs.mkdirSync(path.join(dir3, '.github'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir3, '.github', 'copilot-mcp.json'),
+    JSON.stringify({ servers: { astria: { command: 'my-wrapper', args: [] } } })
+  );
+  assert(cleanupLegacyCopilotMcp(dir3) === false, 'Copilot legacy: customized entry not touched');
+  assert(fs.existsSync(path.join(dir3, '.github', 'copilot-mcp.json')), 'Copilot legacy: customized file stays');
+  fs.rmSync(dir3, { recursive: true, force: true });
+}
+
 // ---- Codex MCP (user-global ~/.codex/config.toml, TOML) ----
 
 function testCodexMcpToml() {
@@ -494,6 +585,11 @@ function testMarkdownInject() {
 
   assert(!PROJECT_MD_SECTION.includes('MUST'), 'PROJECT_MD_SECTION is passive');
   assert(PROJECT_MD_SECTION.includes('repo_map'), 'PROJECT_MD_SECTION names MCP tools');
+  // The injected section must match the MCP tool surface agents actually
+  // get (10 tools since the analysis additions) — it drifted before.
+  for (const tool of ['repo_map', 'query_graph', 'explain', 'get_neighbors', 'shortest_path', 'affected', 'god_nodes', 'list_communities', 'graph_stats', 'health']) {
+    assert(PROJECT_MD_SECTION.includes(tool), `PROJECT_MD_SECTION names the ${tool} MCP tool`);
+  }
   assert(PROJECT_MD_SECTION.includes('astria query'), 'PROJECT_MD_SECTION names CLI path');
   assert(PROJECT_MD_SECTION.includes('affected'), 'PROJECT_MD_SECTION covers change impact');
   assert(PROJECT_MD_SECTION.includes('.astria/'), 'PROJECT_MD_SECTION points at .astria/');
@@ -715,7 +811,7 @@ function testLegacyMigration() {
   );
   assert(injectOpenCodePlugin(ocDir) === true, 'Legacy OpenCode: inject returns true');
   assert(!fs.existsSync(path.join(ocDir, '.opencode', 'plugins', 'graphify.js')), 'Legacy OpenCode: legacy plugin file removed');
-  assert(fs.existsSync(path.join(ocDir, '.opencode', 'plugin', 'astria.js')), 'Legacy OpenCode: astria plugin written to plugin/');
+  assert(fs.existsSync(path.join(ocDir, '.opencode', 'plugins', 'astria.js')), 'Legacy OpenCode: astria plugin written to plugins/');
   const ocConfig = readJson(path.join(ocDir, '.opencode', 'opencode.json'));
   assert(!ocConfig.plugins, 'Legacy OpenCode: invalid plugins key stripped');
   // uninstall removes both eras
@@ -923,6 +1019,8 @@ testKiroSteering();
 testZcodeMcp();
 testAgentMcp();
 testOpenCodeMcpShape();
+testKiroLegacyRootMcpMigration();
+testCopilotLegacyMcpCleanup();
 testCodexMcpToml();
 testPiExtension();
 testFileStemSkillLayouts();
