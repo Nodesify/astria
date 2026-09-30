@@ -51,7 +51,7 @@ program
   .option('--judge <name>', 'Decision layer over the backend: jev (TypeSafe System One — gates trivial files, re-judges relations/node types, adds calibrated edge confidence)')
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
   .option('--wiki', 'Also export a markdown wiki to .astria/wiki')
-  .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
+  .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (one-time ~615 MB local model download, then offline)')
   .option('--label-communities', 'Name communities thematically with one LLM call per changed community (requires a semantic backend)')
   .option('--deep', 'Second extraction tier: LLM-linked cross-file concept edges, cached per file (requires a semantic backend)')
   .option('--global', 'After building, merge this repo into the cross-repo global graph')
@@ -66,7 +66,7 @@ program
   .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), or gemini')
   .option('--judge <name>', 'Decision layer over the backend: jev (TypeSafe System One — gates trivial files, re-judges relations/node types, adds calibrated edge confidence)')
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
-  .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (downloads a small model on first use)')
+  .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (one-time ~615 MB local model download, then offline)')
   .option('--label-communities', 'Name communities thematically with one LLM call per changed community (requires a semantic backend)')
   .option('--deep', 'Second extraction tier: LLM-linked cross-file concept edges, cached per file (requires a semantic backend)')
   .option('--quiet', 'Suppress progress lines and the token benchmark')
@@ -265,13 +265,14 @@ program
 
 program
   .command('add')
-  .description('Fetch a URL (arXiv paper, tweet, webpage, image, PDF) into ./raw and update the graph')
-  .argument('[url]', 'URL to fetch (required unless --scip/--postgres is given)')
+  .description('Fetch a URL (arXiv paper, tweet, webpage, image, PDF) into ./raw, or save a transcript, and update the graph')
+  .argument('[url]', 'URL to fetch (required unless --scip/--postgres/--transcript is given)')
   .option('--graph <path>', 'Path to project root', '.')
   .option('--author <name>', 'Author recorded in the saved metadata')
   .option('--contributor <name>', 'Contributor recorded in the saved metadata')
   .option('--scip <file>', 'Ingest a simplified SCIP JSON index instead of fetching a URL')
   .option('--postgres <dsn>', 'Introspect a live PostgreSQL schema (requires psql on PATH) instead of fetching a URL')
+  .option('--transcript <file>', 'Save a transcript (.md/.txt file, or - to read piped stdin) into .astria/transcripts/ and update the graph')
   .action(addCommand);
 
 program

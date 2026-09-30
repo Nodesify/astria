@@ -28,7 +28,7 @@ Each corpus runs the same questions with requested budgets of 1000 and 4000 toke
 
 Token cost counts delivered retrieval context, not filesystem bytes scanned, graph construction, model reasoning, or a complete agent task. The baseline is deterministic, not a claim about expert iterative search. Full-corpus/query ratios are a separate size diagnostic and do not measure savings against targeted search.
 
-`.github/workflows/quality.yml` gates proposed changes using the local native build and a 50% self-corpus recall@5 floor. External runs remain explicit opt-in; no external measurements are checked in yet. Blind promptfoo judging remains optional under `promptfoo/` and is separate from deterministic retrieval metrics.
+`.github/workflows/quality.yml` gates proposed changes using the local native build and a 50% self-corpus recall@5 floor. External runs remain explicit opt-in; the September 30 astria-vs-baseline comparison over the Click/Express/ripgrep corpora is checked in at [`worked/external-baseline/`](../../../worked/external-baseline/). Blind promptfoo judging remains optional under `promptfoo/` and is separate from deterministic retrieval metrics.
 
 ## Blind answer-correctness judging
 
@@ -40,3 +40,20 @@ TYPESAFE_API_KEY=... node scripts/bench/quality/blind-judge.mjs [--out scripts/b
 
 Requires `TYPESAFE_API_KEY` (model override via `TYPESAFE_MODEL`, default `jev-latest`). The judge is blind to tool identity but not organizationally independent. The same answer pairs were also graded on September 28 by the external promptfoo/OpenRouter judge (`gpt-4o-mini`, ~$0.12): astria 77.1% pass, Graphify 65.7% - stricter on both tools, same ordering. Verdicts land in `quality/out` and are not published automatically. The September 28 self-corpus run graded astria answers 100% PASS against Graphify 77.1% PASS / 20% FAIL (mean 1.92 vs 1.61 of 2) - single judge, single run, not a statistical claim.
 
+
+## Judge-layer A/B
+
+`judge-ab.mjs` measures what `--judge jev` changes: it builds (or reuses) one graph per mode over the same corpus — `plain` (structural), `llm` (semantic extraction), `llm-jev` (the judge layered on the backend) — then scores every golden set against every mode at each budget and detail tier with the run-quality file-rank methodology. Graph shape comes from `astria stats --json`; build-output tails and engine/judge configuration land in the results JSON.
+
+```sh
+# fresh three-mode build over a corpus (llm/llm-jev bill the engine backend)
+node scripts/bench/quality/judge-ab.mjs --corpus /abs/click-checkout
+
+# score prebuilt graphs without any API spend (e.g. the 2026-09-28 mode dirs)
+node scripts/bench/quality/judge-ab.mjs \
+  --mode-dir plain=bench-work/modes-20260928/plain \
+  --mode-dir llm=bench-work/modes-20260928/llm \
+  --mode-dir llm-jev=bench-work/modes-20260928/llm-jev
+```
+
+`plain` needs no key. `llm` needs an OpenAI-compatible engine key (`--api-key-file`, default the OpenRouter key under `bench-work/llm-exp/or_key.txt`). `llm-jev` additionally needs a Typesafe key (`TYPESAFE_API_KEY`/`ASTRIA_LLM_JUDGE_API_KEY` or `--judge-key-file`); the harness fails before any build spend when a key is missing. The judge gate is a live decision model, so a judged graph is one sample from a distribution (measured gate variance: 31 vs 17 files gated on identical replay in the 2026-09-28 modes run) — rerun before claiming a trend. Results and a markdown report land under `bench-work/judge-ab/<run>/`.

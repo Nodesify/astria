@@ -30,6 +30,9 @@ pub struct AffectedHit {
     pub depth: u32,
     /// Relation of the edge that reached this node (e.g. the caller's `calls`).
     pub relation: String,
+    /// Edge provenance: `EXTRACTED` (present in the source) or `INFERRED`
+    /// (reconstructed from name references — direction is not guaranteed).
+    pub provenance: String,
     /// File containing the referencing edge — the call site, not the definition.
     pub via_file: String,
 }
@@ -205,28 +208,30 @@ pub fn affected(
         None => IMPACT_RELATIONS.iter().copied().collect(),
     };
 
-    // Reverse adjacency: target → [(source, relation, edge source_file)].
-    // Built once so the BFS is O(V + E) instead of rescanning every edge
-    // per frontier node.
-    let mut incoming: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
+    // Reverse adjacency: target → [(source, relation, provenance, edge
+    // source_file)]. Built once so the BFS is O(V + E) instead of rescanning
+    // every edge per frontier node.
+    let mut incoming: HashMap<String, Vec<(String, String, String, String)>> = HashMap::new();
     // Members of the seed (seed --contains/method--> member), for the
     // one-hop seed expansion below.
     let mut seed_members: Vec<String> = Vec::new();
     {
-        let mut stmt = db.prepare("SELECT source, target, relation, source_file FROM edges")?;
+        let mut stmt =
+            db.prepare("SELECT source, target, relation, confidence, source_file FROM edges")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
             ))
         })?;
-        for (src, tgt, rel, via) in rows.flatten() {
+        for (src, tgt, rel, prov, via) in rows.flatten() {
             if src == seed && (rel == "contains" || rel == "method") {
                 seed_members.push(tgt.clone());
             }
-            incoming.entry(tgt).or_default().push((src, rel, via));
+            incoming.entry(tgt).or_default().push((src, rel, prov, via));
         }
     }
 
@@ -263,7 +268,7 @@ pub fn affected(
             continue;
         }
         let empty = Vec::new();
-        for (src, rel, via) in incoming.get(&current).unwrap_or(&empty) {
+        for (src, rel, prov, via) in incoming.get(&current).unwrap_or(&empty) {
             if !allowed.contains(rel.as_str()) || !visited.insert(src.clone()) {
                 continue;
             }
@@ -284,6 +289,7 @@ pub fn affected(
                 label,
                 depth: d + 1,
                 relation: rel.clone(),
+                provenance: prov.clone(),
                 via_file,
             });
             frontier.push_back((src.clone(), d + 1));
@@ -456,5 +462,26 @@ mod tests {
         let result = affected(&db, "svc_run", 1, None).unwrap();
         let handler = result.hits.iter().find(|h| h.id == "handler").unwrap();
         assert_eq!(handler.via_file, "src/handler.rs");
+    }
+
+    #[test]
+    fn hit_provenance_marks_inferred_edges() {
+        // INFERRED call edges are reconstructed from name references and
+        // their direction is not guaranteed; a blast radius built across
+        // one must say so instead of presenting it as source fact.
+        let db = open_db_in_memory().unwrap();
+        seed_graph(&db);
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+              ('spec', 'spec()', 'code', 'tests/spec.rs');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+              ('spec', 'route', 'calls', 'INFERRED', 'tests/spec.rs');",
+        )
+        .unwrap();
+        let result = affected(&db, "route", 1, None).unwrap();
+        let route = result.hits.iter().find(|h| h.id == "main").unwrap();
+        assert_eq!(route.provenance, "EXTRACTED");
+        let spec = result.hits.iter().find(|h| h.id == "spec").unwrap();
+        assert_eq!(spec.provenance, "INFERRED");
     }
 }

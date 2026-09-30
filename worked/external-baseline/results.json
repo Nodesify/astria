@@ -1,0 +1,2251 @@
+{
+  "meta": {
+    "generated_at": "2026-09-29T16:22:53.433Z",
+    "description": "astria vs question-derived rg+source-read baseline (harness method name: question-rg-plus-source-windows) over the scripts/bench/external corpora — Click 8.1.8 (934813e), Express 4.21.2 (1faf228), ripgrep 14.1.1 (4649aa9) — structural graphs only, o200k_base, identical complete-line clipping, failed queries kept in denominators",
+    "provenance_note": "CLI 1.0.7 built from b0a9c2e with a dirty tree (in-progress astria-embed model swap; structural runs never load the embedder). Per-run provenance (artifact hashes, corpus commits, golden hashes) is in each payload.",
+    "reproduce": "node scripts/bench/external/run.mjs produces the 1000/4000 points for both methods; the 250/500 points extend the curve via scripts/bench/quality/run-quality.mjs --root bench-work/external/<corpus> --golden scripts/bench/external/<corpus>.jsonl --astria packages/astria-cli/dist/index.js --budget <b> [--baseline]. The runner requires a fresh bench-work/external (it refuses a corpus dir that already has a graph).",
+    "depth_note": "query depth 3 (run-quality default; the external runner does not pass --depth). The paired Graphify protocol used depth 2; these numbers are not interchangeable with it."
+  },
+  "runs": [
+    {
+      "corpus": "click",
+      "budget": 250,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+          "corpus_files": 133,
+          "golden_sha256": "7023c4f03b3c7537e613d1d9fcfab6abfcea627910b940910057139ebee0fe13",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:18:48.340Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/click",
+        "golden_set": "click.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 250,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.3233333333333333,
+          "avg_tokens": 206.33333333333334,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "click1",
+            "question": "How does invoke call a command callback?",
+            "seconds": 0.34,
+            "tokens": 210,
+            "raw_tokens": 210,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          },
+          {
+            "id": "click2",
+            "question": "How does resolve_command find a subcommand?",
+            "seconds": 0.34,
+            "tokens": 196,
+            "raw_tokens": 196,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          },
+          {
+            "id": "click3",
+            "question": "How does get_help format command help?",
+            "seconds": 0.29,
+            "tokens": 213,
+            "raw_tokens": 213,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "click",
+      "budget": 250,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+          "corpus_files": 133,
+          "golden_sha256": "7023c4f03b3c7537e613d1d9fcfab6abfcea627910b940910057139ebee0fe13",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:18:50.027Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/click",
+        "golden_set": "click.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 250,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 0,
+          "avg_query_seconds": 0.08666666666666667,
+          "avg_tokens": 219,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0,
+          "recall@5": 0,
+          "hit@10": 0,
+          "recall@10": 0
+        },
+        "items": [
+          {
+            "id": "click1",
+            "question": "How does invoke call a command callback?",
+            "seconds": 0.09,
+            "tokens": 247,
+            "raw_tokens": 471,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "click2",
+            "question": "How does resolve_command find a subcommand?",
+            "seconds": 0.07,
+            "tokens": 234,
+            "raw_tokens": 531,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "click3",
+            "question": "How does get_help format command help?",
+            "seconds": 0.1,
+            "tokens": 176,
+            "raw_tokens": 741,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "click",
+      "budget": 500,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+          "corpus_files": 133,
+          "golden_sha256": "7023c4f03b3c7537e613d1d9fcfab6abfcea627910b940910057139ebee0fe13",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:18:52.067Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/click",
+        "golden_set": "click.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 500,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.34333333333333327,
+          "avg_tokens": 483,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "click1",
+            "question": "How does invoke call a command callback?",
+            "seconds": 0.33,
+            "tokens": 481,
+            "raw_tokens": 481,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          },
+          {
+            "id": "click2",
+            "question": "How does resolve_command find a subcommand?",
+            "seconds": 0.35,
+            "tokens": 497,
+            "raw_tokens": 497,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          },
+          {
+            "id": "click3",
+            "question": "How does get_help format command help?",
+            "seconds": 0.35,
+            "tokens": 471,
+            "raw_tokens": 471,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "click",
+      "budget": 500,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+          "corpus_files": 133,
+          "golden_sha256": "7023c4f03b3c7537e613d1d9fcfab6abfcea627910b940910057139ebee0fe13",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:18:54.181Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/click",
+        "golden_set": "click.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 500,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 0,
+          "avg_query_seconds": 0.13,
+          "avg_tokens": 492,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0,
+          "recall@5": 0,
+          "hit@10": 0,
+          "recall@10": 0
+        },
+        "items": [
+          {
+            "id": "click1",
+            "question": "How does invoke call a command callback?",
+            "seconds": 0.14,
+            "tokens": 494,
+            "raw_tokens": 817,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "click2",
+            "question": "How does resolve_command find a subcommand?",
+            "seconds": 0.1,
+            "tokens": 498,
+            "raw_tokens": 531,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "click3",
+            "question": "How does get_help format command help?",
+            "seconds": 0.15,
+            "tokens": 484,
+            "raw_tokens": 741,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "click",
+      "budget": 1000,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+          "corpus_files": 133,
+          "golden_sha256": "7023c4f03b3c7537e613d1d9fcfab6abfcea627910b940910057139ebee0fe13",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:15:06.968Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/click",
+        "golden_set": "click.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 1000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.38999999999999996,
+          "avg_tokens": 982.6666666666666,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "click1",
+            "question": "How does invoke call a command callback?",
+            "seconds": 0.39,
+            "tokens": 996,
+            "raw_tokens": 996,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          },
+          {
+            "id": "click2",
+            "question": "How does resolve_command find a subcommand?",
+            "seconds": 0.4,
+            "tokens": 978,
+            "raw_tokens": 978,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          },
+          {
+            "id": "click3",
+            "question": "How does get_help format command help?",
+            "seconds": 0.38,
+            "tokens": 974,
+            "raw_tokens": 974,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "click",
+      "budget": 1000,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+          "corpus_files": 133,
+          "golden_sha256": "7023c4f03b3c7537e613d1d9fcfab6abfcea627910b940910057139ebee0fe13",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:15:08.937Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/click",
+        "golden_set": "click.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 1000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 0,
+          "avg_query_seconds": 0.2933333333333334,
+          "avg_tokens": 994.3333333333334,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0,
+          "recall@5": 0,
+          "hit@10": 0,
+          "recall@10": 0
+        },
+        "items": [
+          {
+            "id": "click1",
+            "question": "How does invoke call a command callback?",
+            "seconds": 0.55,
+            "tokens": 997,
+            "raw_tokens": 1379,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "click2",
+            "question": "How does resolve_command find a subcommand?",
+            "seconds": 0.15,
+            "tokens": 987,
+            "raw_tokens": 1122,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "click3",
+            "question": "How does get_help format command help?",
+            "seconds": 0.18,
+            "tokens": 999,
+            "raw_tokens": 1004,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "click",
+      "budget": 4000,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+          "corpus_files": 133,
+          "golden_sha256": "7023c4f03b3c7537e613d1d9fcfab6abfcea627910b940910057139ebee0fe13",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:15:10.944Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/click",
+        "golden_set": "click.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 4000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.38999999999999996,
+          "avg_tokens": 3968.3333333333335,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "click1",
+            "question": "How does invoke call a command callback?",
+            "seconds": 0.39,
+            "tokens": 3991,
+            "raw_tokens": 3991,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          },
+          {
+            "id": "click2",
+            "question": "How does resolve_command find a subcommand?",
+            "seconds": 0.39,
+            "tokens": 3961,
+            "raw_tokens": 3961,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          },
+          {
+            "id": "click3",
+            "question": "How does get_help format command help?",
+            "seconds": 0.39,
+            "tokens": 3953,
+            "raw_tokens": 3953,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "click",
+      "budget": 4000,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+          "corpus_files": 133,
+          "golden_sha256": "7023c4f03b3c7537e613d1d9fcfab6abfcea627910b940910057139ebee0fe13",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:15:12.922Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/click",
+        "golden_set": "click.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 4000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 0.09696969696969697,
+          "avg_query_seconds": 0.18333333333333335,
+          "avg_tokens": 3991,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0.3333333333333333,
+          "recall@5": 0.3333333333333333,
+          "hit@10": 0.3333333333333333,
+          "recall@10": 0.3333333333333333
+        },
+        "items": [
+          {
+            "id": "click1",
+            "question": "How does invoke call a command callback?",
+            "seconds": 0.16,
+            "tokens": 3998,
+            "raw_tokens": 4191,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "click2",
+            "question": "How does resolve_command find a subcommand?",
+            "seconds": 0.11,
+            "tokens": 3979,
+            "raw_tokens": 4078,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": 11,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          },
+          {
+            "id": "click3",
+            "question": "How does get_help format command help?",
+            "seconds": 0.28,
+            "tokens": 3996,
+            "raw_tokens": 4049,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 5,
+            "matched_file": "src/click/core.py",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "express",
+      "budget": 250,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+          "corpus_files": 224,
+          "golden_sha256": "704eff15ea9ab24473d562657525df1f033199cbb280967d5717a483d0824b9d",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:18:56.565Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/express",
+        "golden_set": "express.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 250,
+        "query_depth": 3,
+        "summary": {
+          "questions": 2,
+          "answered": 2,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.435,
+          "avg_tokens": 209,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "express1",
+            "question": "How does json send a JSON response?",
+            "seconds": 0.43,
+            "tokens": 234,
+            "raw_tokens": 234,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          },
+          {
+            "id": "express2",
+            "question": "How does sendFile transfer a file?",
+            "seconds": 0.44,
+            "tokens": 184,
+            "raw_tokens": 184,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "express",
+      "budget": 250,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+          "corpus_files": 224,
+          "golden_sha256": "704eff15ea9ab24473d562657525df1f033199cbb280967d5717a483d0824b9d",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:18:58.299Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/express",
+        "golden_set": "express.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 250,
+        "query_depth": 3,
+        "summary": {
+          "questions": 2,
+          "answered": 2,
+          "failed": 0,
+          "mrr": 0,
+          "avg_query_seconds": 0.115,
+          "avg_tokens": 239,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0,
+          "recall@5": 0,
+          "hit@10": 0,
+          "recall@10": 0
+        },
+        "items": [
+          {
+            "id": "express1",
+            "question": "How does json send a JSON response?",
+            "seconds": 0.13,
+            "tokens": 240,
+            "raw_tokens": 263,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "express2",
+            "question": "How does sendFile transfer a file?",
+            "seconds": 0.1,
+            "tokens": 238,
+            "raw_tokens": 288,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "express",
+      "budget": 500,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+          "corpus_files": 224,
+          "golden_sha256": "704eff15ea9ab24473d562657525df1f033199cbb280967d5717a483d0824b9d",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:19:01.271Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/express",
+        "golden_set": "express.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 500,
+        "query_depth": 3,
+        "summary": {
+          "questions": 2,
+          "answered": 2,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.645,
+          "avg_tokens": 468.5,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "express1",
+            "question": "How does json send a JSON response?",
+            "seconds": 0.81,
+            "tokens": 498,
+            "raw_tokens": 498,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          },
+          {
+            "id": "express2",
+            "question": "How does sendFile transfer a file?",
+            "seconds": 0.48,
+            "tokens": 439,
+            "raw_tokens": 439,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "express",
+      "budget": 500,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+          "corpus_files": 224,
+          "golden_sha256": "704eff15ea9ab24473d562657525df1f033199cbb280967d5717a483d0824b9d",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:19:03.097Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/express",
+        "golden_set": "express.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 500,
+        "query_depth": 3,
+        "summary": {
+          "questions": 2,
+          "answered": 2,
+          "failed": 0,
+          "mrr": 0,
+          "avg_query_seconds": 0.115,
+          "avg_tokens": 489.5,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0,
+          "recall@5": 0,
+          "hit@10": 0,
+          "recall@10": 0
+        },
+        "items": [
+          {
+            "id": "express1",
+            "question": "How does json send a JSON response?",
+            "seconds": 0.13,
+            "tokens": 491,
+            "raw_tokens": 733,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "express2",
+            "question": "How does sendFile transfer a file?",
+            "seconds": 0.1,
+            "tokens": 488,
+            "raw_tokens": 752,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "express",
+      "budget": 1000,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+          "corpus_files": 224,
+          "golden_sha256": "704eff15ea9ab24473d562657525df1f033199cbb280967d5717a483d0824b9d",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:15:41.213Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/express",
+        "golden_set": "express.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 1000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 2,
+          "answered": 2,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.37,
+          "avg_tokens": 972.5,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "express1",
+            "question": "How does json send a JSON response?",
+            "seconds": 0.39,
+            "tokens": 956,
+            "raw_tokens": 956,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          },
+          {
+            "id": "express2",
+            "question": "How does sendFile transfer a file?",
+            "seconds": 0.35,
+            "tokens": 989,
+            "raw_tokens": 989,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "express",
+      "budget": 1000,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+          "corpus_files": 224,
+          "golden_sha256": "704eff15ea9ab24473d562657525df1f033199cbb280967d5717a483d0824b9d",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:15:42.349Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/express",
+        "golden_set": "express.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 1000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 2,
+          "answered": 2,
+          "failed": 0,
+          "mrr": 0.125,
+          "avg_query_seconds": 0.165,
+          "avg_tokens": 993.5,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0.5,
+          "recall@5": 0.5,
+          "hit@10": 0.5,
+          "recall@10": 0.5
+        },
+        "items": [
+          {
+            "id": "express1",
+            "question": "How does json send a JSON response?",
+            "seconds": 0.26,
+            "tokens": 992,
+            "raw_tokens": 1051,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "express2",
+            "question": "How does sendFile transfer a file?",
+            "seconds": 0.07,
+            "tokens": 995,
+            "raw_tokens": 1125,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 4,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "express",
+      "budget": 4000,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+          "corpus_files": 224,
+          "golden_sha256": "704eff15ea9ab24473d562657525df1f033199cbb280967d5717a483d0824b9d",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:15:43.920Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/express",
+        "golden_set": "express.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 4000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 2,
+          "answered": 2,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.38,
+          "avg_tokens": 3968.5,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "express1",
+            "question": "How does json send a JSON response?",
+            "seconds": 0.37,
+            "tokens": 3989,
+            "raw_tokens": 3989,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          },
+          {
+            "id": "express2",
+            "question": "How does sendFile transfer a file?",
+            "seconds": 0.39,
+            "tokens": 3948,
+            "raw_tokens": 3948,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "express",
+      "budget": 4000,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+          "corpus_files": 224,
+          "golden_sha256": "704eff15ea9ab24473d562657525df1f033199cbb280967d5717a483d0824b9d",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:15:45.045Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/express",
+        "golden_set": "express.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 4000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 2,
+          "answered": 2,
+          "failed": 0,
+          "mrr": 0.125,
+          "avg_query_seconds": 0.12,
+          "avg_tokens": 3997.5,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0.5,
+          "recall@5": 0.5,
+          "hit@10": 0.5,
+          "recall@10": 0.5
+        },
+        "items": [
+          {
+            "id": "express1",
+            "question": "How does json send a JSON response?",
+            "seconds": 0.13,
+            "tokens": 3995,
+            "raw_tokens": 4095,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "express2",
+            "question": "How does sendFile transfer a file?",
+            "seconds": 0.11,
+            "tokens": 4000,
+            "raw_tokens": 4014,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 4,
+            "matched_file": "lib/response.js",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "ripgrep",
+      "budget": 250,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+          "corpus_files": 204,
+          "golden_sha256": "00966efb5657172de9761fb78e1f760ef6a64899754ff428989f4afe4c4d5da4",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:19:05.964Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/ripgrep",
+        "golden_set": "ripgrep.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 250,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.37333333333333335,
+          "avg_tokens": 205,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "ripgrep1",
+            "question": "Where is the Hidden search flag defined?",
+            "seconds": 0.43,
+            "tokens": 216,
+            "raw_tokens": 216,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep2",
+            "question": "Where is the Glob flag defined?",
+            "seconds": 0.36,
+            "tokens": 207,
+            "raw_tokens": 207,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep3",
+            "question": "Where is the MaxCount flag defined?",
+            "seconds": 0.33,
+            "tokens": 192,
+            "raw_tokens": 192,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "ripgrep",
+      "budget": 250,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+          "corpus_files": 204,
+          "golden_sha256": "00966efb5657172de9761fb78e1f760ef6a64899754ff428989f4afe4c4d5da4",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:19:07.106Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/ripgrep",
+        "golden_set": "ripgrep.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 250,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 0,
+          "avg_query_seconds": 0.08333333333333333,
+          "avg_tokens": 250,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0,
+          "recall@5": 0,
+          "hit@10": 0,
+          "recall@10": 0
+        },
+        "items": [
+          {
+            "id": "ripgrep1",
+            "question": "Where is the Hidden search flag defined?",
+            "seconds": 0.08,
+            "tokens": 250,
+            "raw_tokens": 332,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep2",
+            "question": "Where is the Glob flag defined?",
+            "seconds": 0.08,
+            "tokens": 250,
+            "raw_tokens": 446,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep3",
+            "question": "Where is the MaxCount flag defined?",
+            "seconds": 0.09,
+            "tokens": 250,
+            "raw_tokens": 339,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "ripgrep",
+      "budget": 500,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+          "corpus_files": 204,
+          "golden_sha256": "00966efb5657172de9761fb78e1f760ef6a64899754ff428989f4afe4c4d5da4",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:19:09.046Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/ripgrep",
+        "golden_set": "ripgrep.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 500,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.33666666666666667,
+          "avg_tokens": 468.3333333333333,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "ripgrep1",
+            "question": "Where is the Hidden search flag defined?",
+            "seconds": 0.34,
+            "tokens": 437,
+            "raw_tokens": 437,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep2",
+            "question": "Where is the Glob flag defined?",
+            "seconds": 0.33,
+            "tokens": 499,
+            "raw_tokens": 499,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep3",
+            "question": "Where is the MaxCount flag defined?",
+            "seconds": 0.34,
+            "tokens": 469,
+            "raw_tokens": 469,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "ripgrep",
+      "budget": 500,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+          "corpus_files": 204,
+          "golden_sha256": "00966efb5657172de9761fb78e1f760ef6a64899754ff428989f4afe4c4d5da4",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:19:10.095Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/ripgrep",
+        "golden_set": "ripgrep.jsonl",
+        "cli": "packages/astria-cli/dist/index.js",
+        "query_budget": 500,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 0,
+          "avg_query_seconds": 0.07333333333333335,
+          "avg_tokens": 497.3333333333333,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0,
+          "recall@5": 0,
+          "hit@10": 0,
+          "recall@10": 0
+        },
+        "items": [
+          {
+            "id": "ripgrep1",
+            "question": "Where is the Hidden search flag defined?",
+            "seconds": 0.08,
+            "tokens": 500,
+            "raw_tokens": 823,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep2",
+            "question": "Where is the Glob flag defined?",
+            "seconds": 0.07,
+            "tokens": 498,
+            "raw_tokens": 785,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep3",
+            "question": "Where is the MaxCount flag defined?",
+            "seconds": 0.07,
+            "tokens": 494,
+            "raw_tokens": 696,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "ripgrep",
+      "budget": 1000,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+          "corpus_files": 204,
+          "golden_sha256": "00966efb5657172de9761fb78e1f760ef6a64899754ff428989f4afe4c4d5da4",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:16:13.091Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/ripgrep",
+        "golden_set": "ripgrep.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 1000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.3666666666666667,
+          "avg_tokens": 956.6666666666666,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "ripgrep1",
+            "question": "Where is the Hidden search flag defined?",
+            "seconds": 0.37,
+            "tokens": 962,
+            "raw_tokens": 962,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep2",
+            "question": "Where is the Glob flag defined?",
+            "seconds": 0.38,
+            "tokens": 986,
+            "raw_tokens": 986,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep3",
+            "question": "Where is the MaxCount flag defined?",
+            "seconds": 0.35,
+            "tokens": 922,
+            "raw_tokens": 922,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "ripgrep",
+      "budget": 1000,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+          "corpus_files": 204,
+          "golden_sha256": "00966efb5657172de9761fb78e1f760ef6a64899754ff428989f4afe4c4d5da4",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:16:14.571Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/ripgrep",
+        "golden_set": "ripgrep.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 1000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 0,
+          "avg_query_seconds": 0.18666666666666668,
+          "avg_tokens": 994.3333333333334,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0,
+          "recall@5": 0,
+          "hit@10": 0,
+          "recall@10": 0
+        },
+        "items": [
+          {
+            "id": "ripgrep1",
+            "question": "Where is the Hidden search flag defined?",
+            "seconds": 0.42,
+            "tokens": 990,
+            "raw_tokens": 1162,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep2",
+            "question": "Where is the Glob flag defined?",
+            "seconds": 0.07,
+            "tokens": 999,
+            "raw_tokens": 1142,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep3",
+            "question": "Where is the MaxCount flag defined?",
+            "seconds": 0.07,
+            "tokens": 994,
+            "raw_tokens": 1007,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "ripgrep",
+      "budget": 4000,
+      "method": "astria",
+      "payload": {
+        "schema_version": 2,
+        "method": "astria",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+          "corpus_files": 204,
+          "golden_sha256": "00966efb5657172de9761fb78e1f760ef6a64899754ff428989f4afe4c4d5da4",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:16:16.537Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/ripgrep",
+        "golden_set": "ripgrep.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 4000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 1,
+          "avg_query_seconds": 0.3833333333333333,
+          "avg_tokens": 3974.3333333333335,
+          "hit@1": 1,
+          "recall@1": 1,
+          "hit@3": 1,
+          "recall@3": 1,
+          "hit@5": 1,
+          "recall@5": 1,
+          "hit@10": 1,
+          "recall@10": 1
+        },
+        "items": [
+          {
+            "id": "ripgrep1",
+            "question": "Where is the Hidden search flag defined?",
+            "seconds": 0.4,
+            "tokens": 3973,
+            "raw_tokens": 3973,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep2",
+            "question": "Where is the Glob flag defined?",
+            "seconds": 0.38,
+            "tokens": 3972,
+            "raw_tokens": 3972,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep3",
+            "question": "Where is the MaxCount flag defined?",
+            "seconds": 0.37,
+            "tokens": 3978,
+            "raw_tokens": 3978,
+            "clipped": false,
+            "recall": {
+              "1": 1,
+              "3": 1,
+              "5": 1,
+              "10": 1
+            },
+            "hit_rank": 1,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          }
+        ]
+      }
+    },
+    {
+      "corpus": "ripgrep",
+      "budget": 4000,
+      "method": "rg",
+      "payload": {
+        "schema_version": 2,
+        "method": "question-rg-plus-source-windows",
+        "tokenizer": "o200k_base",
+        "context_policy": "both methods clipped to the same exact token budget, keeping only complete lines",
+        "provenance": {
+          "cli_version": "1.0.7",
+          "harness_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "source_build_commit": "b0a9c2e64b7968c3457f3f4e5e2692633ffac8d2",
+          "native_artifact_sha256": "7c2db30f741b4fcf9209db92172d9a559793d8f72512c89254b92581333ed0cf",
+          "cli_entrypoint_sha256": "d107bcc07130e6f0930ddfe1cf0d72797595e1b30cad100c5242d0093b37b6bd",
+          "source_dirty": true,
+          "corpus_commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+          "corpus_files": 204,
+          "golden_sha256": "00966efb5657172de9761fb78e1f760ef6a64899754ff428989f4afe4c4d5da4",
+          "node": "v24.15.0",
+          "platform": "win32"
+        },
+        "generated_at": "2026-09-29T16:16:17.755Z",
+        "corpus_root": "C:/Nodesify/nodesify-graphify/bench-work/external/ripgrep",
+        "golden_set": "ripgrep.jsonl",
+        "cli": "C:\\Nodesify\\nodesify-graphify\\packages\\astria-cli\\dist\\index.js",
+        "query_budget": 4000,
+        "query_depth": 3,
+        "summary": {
+          "questions": 3,
+          "answered": 3,
+          "failed": 0,
+          "mrr": 0.06481481481481481,
+          "avg_query_seconds": 0.10333333333333335,
+          "avg_tokens": 3988,
+          "hit@1": 0,
+          "recall@1": 0,
+          "hit@3": 0,
+          "recall@3": 0,
+          "hit@5": 0,
+          "recall@5": 0,
+          "hit@10": 0.3333333333333333,
+          "recall@10": 0.3333333333333333
+        },
+        "items": [
+          {
+            "id": "ripgrep1",
+            "question": "Where is the Hidden search flag defined?",
+            "seconds": 0.1,
+            "tokens": 3985,
+            "raw_tokens": 4107,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": null,
+            "matched_file": null,
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep2",
+            "question": "Where is the Glob flag defined?",
+            "seconds": 0.11,
+            "tokens": 3987,
+            "raw_tokens": 4028,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 0
+            },
+            "hit_rank": 12,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          },
+          {
+            "id": "ripgrep3",
+            "question": "Where is the MaxCount flag defined?",
+            "seconds": 0.1,
+            "tokens": 3992,
+            "raw_tokens": 4408,
+            "clipped": true,
+            "recall": {
+              "1": 0,
+              "3": 0,
+              "5": 0,
+              "10": 1
+            },
+            "hit_rank": 9,
+            "matched_file": "crates/core/flags/defs.rs",
+            "matched_symbol": null
+          }
+        ]
+      }
+    }
+  ]
+}

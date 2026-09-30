@@ -50,12 +50,14 @@ Optional decision layer over the selected backend (`--judge jev` / `ASTRIA_LLM_J
 | `ASTRIA_LLM_JEV_GATE_BATCH` | Files judged per gate request (default `50`, clamped to 1–200) |
 | `ASTRIA_QUERY_DEBUG_SCORES` | `1` (or `true`/`on`) dumps the top scored nodes with their match components and the final seed list to stderr — diagnose a retrieval miss from one query run |
 | `ASTRIA_QUERY_MIN_SEMANTIC_CONFIDENCE` | Hard floor for SEMANTIC edges at query time (default `0.0` = off). Verified edges whose calibrated keep-probability falls below the floor are excluded from traversal; structural and inferred edges are never filtered. Lets graph consumers act on the judge's verdicts at query time |
+| `ASTRIA_QUERY_SEED_FLOOR` | `off` disables the no-confident-match guard. Default on: when no node matches any of the question's key (highest-IDF) terms and no node matched even half of the effective terms, the query returns an explicit miss (naming the missing vocabulary) instead of a full budget of incidental word matches — one common word fully covering one label is real evidence, but it does not identify an answer. A qualifying embedding candidate, entry-intent questions, and docs-majority corpora always bypass the guard |
+| `ASTRIA_CORPUS_MODE` | Pins the corpus mode `docs` or `code` instead of auto-detection from the prose share (default auto: ≥95% prose nodes → docs-majority, which opens the doc-seed quota and ranks chunks like documents). Unrecognized values warn and fall back to auto. The active non-default mode is disclosed in the query header |
 
 ## Local embeddings
 
 | Variable | Purpose |
 |---|---|
-| `ASTRIA_EMBED_CACHE_DIR` | Overrides where the embedding model is cached (default `~/.astria-embed-cache`; ~90 MB downloaded once, then offline) |
+| `ASTRIA_EMBED_CACHE_DIR` | Overrides where the embedding model is cached (default `~/.astria-embed-cache`; ~615 MB downloaded once, then offline) |
 | `ASTRIA_EMBED` | `off` (or `0`/`false`/`no`) stops queries from auto-merging embedding seeds. Build-side `--embed` still computes vectors; this only turns off consuming them, so a graph that carries vectors can still be queried structurally. The `astria query --no-embed` flag sets the same switch per call. |
 | `ASTRIA_CHUNK_CHARS` | Overrides the document chunk size in characters (default `1200`, clamped to 400–8000). Larger chunks mean fewer, coarser document nodes; smaller chunks mean finer evidence granularity. Takes effect on the next fresh extraction — delete the graph directory (or change it before the first build) after changing it. |
 

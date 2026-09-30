@@ -15,7 +15,7 @@ Two independent semantic layers, both optional. Without them, the graph is purel
 astria run . --embed
 ```
 
-Downloads a small local model once (~90 MB, then offline forever) and computes vector embeddings for every node. This adds:
+Downloads a local model once (jina-embeddings-v2-base-code, ~615 MB, then offline forever) and computes vector embeddings for every node. This adds:
 
 - `similar_to` edges (`INFERRED`, cosine-scored) linking semantically related symbols across files — they flow into clustering, surprising connections, and every export
 - embedding-backed query recall: `query` merges semantic candidates with token matching, so conceptual questions with zero string overlap still find their symbols

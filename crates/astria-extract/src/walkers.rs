@@ -122,6 +122,72 @@ fn extract_docstring(node: &Node, source: &[u8], cfg: &LanguageConfig) -> Option
     None
 }
 
+/// Rust `///` doc comment block attached to the item above it. Rust doc
+/// comments are sibling `line_comment`/`block_comment` nodes — unlike the
+/// in-body docstrings `extract_docstring` handles — so they need their own
+/// walk up the sibling chain. Non-doc comments stop the walk; `//!` module
+/// comments are not item docs and never start it.
+fn rust_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = node.prev_sibling();
+    while let Some(comment) = current {
+        let raw = node_text(&comment, source);
+        let trimmed = raw.trim_start();
+        let is_doc = trimmed.starts_with("///") || trimmed.starts_with("/**");
+        if !is_doc {
+            break;
+        }
+        let stripped = trimmed
+            .trim_start_matches("///")
+            .trim_start_matches("/**")
+            .trim_end_matches("*/")
+            .trim()
+            .to_string();
+        lines.push(stripped);
+        current = comment.prev_sibling();
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    lines.reverse();
+    let joined = lines.join(" ").trim().to_string();
+    (!joined.is_empty()).then_some(joined)
+}
+
+/// Whitespace-collapsed declaration text of a const/static item, capped
+/// like `node_signature`. There is no body to cut at — the initializer IS
+/// the answer content ("pub const MODEL: ... = JinaEmbeddingsV2BaseCode;")
+/// for value questions no function node can carry.
+fn const_signature(node: &Node, source: &[u8]) -> Option<String> {
+    let raw = node_text(node, source);
+    let mut sig = String::new();
+    for word in raw.split_whitespace() {
+        if sig.len() + word.len() + 1 > 200 {
+            break;
+        }
+        if !sig.is_empty() {
+            sig.push(' ');
+        }
+        sig.push_str(word);
+    }
+    let sig = sig.trim_end().to_string();
+    (!sig.is_empty()).then_some(sig)
+}
+
+/// True when the item carries a visibility modifier (`pub`, `pub(crate)`,
+/// ...). Prefers the grammar's `visibility` field, with a kind-scan
+/// fallback for grammar versions without it.
+fn rust_is_pub(node: &Node) -> bool {
+    if node.child_by_field_name("visibility").is_some() {
+        return true;
+    }
+    let mut cursor = node.walk();
+    let any = node
+        .children(&mut cursor)
+        .any(|child| child.kind() == "visibility_modifier");
+    any
+}
+
 // ---------------------------------------------------------------------------
 // Pass 1: Structural extraction + inline call-graph
 // ---------------------------------------------------------------------------
@@ -883,6 +949,60 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
         }
 
         // Walk children for nested closures.
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk_structural(state, &child);
+        }
+        return;
+    }
+
+    // --- Rust constants / statics ---
+    // A `pub` (or `///`-documented) const/static is a graph citizen: value
+    // questions ("which embedding model", "what threshold") are answered by
+    // the constant's initializer, which no function node can carry. Private
+    // undocumented constants stay out — they are implementation detail, and
+    // the graph measured a real miss from their absence, not their noise.
+    // Rust-only: that is where the gap was observed.
+    if state.cfg.name == "Rust" && matches!(kind, "const_item" | "static_item") {
+        let docstring = rust_doc_comment(node, state.source);
+        if let Some(name_node) = node.child_by_field_name("name") {
+            if rust_is_pub(node) || docstring.is_some() {
+                let name = node_text(&name_node, state.source).to_string();
+                let parent_id = state
+                    .current_class_id
+                    .clone()
+                    .unwrap_or_else(|| state.file_id.clone());
+                let const_id = make_node_id(&[&parent_id, &name]);
+
+                state.nodes.push(ExtractedNode {
+                    id: const_id.clone(),
+                    label: name.clone(),
+                    source_file: state.file_path.clone(),
+                    source_line: Some(node.start_position().row as u32),
+                    docstring: docstring.clone(),
+                    signature: const_signature(node, state.source),
+                    node_type: "constant".to_string(),
+                });
+
+                state.edges.push(ExtractedEdge {
+                    source: parent_id,
+                    target: const_id.clone(),
+                    relation: "contains".to_string(),
+                    confidence: "EXTRACTED".to_string(),
+                    confidence_score: Some(1.0),
+                    source_file: state.file_path.clone(),
+                    source_line: Some(node.start_position().row as u32),
+                });
+
+                // A const initializer can call functions (`Size::MAX`, const
+                // fns); attribute those calls to the constant itself.
+                if let Some(value) = node.child_by_field_name("value") {
+                    walk_calls(state, &const_id, &value);
+                }
+            }
+        }
+
+        // Walk children for nested structure (string refs in the value).
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             walk_structural(state, &child);

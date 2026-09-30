@@ -128,6 +128,7 @@ export const exportTree = binding.exportTree;
 export const exportWiki = binding.exportWiki;
 export const exportObsidian = binding.exportObsidian;
 export const ingestUrl = binding.ingestUrl;
+export const saveTranscript = binding.saveTranscript;
 export const diagnoseGraph = binding.diagnoseGraph;
 export const saveQueryResult = binding.saveQueryResult;
 export const reflectGraph = binding.reflect;

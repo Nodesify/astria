@@ -248,6 +248,84 @@ mod tests {
     }
 
     #[test]
+    fn extract_rust_pub_consts_and_documented_ones() {
+        // Value questions ("which embedding model", "what threshold") are
+        // answered by a const's initializer: pub and documented constants
+        // become nodes whose signature carries the value; private
+        // undocumented ones stay out.
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("config.rs");
+        fs::write(
+            &rs,
+            "\n/// The embedding model used for nodes and queries.\n/// Downloads are gated on the cache.\npub const MODEL: &str = \"jina-code\";\n\nconst HIDDEN: u32 = 1;\n\n/// Documented but private.\nconst LIMIT: usize = 10;\n\nstatic mut COUNTER: u64 = 0;\n\npub static NAME: &str = \"astria\";\n\npub fn size() -> usize {\n    LIMIT\n}\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[rs], dir.path(), &db).unwrap();
+        let ext = &results[0];
+        assert_eq!(ext.language, "Rust");
+
+        let model = ext
+            .nodes
+            .iter()
+            .find(|n| n.label == "MODEL")
+            .expect("pub const must be extracted");
+        assert_eq!(model.node_type, "constant");
+        assert_eq!(
+            model.signature.as_deref(),
+            Some("pub const MODEL: &str = \"jina-code\";"),
+            "the initializer is the answer content: {:?}",
+            model.signature
+        );
+        assert_eq!(
+            model.docstring.as_deref(),
+            Some(
+                "The embedding model used for nodes and queries. Downloads are gated on the cache."
+            ),
+            "/// block above the item is the docstring"
+        );
+        assert!(
+            model.id.ends_with("::model"),
+            "id scopes under the file: {}",
+            model.id
+        );
+        assert!(
+            ext.edges
+                .iter()
+                .any(|e| e.relation == "contains" && e.target == model.id),
+            "const is contained by its file"
+        );
+
+        // documented-private and pub-static both qualify
+        assert!(ext.nodes.iter().any(|n| n.label == "LIMIT"));
+        assert!(ext
+            .nodes
+            .iter()
+            .any(|n| n.label == "NAME" && n.node_type == "constant"));
+
+        // private undocumented const/static stay out
+        assert!(!ext.nodes.iter().any(|n| n.label == "HIDDEN"));
+        assert!(!ext.nodes.iter().any(|n| n.label == "COUNTER"));
+    }
+
+    #[test]
+    fn const_initializer_calls_attribute_to_the_const() {
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("sizes.rs");
+        fs::write(&rs, "pub const SIZE: usize = helper();\n").unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[rs], dir.path(), &db).unwrap();
+        let ext = &results[0];
+        let size = ext.nodes.iter().find(|n| n.label == "SIZE").unwrap();
+        assert!(
+            ext.edges
+                .iter()
+                .any(|e| e.relation == "calls" && e.source == size.id),
+            "a call in the initializer belongs to the const node"
+        );
+    }
+
+    #[test]
     fn rust_impl_methods_scope_under_impl_type() {
         // Two impl blocks defining the same method name must not collide on
         // one file-level id — each scopes under its impl type.

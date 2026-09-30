@@ -6,7 +6,7 @@ sidebar_position: 3
 
 # Retrieval validation (September 2026)
 
-Latest run: September 27 evening, Windows, Ryzen AI 9 HX 370, Node 24, Python 3.12.12. The candidate is the 1.0.6 tree at `cbe8364` (chunked document retrieval, cross-conversation ranking, chunk overlap, introspection commands); Graphify v0.9.69 is pinned to `4139885a1212956cf69a76946fbde0d181ab85e9`. Each tool receives fresh archives of the same pinned corpora. Structural extraction only, no LLMs or embeddings, BFS depth 2, exact shared `o200k_base` counting and identical complete-line clipping for scoring. Raw budget overruns are counted before clipping. Each condition has one observation including process startup; timing differences are not statistically established.
+Latest run: September 27 evening, Windows, Ryzen AI 9 HX 370, Node 24, Python 3.12.12. The candidate is the 1.0.6 tree at `cbe8364` (chunked document retrieval, cross-conversation ranking, chunk overlap, introspection commands); Graphify v0.9.69 is pinned to `4139885a1212956cf69a76946fbde0d181ab85e9`. The September 30 targeted-search baseline section below ran separately on CLI 1.0.7 from `b0a9c2e`. Each tool receives fresh archives of the same pinned corpora. Structural extraction only, no LLMs or embeddings, BFS depth 2, exact shared `o200k_base` counting and identical complete-line clipping for scoring. Raw budget overruns are counted before clipping. Each condition has one observation including process startup; timing differences are not statistically established.
 
 ## Frozen file retrieval
 
@@ -56,6 +56,21 @@ This is the first generated-answer-correctness measurement in the project: retri
 **Independent-grader confirmation (OpenRouter, September 28).** The same 35 answer pairs were re-judged by the organizationally external promptfoo/OpenRouter grader (`openai/gpt-4o-mini` via `OPENROUTER_API_KEY`, reset that morning; symmetric 4,000-token budgets; run cost ≈ $0.12, 772k judging tokens — `scripts/bench/quality/out/promptfoo-results-20260928.json`). Verdicts: astria 77.1% pass (27/35), Graphify 65.7% (23/35), 0 errors. The external judge is stricter on both tools than the TypeSafe judge — it fails six questions on *both* sides (community detection, incremental change detection, tree-sitter language coverage, blast-radius, URL-ingestion safety, file-type detection) — but the ordering agrees with every other measurement: astria leads on answer quality under both graders.
 
 Two boundaries on this result. The 35 questions are the self-authored golden set on astria's own repository; they measure answer quality on one corpus, not general correctness. And each grading track is a single judge with a single run — agreement across two independent judges strengthens the ordering but remains a point estimate, not a statistical claim.
+
+## Targeted-search baseline (September 30)
+
+Every comparison above measures astria against Graphify; the question a graph skeptic asks is "what does this buy over just searching?" The external runner's deterministic baseline answers the measurable version: question-derived `rg` terms, term-occurrence file ranking, source windows around first matches — single-pass, no iteration, no golden knowledge. Eight symbol-heavy questions over the pinned Click/Express/ripgrep corpora, structural graphs only (CLI 1.0.7 from `b0a9c2e`, dirty tree recorded in provenance), depth 3, identical `o200k_base` complete-line clipping, failed queries kept in denominators. The 250/500 points extend the runner's default 1,000/4,000 sweep; full payloads and per-run provenance are checked in at [`worked/external-baseline/`](https://github.com/Nodesify/astria/tree/develop/worked/external-baseline).
+
+| Budget (tokens) | astria MRR | astria hit@1 | astria hit@5 | rg MRR | rg hit@1 | rg hit@5 | astria avg delivered | rg avg delivered |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 250 | 1.000 | 100% | 100% | 0.000 | 0% | 0% | 207 | 236 |
+| 500 | 1.000 | 100% | 100% | 0.000 | 0% | 0% | 474 | 493 |
+| 1,000 | 1.000 | 100% | 100% | 0.031 | 0% | 12.5% | 970 | 994 |
+| 4,000 | 1.000 | 100% | 100% | 0.092 | 0% | 25% | 3,971 | 3,992 |
+
+astria ranked the defining file first for 8/8 questions at every budget — 184–234 delivered tokens per response at the 250 budget, zero clipping (the engine's internal accounting and the external tokenizer agreed on every response). The baseline never ranked it first: its best ranks at 4,000 tokens were 4, 5, 9, 11 and 12, three questions missed at every budget, and extra context added distractors rather than corrections. Relative to this floor that is ~19× less delivered context for strictly better first-shot ranking (1,652 vs ~31,900 tokens across the set).
+
+Boundaries: the baseline is deterministic single-pass search, not an expert iterating on results — the harness's own caveat, and the honest limit of this comparison; a skilled agent refining queries and reading targeted files would beat this floor, and that comparison is unmeasured. The eight questions name their target symbols — astria's home turf; doc-intent behavior is measured on the paired tracks. One observation per condition, n=8, and graph-build cost (seconds per corpus, once; the baseline has none) is excluded from token accounting.
 
 ## Performance tradeoffs
 

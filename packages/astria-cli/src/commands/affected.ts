@@ -31,13 +31,24 @@ export async function affectedCommand(node: string, opts: {
     console.log(`Blast radius of "${result.seedLabel}" (depth ≤ ${depth}): ${result.total} node(s)`);
     console.log();
     let lastDepth = 0;
+    let sawInferred = false;
     for (const hit of result.hits) {
       if (hit.depth !== lastDepth) {
         lastDepth = hit.depth;
         console.log(`  depth ${hit.depth}:`);
       }
+      // INFERRED hops come from edges the source does not literally
+      // contain (reconstructed from name references); show them as weaker
+      // evidence than source-verified hops.
+      const provenance =
+        hit.provenance && hit.provenance !== 'EXTRACTED' ? ` ${hit.provenance}` : '';
+      if (provenance) sawInferred = true;
       const via = hit.viaFile ? `  [${hit.viaFile}]` : '';
-      console.log(`    ${hit.label} (${hit.relation})${via}`);
+      console.log(`    ${hit.label} (${hit.relation}${provenance})${via}`);
+    }
+    if (sawInferred) {
+      console.log();
+      console.log('  (hits marked INFERRED come from edges the source does not literally contain)');
     }
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);

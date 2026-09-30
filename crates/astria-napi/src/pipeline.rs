@@ -185,17 +185,51 @@ pub fn run_pipeline_with(
 /// `similar_to` edges. Runs when explicitly requested, or as a silent
 /// incremental refresh when embeddings already exist and the model cache is
 /// present (never downloads on its own). Explicit requests fail loudly.
+///
+/// A model swap orphans the old vectors: `has_embeddings` is
+/// current-model-scoped, so a graph embedded by an older model counts as
+/// "no embeddings". Foreign-model rows therefore also trigger the silent
+/// refresh — `embed_missing_nodes` re-embeds exactly those rows — so an
+/// ordinary `update` heals a model swap. When the current model is not
+/// cached the heal cannot run offline; the mismatch is then reported
+/// loudly instead of silently disabling semantic recall.
 #[cfg(feature = "embed")]
 fn embed_stage(db: &Connection, requested: bool) -> astria_core::Result<()> {
-    if !requested && !astria_embed::has_embeddings(db) {
+    let foreign: Vec<(String, usize)> = astria_embed::stored_embedding_models(db)?
+        .into_iter()
+        .filter(|(model, _)| model != astria_embed::MODEL_NAME)
+        .collect();
+    if !requested && !astria_embed::has_embeddings(db) && foreign.is_empty() {
         return Ok(());
     }
-    // The silent refresh path must stay offline: bail unless cached.
+    // The silent refresh path must stay offline: bail unless cached. With
+    // foreign-model rows present the bail would strand the graph with
+    // vectors no query can use — surface that instead of silence.
     if !requested && !astria_embed::model_cached() {
+        if !foreign.is_empty() {
+            let stored: Vec<String> = foreign
+                .iter()
+                .map(|(model, rows)| format!("{model} ({rows} rows)"))
+                .collect();
+            eprintln!(
+                "[astria] stored embeddings use {}, but the current model is {}; semantic query recall is empty until they are re-embedded. Run once with --embed (downloads the model) to migrate.",
+                stored.join(", "),
+                astria_embed::MODEL_NAME
+            );
+        }
         return Ok(());
     }
     match astria_embed::load_embedder() {
         Ok(mut embedder) => {
+            if !foreign.is_empty() {
+                let rows: usize = foreign.iter().map(|(_, n)| n).sum();
+                let models: Vec<&str> = foreign.iter().map(|(m, _)| m.as_str()).collect();
+                eprintln!(
+                    "[astria] embedding model changed: migrating {rows} node vectors from {} to {}",
+                    models.join(", "),
+                    astria_embed::MODEL_NAME
+                );
+            }
             let embedded = astria_embed::embed_missing_nodes(db, &mut embedder, 64)?;
             let edges = astria_embed::rebuild_similarity_edges(
                 db,
