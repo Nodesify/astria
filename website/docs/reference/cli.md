@@ -62,7 +62,7 @@ astria history [--limit 20] [--graph .]        # Show recent query history
 - `--no-embed` — skip auto-merged embedding seeds even when the graph carries vectors (same switch as `ASTRIA_EMBED=off`; see [Environment variables](./env-vars))
 - `--json` — machine-readable output instead of prose: `query` reports counts, the continuation cursor, build provenance, and the answer text; `explain`/`neighbors` return the strongest 20 neighbors (the native layer caps the list — `explain --json` also reports `neighborCount`, the true total); `affected` returns every hit with depth, relation, and edge provenance; `stats` returns counts and type breakdown
 
-`affected` marks every hop reached through an `INFERRED` edge (reconstructed from name references — direction is not guaranteed) as `calls INFERRED` with a legend line, so a blast radius never presents inferred edges as source-verified facts. Hits reached through `EXTRACTED` edges carry no marker.
+`affected` reports the evidence tier of every hop. `RESOLVED` (the default case) marks a call expression extracted from source whose name bound to exactly one definition — trustworthy for impact analysis. `EXTRACTED` marks directly-verified facts (contains/imports). Hops reached through `INFERRED` edges — no source locus, or a name too common to bind — are marked with a legend line, so a blast radius never presents guesswork as verified.
 
 `god-nodes`, `communities`, and `neighbors` give the CLI the same answers the [MCP tools](./mcp-tools) expose, so scripts and non-MCP agents can reach them too.
 

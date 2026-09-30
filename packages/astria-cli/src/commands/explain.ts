@@ -27,7 +27,10 @@ export async function explainCommand(node: string, opts: { graph: string; json?:
       console.log(`\nConnections (${result.neighborCount}):`);
       for (const n of result.neighbors) {
         const loc = n.neighborLine != null ? ` (${n.neighborFile}:${n.neighborLine})` : '';
-        console.log(`  --> ${n.neighborLabel} [${n.relation}] [${n.confidence}]${loc}`);
+        // Direction is the stored edge's: `-->` this node calls/imports the
+        // neighbor; `<--` the neighbor calls/imports this node.
+        const arrow = n.outgoing === false ? '<--' : '-->';
+        console.log(`  ${arrow} ${n.neighborLabel} [${n.relation}] [${n.confidence}]${loc}`);
       }
       if (result.neighborCount > result.neighbors.length) {
         const remaining = result.neighborCount - result.neighbors.length;

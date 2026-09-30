@@ -154,6 +154,40 @@ fn rust_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
     (!joined.is_empty()).then_some(joined)
 }
 
+/// An item's docstring in the language's own convention: Rust documents
+/// above the item (`///`), the others document inside the body.
+fn item_docstring(state: &ExtractionState, node: &Node) -> Option<String> {
+    if state.cfg.name == "Rust" {
+        rust_doc_comment(node, state.source)
+    } else {
+        extract_docstring(node, state.source, state.cfg)
+    }
+}
+
+/// Rust `//!` module doc block: contiguous inner doc comments at the top of
+/// the file, describing the module itself — the file node's own words for
+/// "what is this file" questions. A leading plain comment (license header)
+/// stops the block, so only a genuine module doc is captured.
+fn rust_module_doc(root: &Node, source: &[u8]) -> Option<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() != "line_comment" {
+            break;
+        }
+        let raw = node_text(&child, source);
+        let Some(doc) = raw.trim_start().strip_prefix("//!") else {
+            break;
+        };
+        lines.push(doc.trim().to_string());
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    let joined = lines.join(" ").trim().to_string();
+    (!joined.is_empty()).then_some(joined)
+}
+
 /// Whitespace-collapsed declaration text of a const/static item, capped
 /// like `node_signature`. There is no body to cut at — the initializer IS
 /// the answer content ("pub const MODEL: ... = JinaEmbeddingsV2BaseCode;")
@@ -868,7 +902,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                 }
                 .clone();
                 let class_id = make_node_id(&[&parent_id, &name]);
-                let docstring = extract_docstring(node, state.source, state.cfg);
+                let docstring = item_docstring(state, node);
 
                 if !scope_only {
                     state.nodes.push(ExtractedNode {
@@ -1048,7 +1082,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                 let parent_id = state.current_class_id.as_deref().unwrap_or(&state.file_id);
                 let func_id = make_node_id(&[parent_id, &name]);
 
-                let docstring = extract_docstring(node, state.source, state.cfg);
+                let docstring = item_docstring(state, node);
 
                 state.nodes.push(ExtractedNode {
                     id: func_id.clone(),
@@ -1438,7 +1472,9 @@ pub(crate) fn extract_single(
         lexical_scopes: Vec::new(),
     };
 
-    // Add file node
+    // Add file node. Rust module docs (`//!` block at the top) describe the
+    // file in the language's own convention — capture them so file-level
+    // questions match the file's own words.
     state.nodes.push(ExtractedNode {
         id: state.file_id.clone(),
         label: path
@@ -1448,7 +1484,11 @@ pub(crate) fn extract_single(
             .to_string(),
         source_file: path.to_path_buf(),
         source_line: None,
-        docstring: None,
+        docstring: if cfg.name == "Rust" {
+            rust_module_doc(&root, source_ref)
+        } else {
+            None
+        },
         signature: None,
         node_type: "file".to_string(),
     });

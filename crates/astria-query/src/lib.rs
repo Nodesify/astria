@@ -83,6 +83,11 @@ fn confidence_rank(confidence: &str) -> f64 {
     match confidence.to_uppercase().as_str() {
         "DECLARED" => 1.0,
         "EXTRACTED" => 0.9,
+        // A call expression extracted from source whose bare name bound to
+        // exactly one definition: stronger than co-occurrence inference,
+        // deliberately below the EXTRACTED/DECLARED tier so `--detail high`
+        // (compiler-grade facts) still excludes it.
+        "RESOLVED" => 0.85,
         "INFERRED" => 0.7,
         "SEMANTIC" => 0.6,
         _ => 0.5,
@@ -1594,6 +1599,15 @@ fn query_graph_loaded(
     // Token evidence is snapshotted first so semantic-only candidates (nodes
     // the embeddings surface but no query term touches) stay identifiable —
     // they qualify for the seed reservation below.
+    //
+    // Description-shaped questions — the ones whose identifying (salient)
+    // terms have no lexical evidence anywhere, like "auth flow" against a
+    // graph that never uses those words — are where embeddings are the
+    // whole point, and there a strong calibrated cosine ranks like a label
+    // match instead of capping below every partial token match. When the
+    // graph does answer the question's vocabulary, the tie-breaking cap
+    // stands: token evidence always outranks pure embedding recall.
+    let description_shaped = scored_nodes.max_salient_hits == 0;
     let token_scores: std::collections::HashMap<NodeIndex, f64> = if semantic.is_empty() {
         std::collections::HashMap::new()
     } else {
@@ -1604,8 +1618,13 @@ fn query_graph_loaded(
             scored.iter().map(|(s, i)| (*i, *s)).collect();
         for (node_id, cosine) in semantic {
             if let Some(&idx) = loaded.id_to_idx.get(node_id) {
+                let rescaled = if description_shaped {
+                    astria_core::calibration::SEMANTIC_CALIBRATION.description_seed_score(*cosine)
+                } else {
+                    semantic_seed_score(*cosine)
+                };
                 let entry = by_index.entry(idx).or_insert(0.0);
-                *entry = (*entry).max(semantic_seed_score(*cosine));
+                *entry = (*entry).max(rescaled);
             }
         }
         scored = by_index.into_iter().map(|(i, s)| (s, i)).collect();
@@ -2295,12 +2314,24 @@ pub fn explain_with_neighbors(
             continue;
         }
         let neighbor_data = &loaded.graph[neighbor];
-        let edge = edge_between(&loaded.graph, idx, neighbor);
+        // The stored orientation says which way the edge points: outgoing
+        // (this node → neighbor, e.g. it calls the neighbor) or incoming
+        // (neighbor → this node, e.g. the neighbor calls it). Rendering
+        // every connection as if the explained node were the source
+        // inverts caller/callee and misleads agents reading it.
+        let forward = loaded
+            .graph
+            .edges_directed(idx, Direction::Outgoing)
+            .find(|e| e.target() == neighbor)
+            .map(|e| e.weight());
+        let outgoing = forward.is_some();
+        let edge = forward.or_else(|| edge_between(&loaded.graph, idx, neighbor));
         neighbors.push(EdgeInfoResult {
             neighbor_id: neighbor_data.id.clone(),
             neighbor_label: neighbor_data.label.clone(),
             neighbor_file: loaded.display_path(&neighbor_data.source_file),
             neighbor_line: neighbor_data.source_line,
+            outgoing,
             relation: edge.map_or("?".to_string(), |e| e.relation.clone()),
             confidence: edge.map_or("?".to_string(), |e| e.confidence.clone()),
             strength: edge.map_or(0.0, |e| e.strength()),
@@ -2354,6 +2385,10 @@ pub struct EdgeInfoResult {
     pub neighbor_label: String,
     pub neighbor_file: String,
     pub neighbor_line: Option<i64>,
+    /// True when the stored edge points from the explained node to this
+    /// neighbor (it calls/imports the neighbor); false when the neighbor
+    /// points back (the neighbor calls/imports the explained node).
+    pub outgoing: bool,
     pub relation: String,
     pub confidence: String,
     pub strength: f64,
@@ -3818,6 +3853,52 @@ at the lake house');",
         assert!(
             text.contains("No confident match"),
             "the miss must be explicit, got: {text}"
+        );
+    }
+
+    #[test]
+    fn description_shaped_queries_rank_semantic_evidence_first() {
+        // "What handles the graviton phase" style: the question's
+        // identifying terms exist nowhere in the graph, the only lexical
+        // hits are one common word, and the embedding model points at the
+        // real answer with a strong calibrated cosine. There the semantic
+        // evidence must OUTRANK the partial token matches (lead the
+        // response), instead of capping below them and waiting for the
+        // reservation slot.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('l1', 'list_one', 'code', 'src/1.rs'),
+                ('l2', 'list_two', 'code', 'src/2.rs'),
+                ('l3', 'list_three', 'code', 'src/3.rs'),
+                ('l4', 'list_four', 'code', 'src/4.rs'),
+                ('l5', 'list_five', 'code', 'src/5.rs'),
+                ('target', 'maybe_install_helper', 'code', 'src/h.rs');",
+        )
+        .unwrap();
+        let g = loaded(&db, "adaptive-semantic");
+        let (text, _, _, _) = query_graph_loaded(
+            &db,
+            g,
+            "zanzibar graviton list",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            &[("target".to_string(), 0.9)],
+            false,
+            None,
+        )
+        .unwrap();
+        let first_node = text
+            .lines()
+            .find(|l| l.starts_with("NODE "))
+            .expect("the semantic answer's neighborhood should be returned");
+        assert!(
+            first_node.contains("maybe_install_helper"),
+            "with zero salient evidence a strong cosine must lead, got: {first_node}"
         );
     }
 

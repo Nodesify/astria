@@ -87,7 +87,7 @@ Shortest path between two nodes, with the relation of each hop.
 
 Blast radius: everything impacted by changing a node — reverse reachability over the impact relations (`calls`, `references`, `imports`, `imports_from`, `uses`, `depends_on`, `requires`, and `inherits` where a graph carries it). The `relation` argument accepts only these values.
 
-Every hop reports the edge it was reached through; hops across `INFERRED` edges are marked (e.g. `(calls INFERRED)`) with a legend line, because inferred edges are reconstructed from name references and their direction is not guaranteed — treat them as weaker evidence than source-verified hops when deciding what a change touches.
+Every hop reports the evidence tier of the edge it was reached through: `RESOLVED` (a call expression extracted from source, name bound to exactly one definition — trustworthy), `EXTRACTED` (directly verified), or `INFERRED` (no source locus, or a name too common to bind — marked with a legend line; treat as weaker evidence when deciding what a change touches).
 
 | Argument | Type | Default | Notes |
 |---|---|---|---|

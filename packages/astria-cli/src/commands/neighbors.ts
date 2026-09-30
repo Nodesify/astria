@@ -32,7 +32,9 @@ export async function neighborsCommand(
     }
     for (const n of neighbors) {
       const loc = n.neighborLine != null ? ` (${n.neighborFile}:${n.neighborLine})` : '';
-      console.log(`  ${n.neighborLabel} [${n.relation}]${loc}`);
+      // `->` this node points at the neighbor; `<-` the neighbor points back.
+      const arrow = n.outgoing === false ? '<-' : '->';
+      console.log(`  ${n.neighborLabel} ${arrow} [${n.relation}]${loc}`);
     }
     // The native layer caps the returned list; only the unfiltered view
     // hides entries.

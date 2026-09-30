@@ -37,18 +37,18 @@ export async function affectedCommand(node: string, opts: {
         lastDepth = hit.depth;
         console.log(`  depth ${hit.depth}:`);
       }
-      // INFERRED hops come from edges the source does not literally
-      // contain (reconstructed from name references); show them as weaker
-      // evidence than source-verified hops.
+      // INFERRED hops have no source locus (or a name too common to bind);
+      // show them as weaker evidence. RESOLVED hops (call extracted from
+      // source, unique binding) are trustworthy.
       const provenance =
         hit.provenance && hit.provenance !== 'EXTRACTED' ? ` ${hit.provenance}` : '';
-      if (provenance) sawInferred = true;
+      if (hit.provenance === 'INFERRED') sawInferred = true;
       const via = hit.viaFile ? `  [${hit.viaFile}]` : '';
       console.log(`    ${hit.label} (${hit.relation}${provenance})${via}`);
     }
     if (sawInferred) {
       console.log();
-      console.log('  (hits marked INFERRED come from edges the source does not literally contain)');
+      console.log('  (hits marked INFERRED have no source locus — reconstructed from name references)');
     }
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);

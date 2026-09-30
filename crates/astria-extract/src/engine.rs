@@ -326,6 +326,50 @@ mod tests {
     }
 
     #[test]
+    fn rust_doc_comments_become_docstrings() {
+        // Rust documents items with `///` above them, not strings in the
+        // body — without this pass the doc evidence the ranking and
+        // embedding layers rely on simply does not exist for Rust code.
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("service.rs");
+        fs::write(
+            &rs,
+            "\n//! Request handling for the ingest pipeline.\n//! Entry point for workers.\n\n/// Validates an incoming request against the size limit.\n/// Returns the rejected bytes on failure.\npub fn validate_request(raw: &[u8]) -> bool {\n    true\n}\n\n/// Shared configuration for all handlers.\nstruct Config {\n    limit: usize,\n}\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[rs], dir.path(), &db).unwrap();
+        let ext = &results[0];
+
+        let file_node = ext.nodes.iter().find(|n| n.label == "service.rs").unwrap();
+        assert_eq!(
+            file_node.docstring.as_deref(),
+            Some("Request handling for the ingest pipeline. Entry point for workers."),
+            "//! module doc describes the file node"
+        );
+
+        let f = ext
+            .nodes
+            .iter()
+            .find(|n| n.label == "validate_request()")
+            .unwrap();
+        assert_eq!(
+            f.docstring.as_deref(),
+            Some(
+                "Validates an incoming request against the size limit. Returns the rejected bytes on failure."
+            ),
+            "/// block above the function is its docstring"
+        );
+
+        let c = ext.nodes.iter().find(|n| n.label == "Config").unwrap();
+        assert_eq!(
+            c.docstring.as_deref(),
+            Some("Shared configuration for all handlers."),
+            "/// block above the struct is its docstring"
+        );
+    }
+
+    #[test]
     fn rust_impl_methods_scope_under_impl_type() {
         // Two impl blocks defining the same method name must not collide on
         // one file-level id — each scopes under its impl type.
