@@ -10,7 +10,7 @@
 [![docs](https://img.shields.io/badge/docs-latest-blue)](https://nodesify.github.io/astria/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-22-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Nodesify/astria)
+[![Ask DeepWiki](.github/assets/deepwiki-badge.svg)](https://deepwiki.com/Nodesify/astria)
 
 [Docs](https://nodesify.github.io/astria/) | [Getting started](https://nodesify.github.io/astria/docs/getting-started) | [CLI Reference](https://nodesify.github.io/astria/docs/reference/cli) | [Architecture](ARCHITECTURE.md) | [Worked examples](worked/) | [Changelog](CHANGELOG.md) | [Release notes](https://nodesify.github.io/astria/blog)
 
