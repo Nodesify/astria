@@ -8,7 +8,7 @@ import styles from './index.module.css';
 
 const Stats = [
   { value: '50–110×', label: 'fewer tokens per query, measured' },
-  { value: '21', label: 'languages via tree-sitter' },
+  { value: '25', label: 'languages via tree-sitter' },
   { value: '0', label: 'API keys required' },
   { value: '100%', label: 'local — your code never leaves' },
 ];

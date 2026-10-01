@@ -1,31 +1,117 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { writeTextAtomic } from './atomic';
 
-function readJson(filePath: string): any {
+/// Strip JSONC comments (// and /* */) outside string literals, then the
+/// trailing commas JSONC allows before `}` / `]`. Conservative: anything it
+/// cannot cleanly strip fails JSON.parse and readJson's abort path takes
+/// over — it never guesses a structure into existence.
+function stripJsonc(text: string): string {
+  let out = '';
+  let i = 0;
+  let inString = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inString) {
+      out += c;
+      if (c === '\\') {
+        out += text[i + 1] ?? '';
+        i += 2;
+        continue;
+      }
+      if (c === '"') inString = false;
+      i += 1;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      i += 1;
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i += 1;
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1;
+      i += 2;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out.replace(/,\s*([}\]])/g, '$1');
+}
+
+/// Read a JSON config the installer is about to merge into and rewrite.
+/// - a UTF-8 BOM is tolerated (stripped before parsing, never written back);
+/// - `jsonc: true` (VS Code's mcp.json is officially JSONC) strips comments
+///   and trailing commas before parsing;
+/// - an EMPTY or absent file parses as {} so a first install can create it;
+/// - a non-empty file that still fails to parse ABORTS with a clear error —
+///   silently continuing would overwrite the user's config with `{}` plus
+///   the astria entry, destroying everything else in it.
+function readJson(filePath: string, opts?: { jsonc?: boolean }): any {
   if (!fs.existsSync(filePath)) return {};
+  let text = fs.readFileSync(filePath, 'utf-8');
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  if (text.trim() === '') return {};
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  } catch {
-    return {};
+    return JSON.parse(text);
+  } catch (first) {
+    if (!opts?.jsonc) {
+      throw new Error(
+        `astria: ${filePath} is not valid JSON — refusing to rewrite it. ` +
+        `Fix or remove the file manually, then re-run install. (${(first as Error).message})`
+      );
+    }
+    try {
+      return JSON.parse(stripJsonc(text));
+    } catch (second) {
+      throw new Error(
+        `astria: ${filePath} is not valid JSONC — refusing to rewrite it. ` +
+        `Fix or remove the file manually, then re-run install. (${(second as Error).message})`
+      );
+    }
   }
 }
 
 function writeJson(filePath: string, data: any) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+  writeTextAtomic(filePath, JSON.stringify(data, null, 2) + '\n');
 }
 
 // Hook/rule templates carry the product name, so injected entries are
 // detected by substring. Current installs contain "astria"; pre-1.0
 // installs contain "graphify" (never both) — inject upgrades the legacy
 // entries in place and uninstall removes either era.
-const isCurrent = (s: string): boolean => s.includes('astria');
-const isLegacy = (s: string): boolean => !s.includes('astria') && s.includes('graphify');
-const isAnyEra = (s: string): boolean => s.includes('astria') || s.includes('graphify');
+//
+// The fingerprints are STRUCTURAL, not bare words: every hook template this
+// installer has ever written embeds a quoted ".astria"/".graphify" path
+// segment (or the pre-1.0 package name). A user's own hook that merely
+// invokes the CLI ("astria hook-guard read --strict", a wrapper named
+// my-astria-*) contains no quoted path segment and is never mistaken for a
+// managed entry — installing or uninstalling astria must not touch it.
+const hasCurrentFingerprint = (s: string): boolean =>
+  s.includes("'.astria") || s.includes('".astria');
+const hasLegacyFingerprint = (s: string): boolean =>
+  s.includes("'.graphify") || s.includes('".graphify') || s.includes('nodesify-graphify');
+const isCurrent = (s: string): boolean => hasCurrentFingerprint(s);
+const isLegacy = (s: string): boolean => !isCurrent(s) && hasLegacyFingerprint(s);
+const isAnyEra = (s: string): boolean => isCurrent(s) || hasLegacyFingerprint(s);
+
+/// True only for MCP server entries this installer produced (either era,
+/// either command shape). Uninstall deletes an entry only when this holds —
+/// a user-customized or user-written `astria`/`graphify` entry is preserved,
+/// the same rule inject already follows.
+const isInstallerServer = (entry: any): boolean =>
+  entry && typeof entry === 'object' &&
+  (entry.command === 'astria'
+    || entry.command === 'nodesify-graphify'
+    || (Array.isArray(entry.command)
+      && (entry.command[0] === 'astria' || entry.command[0] === 'nodesify-graphify')));
 
 // ---- Claude Code (.claude/settings.json) ----
 
@@ -406,14 +492,12 @@ export function cleanupLegacyCopilotMcp(projectDir: string): boolean {
   const legacyPath = path.join(projectDir, '.github', 'copilot-mcp.json');
   if (!fs.existsSync(legacyPath)) return false;
   const data = readJson(legacyPath);
-  const ours = (entry: any) =>
-    entry && (entry.command === 'astria' || entry.command === 'nodesify-graphify');
   let found = false;
   for (const container of ['servers', 'mcpServers']) {
     const node = data[container];
     if (typeof node !== 'object' || node === null) continue;
     const names = Object.keys(node).filter((n) => n === 'astria' || n === LEGACY_MCP_SERVER_NAME);
-    if (!names.every((n) => ours(node[n]))) continue;
+    if (!names.every((n) => isInstallerServer(node[n]))) continue;
     for (const n of names) delete node[n];
     if (Object.keys(node).length === 0) delete data[container];
     found = found || names.length > 0;
@@ -457,11 +541,7 @@ function cleanupLegacyConfigPaths(
     }
     if (!reachable) continue;
     const name = target.serverPath[target.serverPath.length - 1];
-    const ours = (entry: any) =>
-      entry && (entry.command === 'astria'
-        || (Array.isArray(entry.command) && entry.command[0] === 'astria')
-        || entry.command === 'nodesify-graphify');
-    if (!ours(node[name]) && !ours(node[LEGACY_MCP_SERVER_NAME])) continue;
+    if (!isInstallerServer(node[name]) && !isInstallerServer(node[LEGACY_MCP_SERVER_NAME])) continue;
     delete node[name];
     delete node[LEGACY_MCP_SERVER_NAME];
     for (let i = parents.length - 1; i >= 0; i--) {
@@ -505,8 +585,7 @@ export function injectCodexMcp(): boolean {
     return false;
   }
   const next = (text.length > 0 && !text.endsWith('\n') ? text + '\n' : text) + CODEX_MCP_BLOCK + '\n';
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, next, 'utf8');
+  writeTextAtomic(configPath, next);
   return true;
 }
 
@@ -537,7 +616,7 @@ export function removeCodexMcp(): boolean {
   let next = lines.join('\n');
   // Drop the blank line the injection left before the block, if any.
   next = next.replace(/\n\n+$/, '\n');
-  fs.writeFileSync(configPath, next, 'utf8');
+  writeTextAtomic(configPath, next);
   return true;
 }
 
@@ -550,7 +629,10 @@ export function injectAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
   // Config files a previous release wrote at since-corrected paths are
   // cleaned up whether or not the current target ends up being written.
   const removedLegacyFile = cleanupLegacyConfigPaths(projectDir, target, configPath);
-  const data = readJson(configPath);
+  // VS Code's mcp.json is officially JSONC — comments and trailing commas
+  // are legal there. Comments do not survive the rewrite (the merged file
+  // is written as plain JSON, which JSONC parsers accept).
+  const data = readJson(configPath, { jsonc: flavor === 'vscode' });
 
   let node: any = data;
   for (const key of target.serverPath.slice(0, -1)) {
@@ -636,7 +718,7 @@ export function removeAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
   const removedLegacyFile = cleanupLegacyConfigPaths(projectDir, target, configPath);
   if (!fs.existsSync(configPath)) return removedLegacyFile;
 
-  const data = readJson(configPath);
+  const data = readJson(configPath, { jsonc: flavor === 'vscode' });
   const parents: Array<[any, string]> = [];
   let node: any = data;
   for (const key of target.serverPath.slice(0, -1)) {
@@ -646,10 +728,18 @@ export function removeAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
   }
   const name = target.serverPath[target.serverPath.length - 1];
 
-  // The legacy-name and since-moved-path entries go too when present.
-  let removed = Boolean(node[name]) || Boolean(node[LEGACY_MCP_SERVER_NAME]);
-  delete node[name];
-  delete node[LEGACY_MCP_SERVER_NAME];
+  // Only entries this installer wrote are removed — the same rule inject
+  // follows. A user-customized or user-written `astria`/`graphify` entry
+  // survives uninstall.
+  let removed = false;
+  if (isInstallerServer(node[name])) {
+    delete node[name];
+    removed = true;
+  }
+  if (isInstallerServer(node[LEGACY_MCP_SERVER_NAME])) {
+    delete node[LEGACY_MCP_SERVER_NAME];
+    removed = true;
+  }
   if (target.legacyServerPath) {
     let legacyNode: any = data;
     const legacyParents: Array<[any, string]> = [];
@@ -663,19 +753,24 @@ export function removeAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
     }
     if (legacyNode) {
       const legacyName = target.legacyServerPath[target.legacyServerPath.length - 1];
-      if (legacyNode[legacyName] || legacyNode[LEGACY_MCP_SERVER_NAME]) removed = true;
-      delete legacyNode[legacyName];
-      delete legacyNode[LEGACY_MCP_SERVER_NAME];
+      if (isInstallerServer(legacyNode[legacyName])) {
+        delete legacyNode[legacyName];
+        removed = true;
+      }
+      if (isInstallerServer(legacyNode[LEGACY_MCP_SERVER_NAME])) {
+        delete legacyNode[LEGACY_MCP_SERVER_NAME];
+        removed = true;
+      }
       for (let i = legacyParents.length - 1; i >= 0; i--) {
         const [parent, key] = legacyParents[i];
-        if (Object.keys(parent[key]).length === 0) delete parent[key];
+        if (parent[key] !== undefined && Object.keys(parent[key]).length === 0) delete parent[key];
       }
     }
   }
   if (!removed) return removedLegacyFile;
   for (let i = parents.length - 1; i >= 0; i--) {
     const [parent, key] = parents[i];
-    if (Object.keys(parent[key]).length === 0) delete parent[key];
+    if (parent[key] !== undefined && Object.keys(parent[key]).length === 0) delete parent[key];
   }
   writeJson(configPath, data);
   return true;

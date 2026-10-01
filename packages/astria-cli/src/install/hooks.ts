@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import { writeTextAtomic } from './atomic';
 
 const UPDATE_HELPER = `
 const ASTRIA_HOOK_VERSION = '4';
@@ -152,6 +153,14 @@ function isOwnShebangOnly(content: string): boolean {
   return trimmed === '' || SHEBANGS.includes(trimmed);
 }
 
+/// The appended updater is JavaScript — appending it to a hook git runs with
+/// sh/bash (a user's shell hook, a husky-style hook) breaks that hook with
+/// syntax errors on every commit. Only a Node-script hook can absorb it.
+function isNodeScriptHook(content: string): boolean {
+  const firstLine = content.split('\n', 1)[0].trim();
+  return firstLine.startsWith('#!') && firstLine.includes('node');
+}
+
 function getGitRoot(projectDir: string): string | null {
   try {
     const result = execSync('git rev-parse --show-toplevel', {
@@ -206,7 +215,7 @@ function installHook(hooksDir: string, def: HookDef): string {
 
     if (isOwnShebangOnly(content)) {
       // File contained only our legacy section - rewrite fresh in current format
-      fs.writeFileSync(hookPath, '#!/usr/bin/env node\n\n' + def.script, 'utf-8');
+      writeTextAtomic(hookPath, '#!/usr/bin/env node\n\n' + def.script);
       return hadLegacy
         ? `${def.hookName}: migrated legacy hook to current format`
         : `${def.hookName}: installed`;
@@ -222,23 +231,31 @@ function installHook(hooksDir: string, def: HookDef): string {
           content.trim() === '' || SHEBANGS.includes(content.trim())
             ? '#!/usr/bin/env node\n\n' + def.script
             : content.trimEnd() + '\n\n' + def.script;
-        fs.writeFileSync(hookPath, refreshed, 'utf-8');
+        writeTextAtomic(hookPath, refreshed);
         return `${def.hookName}: updated script to current version`;
       }
       if (hadLegacy) {
-        fs.writeFileSync(hookPath, content, 'utf-8');
+        writeTextAtomic(hookPath, content);
         return `${def.hookName}: already installed (stale legacy section removed)`;
       }
       return `${def.hookName}: already installed`;
     }
 
-    fs.writeFileSync(hookPath, content.trimEnd() + '\n\n' + def.script, 'utf-8');
+    // Appending is only safe when the existing hook is a Node script; git
+    // executes hook files with sh when they lack a node shebang, and a
+    // JavaScript block appended to shell code breaks the hook (syntax
+    // errors on every commit) instead of adding the updater.
+    if (!isNodeScriptHook(content)) {
+      return `${def.hookName}: skipped (existing hook is not a Node script; appending the astria updater would break it — bridge it manually if you want graph refreshes)`;
+    }
+
+    writeTextAtomic(hookPath, content.trimEnd() + '\n\n' + def.script);
     return hadLegacy
       ? `${def.hookName}: appended to existing hook (replaced legacy section)`
       : `${def.hookName}: appended to existing hook`;
   }
 
-  fs.writeFileSync(hookPath, '#!/usr/bin/env node\n\n' + def.script, 'utf-8');
+  writeTextAtomic(hookPath, '#!/usr/bin/env node\n\n' + def.script);
   try { fs.chmodSync(hookPath, 0o755); } catch { /* Windows */ }
   return `${def.hookName}: installed`;
 }
@@ -263,7 +280,7 @@ function uninstallHook(hooksDir: string, def: HookDef): string {
     return `${def.hookName}: removed (deleted empty hook)`;
   }
 
-  fs.writeFileSync(hookPath, content, 'utf-8');
+  writeTextAtomic(hookPath, content);
   return `${def.hookName}: removed`;
 }
 

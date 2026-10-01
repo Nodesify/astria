@@ -26,14 +26,11 @@ if (run.status !== 0) {
   process.exit(run.status ?? 1);
 }
 
-const candidates = [
-  'target/release/astria_napi.dll',
-  'target/release/libastria_napi.so',
-  'target/release/libastria_napi.dylib',
-  'target/debug/astria_napi.dll',
-  'target/debug/libastria_napi.so',
-  'target/debug/libastria_napi.dylib',
-];
+// The just-built profile wins: with --debug a stale target/release artifact
+// must not shadow the fresh target/debug build (it always did before).
+const profiles = debug ? ['debug', 'release'] : ['release', 'debug'];
+const libNames = ['astria_napi.dll', 'libastria_napi.so', 'libastria_napi.dylib'];
+const candidates = profiles.flatMap((profile) => libNames.map((name) => `target/${profile}/${name}`));
 const lib = candidates
   .map((rel) => path.join(repoRoot, rel))
   .find((p) => existsSync(p));

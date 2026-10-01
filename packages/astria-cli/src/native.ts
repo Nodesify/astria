@@ -29,23 +29,37 @@ function getPlatformSuffix(): string {
 
 /// Require the fallback platform package for a suffix. Module names are
 /// literal strings in the switch arms — nothing is constructed at runtime —
-/// so require() only ever sees fixed, known package names.
+/// so require() only ever sees fixed, known package names. Every arm is
+/// guarded: when optionalDependencies did not install the package (npm
+/// --omit=optional, a registry hiccup, pnpm/yarn quirks) the require throws
+/// MODULE_NOT_FOUND, which surfaces as undefined here instead of crashing
+/// the process with a raw stack — letting loadNativeBinding's diagnostic
+/// below actually run for its target scenario.
 function requirePlatformPackage(suffix: string): any {
+  const attempt = (name: string): any => {
+    try {
+      return require(name);
+    } catch {
+      return undefined;
+    }
+  };
   switch (suffix) {
     case 'win32-x64-msvc':
-      return require('@nodesify/astria-win32-x64-msvc');
+      return attempt('@nodesify/astria-win32-x64-msvc');
     case 'darwin-x64':
-      return require('@nodesify/astria-darwin-x64');
+      return attempt('@nodesify/astria-darwin-x64');
     case 'darwin-arm64':
-      return require('@nodesify/astria-darwin-arm64');
+      return attempt('@nodesify/astria-darwin-arm64');
     case 'linux-x64-gnu':
-      return require('@nodesify/astria-linux-x64-gnu');
+      return attempt('@nodesify/astria-linux-x64-gnu');
     case 'linux-arm64-gnu':
-      return require('@nodesify/astria-linux-arm64-gnu');
+      return attempt('@nodesify/astria-linux-arm64-gnu');
+    // Musl targets are recognized so the error below can say exactly what
+    // is missing; no musl platform package is published yet.
     case 'linux-x64-musl':
-      return require('@nodesify/astria-linux-x64-musl');
+      return attempt('@nodesify/astria-linux-x64-musl');
     case 'linux-arm64-musl':
-      return require('@nodesify/astria-linux-arm64-musl');
+      return attempt('@nodesify/astria-linux-arm64-musl');
     default:
       return undefined;
   }
@@ -90,51 +104,66 @@ function loadNativeBinding(): any {
   }
 
   throw new Error(
-    `@nodesify/astria: failed to load native module for ${process.platform}-${process.arch}.\n` +
-    `Tried: local astria.node and the platform fallback package\n` +
-    `Ensure the correct platform package is installed.`,
+    `@nodesify/astria: failed to load native module for ${process.platform}-${process.arch} ` +
+    `(resolved target: ${getPlatformSuffix()}).\n` +
+    `Tried: local astria.node and the platform fallback package.\n` +
+    `If the platform package is missing, reinstall without --omit=optional ` +
+    `(npm install @nodesify/astria --force). ` +
+    `musl-based Linux is not published yet — use a glibc-based image or build from source.`
   );
 }
 
-const binding = loadNativeBinding();
+// The binding loads lazily on first native call, not at import time: pure-JS
+// commands (`astria install`, `astria uninstall`, `--version`) must work on a
+// machine where the binary is missing — uninstall is the repair path.
+let cachedBinding: any;
+function binding(): any {
+  if (cachedBinding === undefined) {
+    cachedBinding = loadNativeBinding();
+  }
+  return cachedBinding;
+}
 
-export const runPipeline = binding.runPipeline;
-export const updatePipeline = binding.updatePipeline;
-export const graphStats = binding.graphStats;
-export const graphBuildInfo = binding.graphBuildInfo;
-export const godNodes = binding.godNodes;
-export const listCommunities = binding.listCommunities;
-export const explainNode = binding.explainNode;
-export const exportJsonCmd = binding.exportJsonCmd;
-export const exportHtmlCmd = binding.exportHtmlCmd;
-export const exportGraphmlCmd = binding.exportGraphmlCmd;
-export const exportCypherCmd = binding.exportCypherCmd;
-export const exportSvgCmd = binding.exportSvgCmd;
-export const neo4jPushCmd = binding.neo4jPushCmd;
-export const healthReport = binding.healthReport;
-export const riskReport = binding.riskReport;
-export const tokenBenchmark = binding.tokenBenchmark;
-export const queryGraph = binding.queryGraph;
-export const callflowMermaid = binding.callflowMermaid;
-export const repoMap = binding.repoMap;
-export const findPath = binding.findPath;
-export const clusterOnly = binding.clusterOnly;
-export const mergeGraphs = binding.mergeGraphs;
-export const diffGraphs = binding.diffGraphs;
-export const graphHistory = binding.graphHistory;
-export const affectedNode = binding.affectedNode;
-export const runMcpServer = binding.runMcpServer;
-export const exportTree = binding.exportTree;
-export const exportWiki = binding.exportWiki;
-export const exportObsidian = binding.exportObsidian;
-export const ingestUrl = binding.ingestUrl;
-export const saveTranscript = binding.saveTranscript;
-export const diagnoseGraph = binding.diagnoseGraph;
-export const saveQueryResult = binding.saveQueryResult;
-export const reflectGraph = binding.reflect;
-export const globalAdd = binding.globalAdd;
-export const globalRemove = binding.globalRemove;
-export const globalList = binding.globalList;
-export const globalPath = binding.globalPath;
-export const ingestScip = binding.ingestScip;
-export const ingestPostgres = binding.ingestPostgres;
+// Every export defers to binding() at call time; a missing binary therefore
+// throws one clear diagnostic when a native command actually runs, and never
+// at module load.
+export const runPipeline = (...args: any[]) => binding().runPipeline(...args);
+export const updatePipeline = (...args: any[]) => binding().updatePipeline(...args);
+export const graphStats = (...args: any[]) => binding().graphStats(...args);
+export const graphBuildInfo = (...args: any[]) => binding().graphBuildInfo(...args);
+export const godNodes = (...args: any[]) => binding().godNodes(...args);
+export const listCommunities = (...args: any[]) => binding().listCommunities(...args);
+export const explainNode = (...args: any[]) => binding().explainNode(...args);
+export const exportJsonCmd = (...args: any[]) => binding().exportJsonCmd(...args);
+export const exportHtmlCmd = (...args: any[]) => binding().exportHtmlCmd(...args);
+export const exportGraphmlCmd = (...args: any[]) => binding().exportGraphmlCmd(...args);
+export const exportCypherCmd = (...args: any[]) => binding().exportCypherCmd(...args);
+export const exportSvgCmd = (...args: any[]) => binding().exportSvgCmd(...args);
+export const neo4jPushCmd = (...args: any[]) => binding().neo4jPushCmd(...args);
+export const healthReport = (...args: any[]) => binding().healthReport(...args);
+export const riskReport = (...args: any[]) => binding().riskReport(...args);
+export const tokenBenchmark = (...args: any[]) => binding().tokenBenchmark(...args);
+export const queryGraph = (...args: any[]) => binding().queryGraph(...args);
+export const callflowMermaid = (...args: any[]) => binding().callflowMermaid(...args);
+export const repoMap = (...args: any[]) => binding().repoMap(...args);
+export const findPath = (...args: any[]) => binding().findPath(...args);
+export const clusterOnly = (...args: any[]) => binding().clusterOnly(...args);
+export const mergeGraphs = (...args: any[]) => binding().mergeGraphs(...args);
+export const diffGraphs = (...args: any[]) => binding().diffGraphs(...args);
+export const graphHistory = (...args: any[]) => binding().graphHistory(...args);
+export const affectedNode = (...args: any[]) => binding().affectedNode(...args);
+export const runMcpServer = (...args: any[]) => binding().runMcpServer(...args);
+export const exportTree = (...args: any[]) => binding().exportTree(...args);
+export const exportWiki = (...args: any[]) => binding().exportWiki(...args);
+export const exportObsidian = (...args: any[]) => binding().exportObsidian(...args);
+export const ingestUrl = (...args: any[]) => binding().ingestUrl(...args);
+export const saveTranscript = (...args: any[]) => binding().saveTranscript(...args);
+export const diagnoseGraph = (...args: any[]) => binding().diagnoseGraph(...args);
+export const saveQueryResult = (...args: any[]) => binding().saveQueryResult(...args);
+export const reflectGraph = (...args: any[]) => binding().reflect(...args);
+export const globalAdd = (...args: any[]) => binding().globalAdd(...args);
+export const globalRemove = (...args: any[]) => binding().globalRemove(...args);
+export const globalList = (...args: any[]) => binding().globalList(...args);
+export const globalPath = (...args: any[]) => binding().globalPath(...args);
+export const ingestScip = (...args: any[]) => binding().ingestScip(...args);
+export const ingestPostgres = (...args: any[]) => binding().ingestPostgres(...args);

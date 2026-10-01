@@ -217,7 +217,11 @@ pub fn decode(buf: &[u8]) -> Result<(Value, usize), String> {
             ))
         }
         0x90..=0x9F | 0xD4 | 0xD5 | 0xD6 => {
-            let mut items = Vec::with_capacity(size);
+            // Every element consumes at least one byte, so a real list never
+            // has more elements than the buffer has left. Bounding the
+            // capacity by that turns a hostile LIST_32 length into the
+            // ordinary "truncated" error below instead of a giant allocation.
+            let mut items = Vec::with_capacity(size.min(decode_capacity(buf, pos)));
             for _ in 0..size {
                 let (value, used) = decode(&buf[pos..])?;
                 pos += used;
@@ -242,7 +246,8 @@ pub fn decode(buf: &[u8]) -> Result<(Value, usize), String> {
             // The tag byte (position 1) is read by `decode_struct`; here we
             // only surface the field values.
             pos = 2;
-            let mut fields = Vec::with_capacity(size);
+            // Same server-length bound as the list arm above.
+            let mut fields = Vec::with_capacity(size.min(decode_capacity(buf, pos)));
             for _ in 0..size {
                 let (value, used) = decode(&buf[pos..])?;
                 pos += used;
@@ -296,13 +301,23 @@ pub fn decode_struct(buf: &[u8]) -> Result<(u8, Vec<Value>, usize), String> {
         .get(header - 1)
         .ok_or("packstream: missing struct tag")?;
     let mut pos = header;
-    let mut fields = Vec::with_capacity(size);
+    // Same server-length bound as decode's list arm: a declared field count
+    // beyond the remaining bytes is truncation, not a reason to allocate.
+    let mut fields = Vec::with_capacity(size.min(decode_capacity(buf, pos)));
     for _ in 0..size {
         let (value, used) = decode(&buf[pos..])?;
         pos += used;
         fields.push(value);
     }
     Ok((tag, fields, pos))
+}
+
+/// Upper bound on a container's element count given a buffer of `len`
+/// remaining bytes: each encoded element (or map key) costs at least one
+/// byte, so a well-formed message can never exceed this. Used to clamp
+/// server-supplied sizes before any allocation.
+fn decode_capacity(buf: &[u8], pos: usize) -> usize {
+    buf.len().saturating_sub(pos)
 }
 
 fn slice2(buf: &[u8], at: usize) -> Result<[u8; 2], String> {
@@ -328,6 +343,34 @@ fn slice8(buf: &[u8], at: usize) -> Result<[u8; 8], String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_list_length_is_truncation_not_allocation() {
+        // LIST_32 declaring ~4 billion elements in a 5-byte buffer: before
+        // the capacity bound this was a Vec::with_capacity(0xFFFF_FFFF)
+        // abort on the allocator; it must surface as an ordinary error.
+        let buf = [0xD6u8, 0xFF, 0xFF, 0xFF, 0xFF];
+        let result = decode(&buf);
+        assert!(result.is_err(), "oversized list must error, got {result:?}");
+    }
+
+    #[test]
+    fn hostile_map_length_is_truncation_not_allocation() {
+        // MAP_32 declaring 4 billion entries in 5 bytes; map decode does not
+        // preallocate, but the key loop must terminate with an error rather
+        // than spin on an exhausted buffer.
+        let buf = [0xDAu8, 0xFF, 0xFF, 0xFF, 0xFF];
+        let result = decode(&buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn hostile_struct_field_count_is_truncation_not_allocation() {
+        // STRUCT_8 declaring 200 fields but only a tag byte present.
+        let buf = [0xDCu8, 0xC8, 0x70];
+        let result = decode_struct(&buf);
+        assert!(result.is_err());
+    }
 
     fn enc(value: &Value) -> Vec<u8> {
         let mut buf = Vec::new();

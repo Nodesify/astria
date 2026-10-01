@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { writeTextAtomic } from './atomic';
 
 export type SectionResult = 'added' | 'updated' | 'unchanged';
 
@@ -33,18 +34,20 @@ function headingLevel(header: string): number {
   return (header.match(/^#+/) || ['#'])[0].length;
 }
 
-// Locate a section headed by `header` (matched at line start) and bounded
-// by the next heading at the same or higher level, or EOF.
+// Locate a section headed by `header` and bounded by the next heading at
+// the same or higher level, or EOF. The heading must end the line, so
+// `## astria` never matches `## astria-guide` — a prefix match here used to
+// hijack both the refresh path and uninstall.
 function findSection(existing: string, header: string): { start: number; end: number } | null {
-  let start = existing.indexOf('\n' + header);
-  if (start === -1) {
-    if (!existing.startsWith(header)) return null;
-    start = 0;
-  }
+  const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const heading = new RegExp(`(^|\\n)${escaped}[ \\t]*(?=\\r?\\n|$)`);
+  const match = existing.match(heading);
+  if (!match) return null;
+  const start = (match.index ?? 0) + (match[1] ? 1 : 0);
   const level = headingLevel(header);
   const boundary = new RegExp(`\\n#{1,${level}} `);
-  const match = existing.slice(start + 1).match(boundary);
-  const end = match?.index !== undefined ? start + 1 + match.index : existing.length;
+  const boundaryMatch = existing.slice(start + 1).match(boundary);
+  const end = boundaryMatch?.index !== undefined ? start + 1 + boundaryMatch.index : existing.length;
   return { start, end };
 }
 
@@ -86,10 +89,9 @@ export function injectSection(filePath: string, content: string): SectionResult 
     const sectionText = existing.slice(bounds.start, bounds.end);
     if (stripMarker(sectionText) === content.trim()) return 'unchanged';
     if (!isManaged(sectionText)) return 'unchanged';
-    fs.writeFileSync(
+    writeTextAtomic(
       filePath,
-      existing.slice(0, bounds.start) + withMarker(content) + existing.slice(bounds.end),
-      'utf-8'
+      existing.slice(0, bounds.start) + withMarker(content) + existing.slice(bounds.end)
     );
     return 'updated';
   }
@@ -101,15 +103,14 @@ export function injectSection(filePath: string, content: string): SectionResult 
     if (!bounds) continue;
     const sectionText = existing.slice(bounds.start, bounds.end);
     if (!isManaged(sectionText)) return 'unchanged';
-    fs.writeFileSync(
+    writeTextAtomic(
       filePath,
-      existing.slice(0, bounds.start) + withMarker(content) + existing.slice(bounds.end),
-      'utf-8'
+      existing.slice(0, bounds.start) + withMarker(content) + existing.slice(bounds.end)
     );
     return 'updated';
   }
 
-  fs.writeFileSync(filePath, existing.replace(/\n*$/, '\n\n') + withMarker(content) + '\n', 'utf-8');
+  writeTextAtomic(filePath, existing.replace(/\n*$/, '\n\n') + withMarker(content) + '\n');
   return 'added';
 }
 
@@ -121,6 +122,12 @@ export function removeSection(filePath: string): boolean {
   for (const header of [...HEADERS, ...LEGACY_HEADERS]) {
     let bounds = findSection(content, header);
     while (bounds) {
+      const sectionText = content.slice(bounds.start, bounds.end);
+      // Uninstall removes only managed sections — an unmarked `## astria`
+      // block is user-owned (inject already leaves it alone), and a heading
+      // like `## astria-guide` is never matched at all thanks to the
+      // end-of-line anchor in findSection.
+      if (!isManaged(sectionText)) break;
       content = content.slice(0, bounds.start) + content.slice(bounds.end);
       changed = true;
       bounds = findSection(content, header);
@@ -131,7 +138,7 @@ export function removeSection(filePath: string): boolean {
   if (content.trim().length === 0) {
     fs.unlinkSync(filePath);
   } else {
-    fs.writeFileSync(filePath, content, 'utf-8');
+    writeTextAtomic(filePath, content);
   }
   return true;
 }
