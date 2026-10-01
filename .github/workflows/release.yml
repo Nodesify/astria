@@ -41,15 +41,37 @@ jobs:
         run: node scripts/extract-changelog.mjs "${GITHUB_REF_NAME#v}" --check
       - name: Verify MCP Registry server.json matches the tag
         # The official MCP Registry requires server.json, package.json and the
-        # npm package to agree on the version (and package.json carries the
-        # matching mcpName). Fail fast like the two checks above.
+        # npm package to agree on version AND name. v1.0.9 shipped a lowercase
+        # mcpName that could never validate against the io.github.Nodesify/*
+        # OIDC grant — and because npm is immutable, the mismatch was only
+        # discoverable after publish, unfixable without burning a version.
+        # Check every field the registry compares before the build matrix
+        # spends 30+ minutes.
         run: |
-          server_version=$(node -p "JSON.parse(require('fs').readFileSync('server.json', 'utf8')).version")
-          pkg_version=$(node -p "require('./packages/astria-cli/package.json').version")
-          if [ "$server_version" != "$pkg_version" ]; then
-            echo "::error::server.json version ${server_version} does not match packages/astria-cli/package.json version ${pkg_version}"
-            exit 1
-          fi
+          node - <<'EOF'
+          const fs = require('fs');
+          const server = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+          const pkg = JSON.parse(fs.readFileSync('packages/astria-cli/package.json', 'utf8'));
+          const problems = [];
+          if (server.version !== pkg.version)
+            problems.push(`server.json version ${server.version} != package.json version ${pkg.version}`);
+          if (!pkg.mcpName)
+            problems.push('package.json declares no mcpName for the registry namespace');
+          if (server.name !== pkg.mcpName)
+            problems.push(`server.json name ${server.name} != package.json mcpName ${pkg.mcpName}`);
+          const npm = (server.packages || []).find((p) => p.registryType === 'npm');
+          if (!npm) {
+            problems.push('server.json declares no npm package entry');
+          } else {
+            if (npm.identifier !== pkg.name)
+              problems.push(`server.json npm identifier ${npm.identifier} != package.json name ${pkg.name}`);
+            if (npm.version !== pkg.version)
+              problems.push(`server.json npm version ${npm.version} != package.json version ${pkg.version}`);
+          }
+          for (const p of problems) console.error(`::error::${p}`);
+          if (problems.length) process.exit(1);
+          console.log(`server.json matches package.json: ${server.name} @ ${pkg.version}`);
+          EOF
 
   build:
     runs-on: ${{ matrix.os }}
@@ -270,7 +292,19 @@ jobs:
         # exchanges the job's OIDC token (id-token: write above) for a
         # registry token and only permits io.github.<owner>/ namespaces —
         # server.json must match the org login's exact case (Nodesify).
+        # The publisher is pinned and checksum-verified like the SHA-pinned
+        # actions above: this step runs with the job's OIDC and GitHub
+        # tokens, so a floating releases/latest download would execute
+        # whatever the registry repo most recently shipped. Bump the tag and
+        # sha256 together, deliberately. The publish job is ubuntu-only, so
+        # the linux_amd64 asset is hardcoded.
+        env:
+          MCP_PUBLISHER_TAG: v1.8.1
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum --check -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
