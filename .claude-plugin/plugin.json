@@ -15,5 +15,12 @@
     "code-analysis",
     "rust",
     "tree-sitter"
-  ]
+  ],
+  "mcpServers": {
+    "astria": {
+      "type": "stdio",
+      "command": "astria",
+      "args": ["mcp"]
+    }
+  }
 }
