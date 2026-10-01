@@ -4,6 +4,11 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.0.10] — 2026-10-01
+
+### Distribution fix — MCP Registry namespace case
+- **v1.0.9 reached npm but not the registry** — the official MCP Registry publish failed with 403: the GitHub OIDC grant is `io.github.Nodesify/*` (the org login's case is significant) while `server.json` declared `io.github.nodesify/astria`. npm is immutable, and registry validation compares the published package's `mcpName` against the server name exactly — so both move to `io.github.Nodesify/astria` in this release; 1.0.9's lowercase `mcpName` can never validate. Automated registry publishing, the Claude Code plugin marketplace, the Homebrew tap, and `smithery.yaml` are unchanged from 1.0.9.
+
 ## [1.0.9] — 2026-10-01
 
 ### Distribution — official MCP Registry, Claude Code plugin marketplace, Homebrew tap, Smithery

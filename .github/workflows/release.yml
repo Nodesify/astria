@@ -224,17 +224,22 @@ jobs:
               fi
             }
           fi
-      - name: Publish to the official MCP Registry
-        # Runs after the npm publishes (the registry validates mcpName in the
-        # published package) and before the GitHub Release, so a Release never
-        # announces an unlisted server. `login github-oidc` exchanges the
-        # job's OIDC token (id-token: write above) for a registry token and
-        # only allows publishing under io.github.<owner>/ — which is the
-        # namespace server.json uses.
+      - name: Wait for npm to serve the published version
+        # The MCP Registry validates the published package's mcpName by
+        # fetching it from npm, and npm's CDN can 404 a just-published
+        # version for a few seconds (v1.0.10 hit exactly this race).
+        # Poll until the version is visible, then hard-fail if it never is.
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
-          ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
+          version=$(node -p "require('./packages/astria-cli/package.json').version")
+          for i in $(seq 1 24); do
+            if npm view "@nodesify/astria@$version" version > /dev/null 2>&1; then
+              echo "npm is serving @nodesify/astria@$version"
+              break
+            fi
+            echo "npm not serving $version yet (attempt $i/24) — waiting 5s"
+            sleep 5
+          done
+          npm view "@nodesify/astria@$version" version > /dev/null
       - name: Debug npm auth failure
         if: failure()
         run: |
@@ -255,3 +260,17 @@ jobs:
         with:
           body_path: release-notes.md
           generate_release_notes: true
+      - name: Publish to the official MCP Registry
+        # Last step on purpose: the GitHub Release must exist even when the
+        # registry rejects or races (v1.0.9's 403 case mismatch and v1.0.10's
+        # npm-CDN race both aborted the job mid-flight and left v1.0.9 with
+        # no Release at all). The npm publishes above have already succeeded,
+        # so a failure here only delays the directory listing — re-run this
+        # failed job to retry, every step is idempotent. `login github-oidc`
+        # exchanges the job's OIDC token (id-token: write above) for a
+        # registry token and only permits io.github.<owner>/ namespaces —
+        # server.json must match the org login's exact case (Nodesify).
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
