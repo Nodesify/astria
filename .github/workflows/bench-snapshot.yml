@@ -11,8 +11,8 @@ on:
     paths: ['.github/bench-trigger']
 
 permissions:
-  contents: write
-  actions: write
+  # Least privilege: only the jobs that push snapshots get write (below).
+  contents: read
 
 concurrency:
   group: bench-snapshot
@@ -20,6 +20,10 @@ concurrency:
 
 jobs:
   snapshot:
+    permissions:
+      # Commits the snapshot to develop; `gh workflow run` needs actions:write.
+      contents: write
+      actions: write
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -91,7 +95,9 @@ jobs:
           node scripts/bench/quality/promptfoo/gen-promptfoo-tests.mjs
           mkdir -p scripts/bench/quality/out
           cd scripts/bench/quality/promptfoo
-          npx --yes promptfoo@latest eval -c promptfooconfig.yaml --grader "$JUDGE_MODEL" --output ../../out/promptfoo-results.json
+          # Pinned: this step runs with the judge API key in env, and npx
+          # would otherwise execute whatever promptfoo most recently shipped.
+          npx --yes promptfoo@0.123.1 eval -c promptfooconfig.yaml --grader "$JUDGE_MODEL" --output ../../out/promptfoo-results.json
 
       - name: Upload blind-judging results
         if: always()
@@ -104,7 +110,13 @@ jobs:
   # Retrieval-quality benchmark: the published CLI answering the golden QA
   # set over this repo's own graph. This published-release snapshot is separate
   # from quality.yml, which gates proposed source changes with a local build.
+  # Runs after `snapshot` on purpose: both jobs end by rebasing onto develop
+  # and pushing, and the workflow-level concurrency group serializes runs,
+  # not jobs within a run — run in parallel, one push loses the race.
   quality:
+    needs: [snapshot]
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

@@ -884,13 +884,21 @@ function testCopilotInstructions() {
   process.env.USERPROFILE = fakeHome;
   process.env.HOME = fakeHome;
   try {
+    // Seed a 1.0.9/1.0.10-era copy under the home dir — Copilot reads
+    // repo-scoped .github/skills/ (docs.github.com), so install must
+    // retire that stale copy.
+    const staleHomeSkill = path.join(fakeHome, '.github', 'skills', 'astria', 'SKILL.md');
+    fs.mkdirSync(path.dirname(staleHomeSkill), { recursive: true });
+    fs.writeFileSync(staleHomeSkill, 'stale\n');
+
     const results = installPlatform('copilot', project);
 
     // Skill file lands under the project-scoped .github skills dir.
     assert(
-      fs.existsSync(path.join(fakeHome, '.github', 'skills', 'astria', 'SKILL.md')),
+      fs.existsSync(path.join(project, '.github', 'skills', 'astria', 'SKILL.md')),
       'Copilot: skill file installed'
     );
+    assert(!fs.existsSync(staleHomeSkill), 'Copilot: stale home-dir skill copy removed');
     // AGENTS.md gets the managed section...
     assert(
       fs.readFileSync(path.join(project, 'AGENTS.md'), 'utf-8').includes('## astria'),
@@ -930,7 +938,7 @@ function testCopilotInstructions() {
       : '';
     assert(!agentsAfter.includes('## astria'), 'Copilot: uninstall removes AGENTS.md section');
     assert(
-      !fs.existsSync(path.join(fakeHome, '.github', 'skills', 'astria', 'SKILL.md')),
+      !fs.existsSync(path.join(project, '.github', 'skills', 'astria', 'SKILL.md')),
       'Copilot: uninstall removes skill file'
     );
   } finally {
@@ -1008,6 +1016,123 @@ function testPiExtension() {
   }
 }
 
+// ---- 1.0.11 audit fixes: parse-abort, JSONC, ownership fingerprints ----
+
+function testAuditFixes() {
+  // H2: a non-empty unparseable strict-JSON config aborts and is left
+  // byte-identical — the pre-1.0.11 behavior reset it to {} and overwrote.
+  const brokenDir = tmpDir();
+  const brokenPath = path.join(brokenDir, '.mcp.json');
+  const brokenText = '{"mcpServers": {"db": {"command": "db-server"}} trailing-garbage';
+  fs.writeFileSync(brokenPath, brokenText, 'utf-8');
+  let threw = false;
+  try {
+    injectAgentMcp(brokenDir, 'claude');
+  } catch (e: any) {
+    threw = String(e.message).includes('refusing to rewrite');
+  }
+  assert(threw, 'audit: unparseable JSON aborts with a refusal');
+  assert(fs.readFileSync(brokenPath, 'utf-8') === brokenText, 'audit: aborted file untouched');
+  fs.rmSync(brokenDir, { recursive: true, force: true });
+
+  // H2: a UTF-8 BOM does not abort — it is stripped for parsing only.
+  const bomDir = tmpDir();
+  const bomPath = path.join(bomDir, '.mcp.json');
+  fs.writeFileSync(bomPath, '\uFEFF{"mcpServers": {"db": {"command": "db-server"}}}', 'utf-8');
+  assert(injectAgentMcp(bomDir, 'claude') === true, 'audit: BOM config installs');
+  const bomData = readJson(path.join(bomDir, '.mcp.json'));
+  assert(bomData.mcpServers.db && bomData.mcpServers.astria, 'audit: BOM config keeps user server');
+  fs.rmSync(bomDir, { recursive: true, force: true });
+
+  // H2: .vscode/mcp.json is officially JSONC — comments must not abort, and
+  // the user's own server must survive the rewrite.
+  const vscodeDir = tmpDir();
+  const vscodePath = path.join(vscodeDir, '.vscode', 'mcp.json');
+  fs.mkdirSync(path.dirname(vscodePath), { recursive: true });
+  fs.writeFileSync(
+    vscodePath,
+    '// my team servers\n{\n  "servers": { "db": { "command": "db-server" } },\n}\n',
+    'utf-8'
+  );
+  assert(injectAgentMcp(vscodeDir, 'vscode') === true, 'audit: JSONC vscode config installs');
+  const vscodeData = readJson(vscodePath);
+  assert(vscodeData.servers && vscodeData.servers.db, 'audit: JSONC user server preserved');
+  assert(vscodeData.servers && vscodeData.servers.astria, 'audit: astria added to JSONC config');
+  fs.rmSync(vscodeDir, { recursive: true, force: true });
+
+  // M1: uninstall removes only entries this installer wrote. User-owned
+  // `astria`/`graphify` entries (different command) survive.
+  const ownedDir = tmpDir();
+  const ownedPath = path.join(ownedDir, '.mcp.json');
+  fs.writeFileSync(ownedPath, JSON.stringify({
+    mcpServers: {
+      astria: { type: 'stdio', command: 'my-own-wrapper' },
+      graphify: { type: 'stdio', command: 'my-graphify-tool' },
+      other: { type: 'stdio', command: 'unrelated' },
+    },
+  }), 'utf-8');
+  assert(removeAgentMcp(ownedDir, 'claude') === false, 'audit: uninstall of user-owned entries is a no-op');
+  const ownedAfter = readJson(ownedPath);
+  assert(ownedAfter.mcpServers.astria && ownedAfter.mcpServers.graphify && ownedAfter.mcpServers.other,
+    'audit: user-owned entries survive uninstall');
+  fs.rmSync(ownedDir, { recursive: true, force: true });
+
+  // M3: a user hook that merely invokes the astria CLI (the documented
+  // hook-guard command) is not a managed entry — uninstall leaves it.
+  const guardDir = tmpDir();
+  const guardSettings = path.join(guardDir, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(guardSettings), { recursive: true });
+  fs.writeFileSync(guardSettings, JSON.stringify({
+    hooks: {
+      PreToolUse: [{
+        matcher: 'Read',
+        hooks: [{ type: 'command', command: 'astria hook-guard read --strict' }],
+      }],
+      PostToolUse: [{
+        matcher: 'Edit|Write',
+        hooks: [{ type: 'command', command: 'node -e "const fs=require(\'fs\');const p=\'.astria/graph.json\';if(!fs.existsSync(p)){process.exit(0)}"' }],
+      }],
+    },
+  }), 'utf-8');
+  removeClaudeHook(guardDir);
+  const guardAfter = readJson(guardSettings);
+  assert(guardAfter.hooks.PreToolUse.length === 1, 'audit: user hook-guard entry survives uninstall');
+  assert(!guardAfter.hooks.PostToolUse || guardAfter.hooks.PostToolUse.length === 0,
+    'audit: managed template hook removed');
+  fs.rmSync(guardDir, { recursive: true, force: true });
+
+  // M2: uninstall removes only managed markdown sections — an unmarked
+  // `## astria` block is user-owned, and `## astria-guide` never matched.
+  const mdDir = tmpDir();
+  const mdPath = path.join(mdDir, 'AGENTS.md');
+  fs.writeFileSync(mdPath, [
+    '# Notes',
+    '',
+    '## astria',
+    '',
+    'My personal astria notes — not managed.',
+    '',
+    '## astria-guide',
+    '',
+    'Another user section.',
+    '',
+  ].join('\n'), 'utf-8');
+  assert(removeSection(mdPath) === false, 'audit: unmanaged sections are a no-op on uninstall');
+  const mdAfter = fs.readFileSync(mdPath, 'utf-8');
+  assert(mdAfter.includes('My personal astria notes'), 'audit: unmanaged astria section kept');
+  assert(mdAfter.includes('Another user section'), 'audit: astria-guide never matched');
+  fs.rmSync(mdDir, { recursive: true, force: true });
+
+  // L5: an unknown platform is an error, not a message with exit code 0.
+  let unknownThrew = false;
+  try {
+    installPlatform('does-not-exist', tmpDir());
+  } catch (e: any) {
+    unknownThrew = String(e.message).includes('Unknown platform');
+  }
+  assert(unknownThrew, 'audit: unknown platform throws');
+}
+
 // ---- Run all ----
 
 testClaudeHook();
@@ -1028,6 +1153,7 @@ testMarkdownInject();
 testLegacyMigration();
 testLegacySkillDirCleanup();
 testCopilotInstructions();
+testAuditFixes();
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) {

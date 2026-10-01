@@ -109,13 +109,30 @@ function testLegacyAlongsideCurrentNotDuplicated() {
 
 function testAppendToForeignHook() {
   const repo = tmpGitRepo();
+  // A shell hook: appending the JavaScript updater would break it (git
+  // executes hook files with sh when they lack a node shebang — the old
+  // append produced "syntax error near unexpected token" on every commit),
+  // so install must skip with a notice instead.
   fs.writeFileSync(hookPath(repo, 'post-commit'), '#!/bin/sh\necho own hook\n', 'utf-8');
 
   const results = installGitHooks(repo);
   const content = fs.readFileSync(hookPath(repo, 'post-commit'), 'utf-8');
   assert(content.includes('echo own hook'), 'append: foreign content preserved');
-  assert(content.includes('// astria-hook-start'), 'append: astria section added');
-  assert(results.some(r => r.includes('appended')), 'append: reported as appended');
+  assert(!content.includes('// astria-hook-start'), 'append: shell hook left alone');
+  assert(results.some(r => r.includes('skipped')), 'append: skip reported');
+}
+
+function testAppendToForeignNodeHook() {
+  const repo = tmpGitRepo();
+  // A Node-script hook absorbs the appended updater — the one foreign shape
+  // where appending is safe.
+  fs.writeFileSync(hookPath(repo, 'post-commit'), '#!/usr/bin/env node\nconsole.log("own");\n', 'utf-8');
+
+  const results = installGitHooks(repo);
+  const content = fs.readFileSync(hookPath(repo, 'post-commit'), 'utf-8');
+  assert(content.includes('console.log("own");'), 'node append: foreign content preserved');
+  assert(content.includes('// astria-hook-start'), 'node append: astria section added');
+  assert(results.some(r => r.includes('appended')), 'node append: reported as appended');
 }
 
 function testIdempotentInstall() {
@@ -173,6 +190,7 @@ function main() {
   testJsLegacyMigration();
   testLegacyAlongsideCurrentNotDuplicated();
   testAppendToForeignHook();
+  testAppendToForeignNodeHook();
   testIdempotentInstall();
   testUninstallRemovesAllFormats();
   testStatusDetectsLegacy();
