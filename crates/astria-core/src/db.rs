@@ -111,7 +111,43 @@ CREATE TABLE IF NOT EXISTS hyperedges (
 );
 ";
 
+/// True when `table` already has a column named `column`. Table and column
+/// names come from the fixed migration constants below, never user input,
+/// so interpolating them into the PRAGMA is safe.
+fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+    let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) else {
+        return false;
+    };
+    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
+        return false;
+    };
+    for row in rows.flatten() {
+        if row == column {
+            return true;
+        }
+    }
+    false
+}
+
+fn set_schema_version(conn: &Connection, version: i64) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?1)",
+        [version.to_string()],
+    )?;
+    Ok(())
+}
+
 /// Run any pending schema migrations.
+///
+/// Each step commits its DDL and its `schema_version` bump in ONE
+/// transaction (SQLite DDL is transactional). A crash mid-migration can no
+/// longer leave a database where the ALTER applied but the version stamp
+/// did not — the state that, before 1.0.11, re-ran the ALTER on next open
+/// and failed with `duplicate column name`, bricking every later command
+/// against that repo. The ALTER steps are additionally idempotent: a column
+/// that already exists (exactly what an interrupted pre-1.0.11 migration
+/// left behind) skips its ALTER and just catches the stamp up, which
+/// repairs databases the old code stranded.
 fn run_migrations(conn: &Connection) -> Result<()> {
     let version: i64 = conn
         .query_row(
@@ -122,74 +158,79 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         .unwrap_or(0);
 
     if version < 1 {
-        conn.execute_batch(SCHEMA_V1)?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(SCHEMA_V1)?;
+        tx.commit()?;
     }
     if version < 2 {
         // v2: community labels + cohesion (hub-based, LLM-free)
-        conn.execute_batch(SCHEMA_V2)?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '2')",
-            [],
-        )?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(SCHEMA_V2)?;
+        set_schema_version(&tx, 2)?;
+        tx.commit()?;
     }
     if version < 3 {
         // v3: node signatures (source text up to the body) for token-cheap
         // "what is this symbol" answers. Older graphs get NULL signatures
         // until the next full re-extraction.
-        conn.execute_batch("ALTER TABLE nodes ADD COLUMN signature TEXT;")?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '3')",
-            [],
-        )?;
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "nodes", "signature") {
+            tx.execute_batch("ALTER TABLE nodes ADD COLUMN signature TEXT;")?;
+        }
+        set_schema_version(&tx, 3)?;
+        tx.commit()?;
     }
     if version < 4 {
         // v4: edge provenance — the source line where an edge was extracted
         // — so query/explain output can anchor relationships to code.
-        conn.execute_batch("ALTER TABLE edges ADD COLUMN source_line INTEGER;")?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '4')",
-            [],
-        )?;
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "edges", "source_line") {
+            tx.execute_batch("ALTER TABLE edges ADD COLUMN source_line INTEGER;")?;
+        }
+        set_schema_version(&tx, 4)?;
+        tx.commit()?;
     }
     if version < 5 {
         // v5: local-embedding vectors for semantic similarity edges and
         // embedding-backed query recall (see astria-embed).
-        conn.execute_batch(SCHEMA_V5)?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '5')",
-            [],
-        )?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(SCHEMA_V5)?;
+        set_schema_version(&tx, 5)?;
+        tx.commit()?;
     }
     if version < 6 {
         // v6: query feedback loop — seed/visited node pairs per question,
         // promoted to `learned` edges when they recur across questions.
-        conn.execute_batch(SCHEMA_V6)?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '6')",
-            [],
-        )?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(SCHEMA_V6)?;
+        set_schema_version(&tx, 6)?;
+        tx.commit()?;
     }
     if version < 7 {
         // v7: hyperedges — N-ary group relationships (communities, shared
         // reference groups). nodes is a JSON array of member node ids.
-        conn.execute_batch(SCHEMA_V7)?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '7')",
-            [],
-        )?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(SCHEMA_V7)?;
+        set_schema_version(&tx, 7)?;
+        tx.commit()?;
     }
     if version < 8 {
         // v8: cross-repo plumbing — nodes.metadata holds parked unresolved
         // call info for the global-graph resolver, nodes.repo tags the owning
         // repo in a merged global store, edges.context marks pass-generated
         // edges (e.g. cross_repo) so they can be re-run idempotently.
-        conn.execute_batch("ALTER TABLE nodes ADD COLUMN metadata TEXT;")?;
-        conn.execute_batch("ALTER TABLE nodes ADD COLUMN repo TEXT;")?;
-        conn.execute_batch("ALTER TABLE edges ADD COLUMN context TEXT;")?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '8')",
-            [],
-        )?;
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "nodes", "metadata") {
+            tx.execute_batch("ALTER TABLE nodes ADD COLUMN metadata TEXT;")?;
+        }
+        if !column_exists(&tx, "nodes", "repo") {
+            tx.execute_batch("ALTER TABLE nodes ADD COLUMN repo TEXT;")?;
+        }
+        if !column_exists(&tx, "edges", "context") {
+            tx.execute_batch("ALTER TABLE edges ADD COLUMN context TEXT;")?;
+        }
+        set_schema_version(&tx, 8)?;
+        tx.commit()?;
     }
     if version < 9 {
         // v9: LLM community enrichment + per-run LLM accounting.
@@ -198,20 +239,27 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         // member_hash caches the membership so labels are only recomputed
         // when the community actually changes. pipeline_runs gains the
         // measured token spend of the semantic passes.
-        conn.execute_batch("ALTER TABLE communities ADD COLUMN summary TEXT;")?;
-        conn.execute_batch(
-            "ALTER TABLE communities ADD COLUMN label_source TEXT NOT NULL DEFAULT 'hub';",
-        )?;
-        conn.execute_batch("ALTER TABLE communities ADD COLUMN member_hash TEXT;")?;
-        conn.execute_batch(
-            "ALTER TABLE pipeline_runs ADD COLUMN llm_input_tokens INTEGER;
-             ALTER TABLE pipeline_runs ADD COLUMN llm_output_tokens INTEGER;
-             ALTER TABLE pipeline_runs ADD COLUMN llm_api_calls INTEGER;",
-        )?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', '9')",
-            [],
-        )?;
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "communities", "summary") {
+            tx.execute_batch("ALTER TABLE communities ADD COLUMN summary TEXT;")?;
+        }
+        if !column_exists(&tx, "communities", "label_source") {
+            tx.execute_batch(
+                "ALTER TABLE communities ADD COLUMN label_source TEXT NOT NULL DEFAULT 'hub';",
+            )?;
+        }
+        if !column_exists(&tx, "communities", "member_hash") {
+            tx.execute_batch("ALTER TABLE communities ADD COLUMN member_hash TEXT;")?;
+        }
+        if !column_exists(&tx, "pipeline_runs", "llm_input_tokens") {
+            tx.execute_batch(
+                "ALTER TABLE pipeline_runs ADD COLUMN llm_input_tokens INTEGER;
+                 ALTER TABLE pipeline_runs ADD COLUMN llm_output_tokens INTEGER;
+                 ALTER TABLE pipeline_runs ADD COLUMN llm_api_calls INTEGER;",
+            )?;
+        }
+        set_schema_version(&tx, 9)?;
+        tx.commit()?;
     }
 
     Ok(())
@@ -281,6 +329,31 @@ pub fn community_member_hash(member_ids: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupted_migration_is_repaired_not_fatal() {
+        // A pre-1.0.11 migration could crash between an ALTER and its version
+        // stamp; the next open then re-ran the ALTER and failed with
+        // `duplicate column name`, bricking every later command against the
+        // repo. Reproduce exactly that state — all v3+ columns already
+        // present, stamp rolled back to 2 — and require a clean recovery.
+        let conn = open_db_in_memory().unwrap();
+        conn.execute(
+            "UPDATE _meta SET value = '2' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
+        run_migrations(&conn)
+            .expect("stale stamp over applied columns must be caught up, not re-run");
+        let version: String = conn
+            .query_row(
+                "SELECT value FROM _meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "9");
+    }
 
     #[test]
     fn community_member_hash_is_order_independent_and_stable() {

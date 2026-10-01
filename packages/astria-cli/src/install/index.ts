@@ -49,7 +49,16 @@ const CLAUDE_CONFIG_DIR: string | undefined = (() => {
     : undefined;
 })();
 
-function copySkillFile(platform: string, cfg: PlatformConfig): string[] {
+/// Resolve the live skill destination for a platform config: home-scoped
+/// platforms root at the user's home dir; project-scoped ones (Copilot)
+/// root at the project.
+function skillDstPath(cfg: PlatformConfig, projectDir: string): string {
+  return cfg.skillScope === 'project'
+    ? path.join(projectDir, cfg.skillDst)
+    : path.join(os.homedir(), cfg.skillDst);
+}
+
+function copySkillFile(platform: string, cfg: PlatformConfig, projectDir: string): string[] {
   const messages: string[] = [];
   if (!cfg.skillFile) return messages;
 
@@ -66,9 +75,6 @@ function copySkillFile(platform: string, cfg: PlatformConfig): string[] {
     return messages;
   }
 
-  const homeDir = os.homedir();
-  const dst = path.join(homeDir, cfg.skillDst);
-
   if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
     const overrideDst = path.join(CLAUDE_CONFIG_DIR, 'skills', 'astria', 'SKILL.md');
     copyFile(src, overrideDst);
@@ -76,6 +82,7 @@ function copySkillFile(platform: string, cfg: PlatformConfig): string[] {
     return messages;
   }
 
+  const dst = skillDstPath(cfg, projectDir);
   copyFile(src, dst);
   messages.push(`Skill file -> ${dst}`);
   return messages;
@@ -115,14 +122,30 @@ function legacySkillDst(cfg: PlatformConfig): string {
   return cfg.skillDst.replace(/([\\/])astria([\\/])/, '$1graphify$2');
 }
 
-/// Removes the pre-1.0 skill file (and its now-empty folder) so a stale
-/// graphify skill is never left behind after install or uninstall.
-function removeLegacySkillFile(platform: string, cfg: PlatformConfig): string[] {
+/// Removes stale skill files this installer no longer produces: the pre-1.0
+/// graphify name, and — for project-scoped platforms (Copilot) — the
+/// 1.0.9/1.0.10-era copy under the user's home directory, which nothing
+/// reads. Now-empty folders are removed so no stale skill dir lingers.
+/// Layouts with no legacy variant (file stems like .clinerules/astria.md,
+/// where the graphify swap is a no-op) have nothing to clean — the identity
+/// guard must hold or a second install would delete its own fresh skill.
+function removeLegacySkillFile(platform: string, cfg: PlatformConfig, projectDir: string): string[] {
   const messages: string[] = [];
   if (!cfg.skillFile) return messages;
-  if (legacySkillDst(cfg) === cfg.skillDst) return messages;
 
-  const targets = [path.join(os.homedir(), legacySkillDst(cfg))];
+  const home = os.homedir();
+  const hasLegacyVariant = legacySkillDst(cfg) !== cfg.skillDst;
+  const targets: string[] = [];
+  if (cfg.skillScope === 'project') {
+    // Current name at the wrong (home) root, plus the legacy name at both
+    // roots when one exists.
+    targets.push(path.join(home, cfg.skillDst));
+    if (hasLegacyVariant) {
+      targets.push(path.join(home, legacySkillDst(cfg)), path.join(projectDir, legacySkillDst(cfg)));
+    }
+  } else if (hasLegacyVariant) {
+    targets.push(path.join(home, legacySkillDst(cfg)));
+  }
   if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
     targets.push(path.join(CLAUDE_CONFIG_DIR, 'skills', 'graphify', 'SKILL.md'));
   }
@@ -166,8 +189,8 @@ export function installPlatform(platform: string, projectDir: string): string[] 
 
   if (platform === 'kiro') {
     const cfg = PLATFORMS.kiro;
-    messages.push(...copySkillFile('kiro', cfg));
-    messages.push(...removeLegacySkillFile('kiro', cfg));
+    messages.push(...copySkillFile('kiro', cfg, projectDir));
+    messages.push(...removeLegacySkillFile('kiro', cfg, projectDir));
     if (injectKiroSteering(projectDir)) {
       messages.push('Kiro steering -> .kiro/steering/astria.md');
     } else {
@@ -186,12 +209,11 @@ export function installPlatform(platform: string, projectDir: string): string[] 
 
   const cfg = PLATFORMS[platform];
   if (!cfg) {
-    messages.push(`Unknown platform: ${platform}. Available: ${Object.keys(PLATFORMS).join(', ')}`);
-    return messages;
+    throw new Error(`Unknown platform: ${platform}. Available: ${Object.keys(PLATFORMS).join(', ')}`);
   }
 
-  messages.push(...copySkillFile(platform, cfg));
-  messages.push(...removeLegacySkillFile(platform, cfg));
+  messages.push(...copySkillFile(platform, cfg, projectDir));
+  messages.push(...removeLegacySkillFile(platform, cfg, projectDir));
 
   if (cfg.claudeMd) {
     const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
@@ -338,11 +360,9 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
   if (platform === 'kiro') {
     const cfg = PLATFORMS.kiro;
     if (cfg.skillFile) {
-      const homeDir = os.homedir();
-      const dst = path.join(homeDir, cfg.skillDst);
-      try { fs.unlinkSync(dst); messages.push(`Skill file removed: ${dst}`); } catch { messages.push('Skill file: not found'); }
+      try { fs.unlinkSync(skillDstPath(cfg, projectDir)); messages.push(`Skill file removed: ${skillDstPath(cfg, projectDir)}`); } catch { messages.push('Skill file: not found'); }
     }
-    messages.push(...removeLegacySkillFile('kiro', cfg));
+    messages.push(...removeLegacySkillFile('kiro', cfg, projectDir));
     if (removeKiroSteering(projectDir)) {
       messages.push('Kiro steering: removed');
     } else {
@@ -360,20 +380,25 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
 
   const cfg = PLATFORMS[platform];
   if (!cfg) {
-    messages.push(`Unknown platform: ${platform}`);
-    return messages;
+    throw new Error(`Unknown platform: ${platform}. Available: ${Object.keys(PLATFORMS).join(', ')}`);
   }
 
   if (cfg.skillFile) {
-    const homeDir = os.homedir();
-    let dst = path.join(homeDir, cfg.skillDst);
-    if (platform === 'claude') {
-      const configDir = process.env.CLAUDE_CONFIG_DIR;
-      if (configDir) dst = path.join(configDir, 'skills', 'astria', 'SKILL.md');
+    // The live location by scope, plus — for claude — both candidate roots,
+    // because CLAUDE_CONFIG_DIR may have been set at install time but not
+    // now (or vice versa). Uninstall uses the same sanitized const install
+    // reads; the raw env var never reaches a filesystem delete.
+    const candidates = [skillDstPath(cfg, projectDir)];
+    if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
+      candidates.push(path.join(CLAUDE_CONFIG_DIR, 'skills', 'astria', 'SKILL.md'));
     }
-    try { fs.unlinkSync(dst); messages.push(`Skill file removed: ${dst}`); } catch { messages.push('Skill file: not found'); }
+    let removedAny = false;
+    for (const dst of candidates) {
+      try { fs.unlinkSync(dst); messages.push(`Skill file removed: ${dst}`); removedAny = true; } catch { /* absent */ }
+    }
+    if (!removedAny) messages.push('Skill file: not found');
   }
-  messages.push(...removeLegacySkillFile(platform, cfg));
+  messages.push(...removeLegacySkillFile(platform, cfg, projectDir));
 
   if (cfg.claudeMd) {
     const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');

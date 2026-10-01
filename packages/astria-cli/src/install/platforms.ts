@@ -5,6 +5,9 @@ import type { McpFlavor } from './settings-inject';
 export interface PlatformConfig {
   skillFile: string;
   skillDst: string;
+  /** Where skillDst is rooted: the user's home dir (default) or the
+   * project directory (Copilot reads repo-scoped .github/skills/). */
+  skillScope?: 'home' | 'project';
   claudeMd: boolean;
   agentsMd: boolean;
   geminiMd: boolean;
@@ -83,7 +86,13 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   },
   copilot: {
     skillFile: 'skill-copilot.md',
+    // Repo-scoped: the Copilot coding agent reads .github/skills/ from the
+    // repository it works on (docs.github.com "Copilot coding agent skills"),
+    // not from the user's home directory. 1.0.9/1.0.10 installs wrote this
+    // under ~ — removeLegacySkillFile cleans that copy up on the next
+    // install or uninstall.
     skillDst: path.join('.github', 'skills', 'astria', 'SKILL.md'),
+    skillScope: 'project',
     claudeMd: false,
     agentsMd: true,
     geminiMd: false,
