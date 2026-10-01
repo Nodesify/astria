@@ -4,7 +4,7 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## [Unreleased]
+## [1.0.11] — 2026-10-02
 
 ### Code audit — data safety, installer ownership, native loading, CI and site
 - **DB migrations are atomic and self-healing** — each schema step now commits its DDL and its `schema_version` bump in one transaction (SQLite DDL is transactional), and ALTER steps check `PRAGMA table_info` first. Before, a crash between an ALTER and its version stamp left a database whose next open re-ran the ALTER, failed with `duplicate column name`, and bricked every later command against that repo; the idempotent guard also repairs databases the old code had already stranded. Regression-tested (`interrupted_migration_is_repaired_not_fatal`).
