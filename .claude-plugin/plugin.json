@@ -1,7 +1,7 @@
 {
   "name": "astria",
   "description": "Codebase knowledge graph: PageRank repo maps, natural-language graph queries, blast radius, and health scoring — offline-first, zero API keys. Bundles the astria MCP server, the graph-first skill, and slash commands.",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "author": {
     "name": "Nodesify",
     "url": "https://github.com/Nodesify"
@@ -15,5 +15,12 @@
     "code-analysis",
     "rust",
     "tree-sitter"
-  ]
+  ],
+  "mcpServers": {
+    "astria": {
+      "type": "stdio",
+      "command": "astria",
+      "args": ["mcp"]
+    }
+  }
 }

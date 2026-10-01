@@ -4,6 +4,14 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+### Distribution audit — four fixes
+- **Homebrew formula installed no executable** — `std_npm_args` installs global-style into `libexec` (package at `libexec/lib/node_modules`, executables linked at `libexec/bin`), but the 1.0.10 formula symlinked `libexec/node_modules/.bin/astria` — a local-install path that never exists under `libexec` — and Homebrew's `install_symlink` over an empty glob is a silent no-op, so `brew install nodesify/tap/astria` "succeeded" with no `astria` command. The formula now symlinks `libexec/bin/*` (homebrew-core's idiom for npm packages) at `revision 1`; the live tap carries the same fix.
+- **The Claude Code plugin shipped without its MCP server** — the plugin root is the repo root (marketplace `source: "./"`), and its only MCP registration was the root `.mcp.json`, which is machine-local and gitignored — so marketplace installs delivered the skill, commands, and subagent but zero MCP servers, despite 1.0.9's "the tracked `.mcp.json`" changelog claim and the plugin's own description. `.claude-plugin/plugin.json` now declares the `astria` stdio server inline via `mcpServers` (the same `astria mcp` entry `astria install` writes), which ships with the tracked tree. Plugin and marketplace metadata move to `1.0.11` ahead of the npm package so version-caching plugin managers register the changed plugin — the npm package, `server.json`, and the registry listing stay at 1.0.10 until the next tagged release.
+- **The release verify step checked versions only** — the field that actually broke v1.0.9 (`mcpName` vs `server.json` name, the 403 namespace case mismatch) was never compared, so a future drift would again surface only at the post-npm registry step where immutability makes it unfixable without burning a version. The step now verifies name vs mcpName, the npm entry's identifier vs the package name, and the per-package version, alongside the top-level version.
+- **mcp-publisher is pinned and checksum-verified** — the registry publish step downloaded `releases/latest` and executed it with the job's OIDC and GitHub tokens, the only unpinned external code in a workflow where every action is SHA-pinned. Now pinned to `v1.8.1` with a sha256 check; moving to a newer publisher is a deliberate tag+checksum bump.
+
 ## [1.0.10] — 2026-10-01
 
 ### Distribution fix — MCP Registry namespace case
