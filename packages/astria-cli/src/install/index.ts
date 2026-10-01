@@ -101,17 +101,6 @@ function copyFile(src: string, dst: string) {
   fs.copyFileSync(src, dst);
 }
 
-function writeInstallStamp(dir: string) {
-  const stampPath = path.join(dir, '.astria_version');
-  // Same guard as copyFile, applied to the exact value that is written:
-  // only a normalized absolute path without traversal segments may reach
-  // the filesystem, regardless of how the caller derived it.
-  if (!path.isAbsolute(stampPath) || stampPath.split(/[\\/]/).includes('..')) {
-    return;
-  }
-  try { fs.writeFileSync(stampPath, require('../../package.json').version + '\n', 'utf-8'); } catch { /* ignore */ }
-}
-
 /// Pre-1.0 installs wrote skills under `skills/graphify/`. The path carries
 /// exactly one `astria` segment (the skill dir name), so the legacy
 /// destination is derivable by swapping that segment. Layouts whose `astria`
