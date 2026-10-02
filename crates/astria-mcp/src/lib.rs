@@ -5,8 +5,6 @@
 // directly — no async runtime — so it can run inside the napi cdylib that
 // npm distributes (`astria mcp`).
 
-use std::io::{BufRead, Write};
-
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
