@@ -937,6 +937,15 @@ pub(crate) fn extract_single(
     cfg: &LanguageConfig,
     naming: &Path,
 ) -> Result<Extraction, AstriaError> {
+    if !cfg.compiled_in {
+        warn_once_not_compiled(cfg.name);
+        return Ok(Extraction {
+            file_path: path.to_path_buf(),
+            language: cfg.name.to_string(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        });
+    }
     let source = std::fs::read(path)?;
     let source_ref = source.as_slice();
 
@@ -1022,4 +1031,19 @@ pub(crate) fn extract_single(
         nodes: state.nodes,
         edges: state.edges,
     })
+}
+
+/// One warning per disabled language per process, so a build compiled
+/// without a grammar explains itself exactly once instead of per file.
+fn warn_once_not_compiled(language: &str) {
+    use std::sync::{Mutex, OnceLock};
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let set = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
+    if let Ok(mut set) = set.lock() {
+        if set.insert(language.to_string()) {
+            eprintln!(
+                "[astria] language {language} is not compiled into this build (its lang-* cargo feature is off); files of this language are skipped"
+            );
+        }
+    }
 }

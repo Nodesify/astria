@@ -158,6 +158,8 @@ Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Sca
 
 Each language has its own config module in `crates/astria-extract/src/langs/`. Adding a new language means adding a new file there and registering it in `langs/mod.rs` — [language support docs](https://nodesify.github.io/astria/docs/reference/language-support).
 
+Languages are also compile-time optional: each has a `lang-*` cargo feature (e.g. `lang-python`), and `lang-all` is on by default. Building with `--no-default-features --features "lang-python,lang-javascript"` slims the binary; the engine then skips other languages' files with a one-time warning instead of failing.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

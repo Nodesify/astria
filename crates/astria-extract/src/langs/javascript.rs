@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Javascript
             .registration()
             .extensions,
+        #[cfg(feature = "lang-javascript")]
         language_fn: || tree_sitter_javascript::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-javascript"))]
+        language_fn: || crate::langs::config::missing_language("javascript"),
+        compiled_in: cfg!(feature = "lang-javascript"),
         class_types: &["class_declaration"],
         function_types: &[
             "function_declaration",

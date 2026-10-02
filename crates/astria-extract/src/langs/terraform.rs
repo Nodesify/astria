@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Terraform
             .registration()
             .extensions,
+        #[cfg(feature = "lang-terraform")]
         language_fn: || tree_sitter_hcl::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-terraform"))]
+        language_fn: || crate::langs::config::missing_language("terraform"),
+        compiled_in: cfg!(feature = "lang-terraform"),
         class_types: &["block"],
         function_types: &[],
         import_types: &[],

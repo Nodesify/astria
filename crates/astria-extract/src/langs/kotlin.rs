@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Kotlin
             .registration()
             .extensions,
+        #[cfg(feature = "lang-kotlin")]
         language_fn: || tree_sitter_kotlin_ng::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-kotlin"))]
+        language_fn: || crate::langs::config::missing_language("kotlin"),
+        compiled_in: cfg!(feature = "lang-kotlin"),
         class_types: &[
             "class_declaration",
             "object_declaration",

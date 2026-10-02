@@ -6,7 +6,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::C
             .registration()
             .extensions,
+        #[cfg(feature = "lang-c")]
         language_fn: || tree_sitter_c::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-c"))]
+        language_fn: || crate::langs::config::missing_language("c"),
+        compiled_in: cfg!(feature = "lang-c"),
         class_types: &["struct_specifier", "enum_specifier"],
         function_types: &["function_definition"],
         import_types: &["preproc_include"],
@@ -30,7 +34,11 @@ pub fn cpp_config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Cpp
             .registration()
             .extensions,
+        #[cfg(feature = "lang-cpp")]
         language_fn: || tree_sitter_cpp::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-cpp"))]
+        language_fn: || crate::langs::config::missing_language("cpp"),
+        compiled_in: cfg!(feature = "lang-cpp"),
         class_types: &["class_specifier", "struct_specifier", "enum_specifier"],
         function_types: &["function_definition"],
         import_types: &["preproc_include"],

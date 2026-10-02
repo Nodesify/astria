@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Elixir
             .registration()
             .extensions,
+        #[cfg(feature = "lang-elixir")]
         language_fn: || tree_sitter_elixir::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-elixir"))]
+        language_fn: || crate::langs::config::missing_language("elixir"),
+        compiled_in: cfg!(feature = "lang-elixir"),
         // Elixir uses `call` nodes for everything: defmodule, def, defp, import, use, alias,
         // and ordinary function calls. The tree-sitter grammar doesn't distinguish them by
         // node kind, so we use class_call_names / function_call_names / import_call_names

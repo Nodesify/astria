@@ -6,7 +6,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Zig
             .registration()
             .extensions,
+        #[cfg(feature = "lang-zig")]
         language_fn: || tree_sitter_zig::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-zig"))]
+        language_fn: || crate::langs::config::missing_language("zig"),
+        compiled_in: cfg!(feature = "lang-zig"),
         class_types: &[
             "struct_declaration",
             "enum_declaration",
