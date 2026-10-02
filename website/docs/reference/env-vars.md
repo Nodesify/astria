@@ -61,6 +61,14 @@ Optional decision layer over the selected backend (`--judge jev` / `ASTRIA_LLM_J
 | `ASTRIA_EMBED` | `off` (or `0`/`false`/`no`) stops queries from auto-merging embedding seeds. Build-side `--embed` still computes vectors; this only turns off consuming them, so a graph that carries vectors can still be queried structurally. The `astria query --no-embed` flag sets the same switch per call. |
 | `ASTRIA_CHUNK_CHARS` | Overrides the document chunk size in characters (default `1200`, clamped to 400–8000). Larger chunks mean fewer, coarser document nodes; smaller chunks mean finer evidence granularity. Takes effect on the next fresh extraction — delete the graph directory (or change it before the first build) after changing it. |
 
+## Media transcription
+
+`run`/`update` transcribe video and audio files (`mp4`, `mov`, `webm`, `mkv`, `avi`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, `opus`, `aac`, `wma`) through the external [`whisper-cli` binary (whisper.cpp)](https://github.com/ggml-org/whisper.cpp); video files also need [`ffmpeg`](https://ffmpeg.org) on PATH to demux the audio track, audio-only repositories transcribe without it. Transcripts enter the graph as document nodes like any markdown file. Without the binaries or a model the files are skipped with a one-line notice — the pipeline never fails because of media. See [CLI reference](./cli#building-the-graph).
+
+| Variable | Purpose |
+|---|---|
+| `ASTRIA_WHISPER_MODEL` | Path to a whisper.cpp ggml `.bin` model file. Unset, astria uses the first `*.bin` in `<project>/.astria/models/`, then in `~/.astria/models/` |
+
 ## Query logging
 
 Appends a JSONL line (ts, kind, question, nodes, duration_ms) per query for agent/tooling consumption. Logging never breaks a query — it fails silent.

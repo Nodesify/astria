@@ -1,0 +1,15 @@
+[package]
+name = "astria-audio"
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+# MSRV floor comes from the dependency tree (ort/napi-sys/time require 1.88)
+rust-version.workspace = true
+# workspace-internal: distributed via npm (@nodesify/astria), not crates.io
+publish = false
+
+[dependencies]
+astria-core = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
