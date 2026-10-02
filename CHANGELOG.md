@@ -11,6 +11,11 @@ this file is the per-version summary.
 - **Missing tooling degrades to a notice, not a failure** — without `whisper-cli`, a model, or (for video) `ffmpeg`, media files are skipped with one actionable notice per cause per run while the rest of the graph builds normally; failed attempts are never cached, so installing the tooling is picked up on the next run even for unchanged files. Model resolution order: `$ASTRIA_WHISPER_MODEL`, then the first `*.bin` in `<project>/.astria/models/`, then `~/.astria/models/`.
 - **Plumbing** — `FileType` gains `audio` (detect classifies the new extensions; the extraction cache hash bumps to v13, forcing one clean re-extraction on upgrade), and a std-only `astria-audio` crate joins the workspace between `astria-ingest` and `astria-pdf`.
 
+### P0 hardening — ignore-file failures surface, embed capability is disclosed, one budget default
+- **A `.astriaignore` that cannot be loaded now fails the run.** File discovery previously swallowed `add_ignore` errors, so an unreadable or misplaced `.astriaignore` silently built the graph without the user's exclusions. Malformed individual patterns still follow gitignore's lenient semantics (an unclosed `[` is a literal, matching git's own behavior). Regression-tested for both the exclusion behavior and the loud failure.
+- **Embed capability is disclosed, not discovered.** `graph_stats` (CLI `--json` and the MCP tool) now reports `embeddingsSupported` / an `embeddings: available | not supported in this build` suffix, and `stats` prints the same in human output, so a darwin-x64 user (no prebuilt ONNX binaries) learns the `--embed` gap before hitting the runtime error. Documented in the README quick start.
+- **One default query budget.** The CLI (`query`, `map`, and the injected `astria_query`/`astria_map` tool presets) and the MCP server now share a single 2,000-token default (`DEFAULT_QUERY_BUDGET` in the MCP server, `src/defaults.ts` in the CLI, guarded by a structure test); the injected `astria_query` preset previously fell back to 3,000 while everywhere else used 2,000.
+
 ## [1.0.11] — 2026-10-02
 
 ### Code audit — data safety, installer ownership, native loading, CI and site
