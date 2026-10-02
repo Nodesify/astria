@@ -453,6 +453,10 @@ pub struct GraphStatsJs {
     pub community_count: i64,
     pub file_count: i64,
     pub type_counts: HashMap<String, i64>,
+    /// Whether this build includes the local embedding runtime (`--embed`).
+    /// Release targets without prebuilt ONNX binaries (x86_64-apple-darwin)
+    /// are compiled without the `embed` feature.
+    pub embeddings_supported: bool,
 }
 
 /// Build provenance read from the graph's `_meta` table, so callers can
@@ -683,6 +687,15 @@ fn pipeline_result_js(result: &pipeline::PipelineResult) -> PipelineResultJs {
     }
 }
 
+/// Whether this build includes the local embedding runtime (fastembed/ONNX,
+/// `--embed`). Platforms without prebuilt ONNX binaries ship a binary
+/// compiled without the `embed` feature; `--embed` errors clearly there.
+/// Surfaced here and in graph_stats so agents can check before trying.
+#[napi]
+pub fn embeddings_supported() -> bool {
+    cfg!(feature = "embed")
+}
+
 #[napi]
 pub fn graph_stats(root: String) -> napi::Result<GraphStatsJs> {
     let db = pipeline::load_graph_db(&PathBuf::from(&root))
@@ -717,6 +730,7 @@ pub fn graph_stats(root: String) -> napi::Result<GraphStatsJs> {
         community_count,
         file_count,
         type_counts,
+        embeddings_supported: embeddings_supported(),
     })
 }
 

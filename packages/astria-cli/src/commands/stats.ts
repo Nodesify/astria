@@ -11,6 +11,9 @@ export async function statsCommand(opts: { graph: string; json?: boolean }) {
     console.log(`Edges: ${stats.edgeCount}`);
     console.log(`Communities: ${stats.communityCount}`);
     console.log(`Files tracked: ${stats.fileCount}`);
+    console.log(
+      `Embeddings: ${stats.embeddingsSupported ? 'available' : 'not supported in this build'}`,
+    );
     const types = Object.entries((stats.typeCounts ?? {}) as Record<string, number>)
       .sort((a, b) => b[1] - a[1])
       .map(([t, n]) => `${t}: ${n}`)
