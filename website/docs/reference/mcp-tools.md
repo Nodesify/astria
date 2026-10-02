@@ -105,7 +105,7 @@ All communities with labels (hub-based by default; thematic LLM labels when prod
 
 ### `graph_stats`
 
-Node/edge/community/file counts for the graph, plus the graph's modularity when recorded. No arguments. If it reports 0 nodes, the graph has not been built yet — run `astria run <path>` first.
+Node/edge/community/file counts for the graph, plus the graph's modularity when recorded, and an `embeddings:` suffix disclosing whether this binary supports local embeddings (`--embed`) — it is compiled out on platforms without ONNX Runtime binaries (x86_64-apple-darwin). No arguments. If it reports 0 nodes, the graph has not been built yet — run `astria run <path>` first.
 
 ### `health`
 

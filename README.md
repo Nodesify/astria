@@ -42,6 +42,8 @@ npm install -g @nodesify/astria
 
 Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 
+> One known platform gap: the Intel Mac (`darwin-x64`) binary is built without the local embedding runtime, because ONNX Runtime ships no prebuilt binaries there. `run --embed` reports "semantic embeddings are not supported in this build" on that platform; every other platform embeds normally. Check any install with `astria stats --json` (`embeddingsSupported`).
+
 Just want the agent skill, no CLI? `npx skills add Nodesify/astria` installs the graph-first skill from [skills.sh](https://skills.sh) - it answers from an existing `.astria/` graph as plain files and, when graph commands are needed, offers the install above (never without asking).
 
 On Claude Code? One plugin bundles the MCP server, the skill, `/astria` + `/astria-risk` commands, and the `astria-architect` subagent: `/plugin marketplace add Nodesify/astria` then `/plugin install astria@nodesify`.
