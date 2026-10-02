@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use rusqlite::Connection;
 
-use astria_bolt::packstream::Value;
-use astria_bolt::BoltClient;
+use crate::packstream::Value;
+use crate::BoltClient;
 use astria_core::Result;
 
 /// Rows per UNWIND statement — large enough to amortize round-trips,

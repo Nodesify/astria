@@ -5,6 +5,7 @@
 // hand-rolls stdio JSON-RPC and astria-semantic hand-rolls HTTP).
 
 pub mod frame;
+pub mod neo4j_push;
 pub mod packstream;
 
 use packstream::{encode_struct, Value};
