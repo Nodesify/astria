@@ -28,7 +28,8 @@ pub struct DetectResult {
 const DOC_EXTENSIONS: &[&str] = &[".md", ".mdx", ".txt", ".rst"];
 const PAPER_EXTENSIONS: &[&str] = &[".pdf"];
 const IMAGE_EXTENSIONS: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
-const VIDEO_EXTENSIONS: &[&str] = &[".mp4", ".mov", ".webm", ".mkv", ".avi"];
+// Video/audio extension lists live in astria-core: detect classifies them
+// and the astria-extract transcription route consumes the same lists.
 
 pub fn classify_file(path: &Path) -> Option<FileType> {
     // Manifests first: `go.mod` has a `.mod` extension, the rest `.toml`/
@@ -65,8 +66,11 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
     if IMAGE_EXTENSIONS.contains(&ext_with_dot.as_str()) {
         return Some(FileType::Image);
     }
-    if VIDEO_EXTENSIONS.contains(&ext_with_dot.as_str()) {
+    if astria_core::VIDEO_EXTENSIONS.contains(&ext_with_dot.as_str()) {
         return Some(FileType::Video);
+    }
+    if astria_core::AUDIO_EXTENSIONS.contains(&ext_with_dot.as_str()) {
+        return Some(FileType::Audio);
     }
     None
 }
@@ -264,6 +268,8 @@ mod tests {
         assert_eq!(classify_file(Path::new("foo.pdf")), Some(FileType::Paper));
         assert_eq!(classify_file(Path::new("foo.png")), Some(FileType::Image));
         assert_eq!(classify_file(Path::new("foo.mp4")), Some(FileType::Video));
+        assert_eq!(classify_file(Path::new("foo.mp3")), Some(FileType::Audio));
+        assert_eq!(classify_file(Path::new("foo.wav")), Some(FileType::Audio));
         assert_eq!(classify_file(Path::new("foo.xyz")), None);
         assert_eq!(classify_file(Path::new("Makefile")), None);
     }

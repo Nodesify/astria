@@ -12,6 +12,7 @@ publish = false
 astria-core = { workspace = true }
 astria-paths = { workspace = true }
 astria-pdf = { workspace = true }
+astria-audio = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-python = { workspace = true }
 tree-sitter-javascript = { workspace = true }

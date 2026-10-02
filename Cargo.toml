@@ -15,6 +15,7 @@ members = [
     "crates/astria-napi",
     "crates/astria-semantic",
     "crates/astria-ingest",
+    "crates/astria-audio",
     "crates/astria-pdf",
     "crates/astria-embed",
 ]
@@ -33,6 +34,7 @@ astria-query = { path = "crates/astria-query" }
 astria-mcp = { path = "crates/astria-mcp" }
 astria-semantic = { path = "crates/astria-semantic" }
 astria-ingest = { path = "crates/astria-ingest" }
+astria-audio = { path = "crates/astria-audio" }
 astria-pdf = { path = "crates/astria-pdf" }
 astria-embed = { path = "crates/astria-embed" }
 rusqlite = { version = "0.34", features = ["bundled"] }
