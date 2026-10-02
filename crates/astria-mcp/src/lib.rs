@@ -425,9 +425,20 @@ pub fn serve(db_path: &std::path::Path) -> Result<()> {
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
-    let mut reader = stdin.lock();
-    let mut writer = stdout.lock();
+    serve_loop(&db, &db_path_str, &mut stdin.lock(), &mut stdout.lock())
+}
 
+/// The transport-independent server loop: one JSON-RPC message per input
+/// line, one flushed response line per handled message, empty and malformed
+/// lines skipped silently. Split from `serve` so the framing behavior agents
+/// depend on (newline termination, no response for notifications/malformed
+/// input, stop-at-EOF) is testable without spawning a real process.
+fn serve_loop<R: std::io::BufRead, W: std::io::Write>(
+    db: &Connection,
+    db_path: &str,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<()> {
     let mut line = String::new();
     loop {
         line.clear();
@@ -443,7 +454,7 @@ pub fn serve(db_path: &std::path::Path) -> Result<()> {
             Ok(v) => v,
             Err(_) => continue, // skip malformed lines
         };
-        if let Some(response) = handle_message(&db, &db_path_str, &msg) {
+        if let Some(response) = handle_message(db, db_path, &msg) {
             let mut out = serde_json::to_string(&response)?;
             out.push('\n');
             writer.write_all(out.as_bytes())?;
@@ -552,5 +563,52 @@ mod tests {
         let db = astria_core::open_db_in_memory().unwrap();
         let result = call_tool(&db, ":memory:", "bogus", &json!({}));
         assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn serve_loop_speaks_jsonrpc_over_lines() {
+        // Drives the real loop — not handle_message — so the framing agents
+        // rely on is covered: response-per-line, flush per response, silent
+        // skip of empty and malformed lines.
+        let db = astria_core::open_db_in_memory().unwrap();
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+            "not json at all\n",
+            "\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n",
+        );
+        let mut reader = std::io::Cursor::new(input.as_bytes());
+        let mut out: Vec<u8> = Vec::new();
+        serve_loop(&db, ":memory:", &mut reader, &mut out).unwrap();
+
+        let text = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "malformed and empty lines must produce no response, got: {text}"
+        );
+        let first: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["id"], 1);
+        assert_eq!(first["result"]["serverInfo"]["name"], SERVER_NAME);
+        let second: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(second["id"], 2);
+        let names: Vec<&str> = second["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"graph_stats"));
+        assert!(text.ends_with('\n'), "every response is newline-terminated");
+    }
+
+    #[test]
+    fn serve_loop_stops_at_eof_without_error() {
+        let db = astria_core::open_db_in_memory().unwrap();
+        let mut reader = std::io::Cursor::new("\n\n".as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        serve_loop(&db, ":memory:", &mut reader, &mut out).unwrap();
+        assert!(out.is_empty(), "no input lines, no responses");
     }
 }
