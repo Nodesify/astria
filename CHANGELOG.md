@@ -11,6 +11,14 @@ this file is the per-version summary.
 - **Missing tooling degrades to a notice, not a failure** — without `whisper-cli`, a model, or (for video) `ffmpeg`, media files are skipped with one actionable notice per cause per run while the rest of the graph builds normally; failed attempts are never cached, so installing the tooling is picked up on the next run even for unchanged files. Model resolution order: `$ASTRIA_WHISPER_MODEL`, then the first `*.bin` in `<project>/.astria/models/`, then `~/.astria/models/`.
 - **Plumbing** — `FileType` gains `audio` (detect classifies the new extensions; the extraction cache hash bumps to v13, forcing one clean re-extraction on upgrade), and a std-only `astria-audio` crate joins the workspace between `astria-ingest` and `astria-pdf`.
 
+### P1 hardening — module splits, feature-gated grammars, CI gates, integration tests
+- **astria-query and astria-semantic split into domain modules** — the 4,300-line query god file becomes store/scoring/render modules behind an unchanged public API; the semantic crate separates shared types/prompt/chunking/http from one module per backend (Claude, OpenAI-compatible, Gemini, Jev). Pure extraction, zero behavior change; every test passes untouched.
+- **Language walker branches move into `langs/`** — Rust doc-comment/test-attribute handling, Python overload semantics, the JavaScript name/binding/doc walker, and PHP route-label synthesis now live beside their language configs; `walkers.rs` keeps only language-neutral machinery.
+- **Tree-sitter grammars are feature-gated** — each language gets a `lang-*` cargo feature (`lang-all` remains the default), and the engine skips files of languages compiled out with a one-time warning instead of failing. `--no-default-features --features "lang-python,lang-javascript"` now produces a slim extraction build. The three ad-hoc grammar pins move into `[workspace.dependencies]`.
+- **astria-napi stops being a monolith** — the seven export formats move to a new `astria-export` crate, the health/risk diagnostics join `astria-analyze`, and the Neo4j push joins `astria-bolt`. All moved code was napi-free; `astria_napi::export_wiki::…` paths re-export unchanged.
+- **CI gates** — a new MSRV workflow compiles the workspace on the declared Rust 1.88 floor; a Coverage workflow publishes per-crate llvm-cov numbers (informational until a baseline exists); CONTRIBUTING documents the versioning policy (features minor, fixes patch — no `cargo-semver-checks` because no crate is published).
+- **Integration tests** — the MCP stdio loop is now a transport-independent `serve_loop` with framing tests (response-per-line, malformed-line skip, stop-at-EOF), and `astria-bolt` gains `#[ignore]`d live-Neo4j tests (handshake, RUN/PULL round trip, auth-failure-is-an-error) runnable against Docker.
+
 ## [1.0.11] — 2026-10-02
 
 ### Code audit — data safety, installer ownership, native loading, CI and site
