@@ -24,7 +24,9 @@ pub mod types;
 /// (label + doc comment + initializer signature).
 /// v12: Rust `///` item doc comments and `//!` module docs captured as
 /// docstrings; uniquely-resolved call edges carry `RESOLVED` provenance.
-pub const EXTRACTION_HASH_VERSION: &str = "v12";
+/// v13: video/audio files route through whisper transcription instead of
+/// empty `media` extractions; invalidates the empty cached results.
+pub const EXTRACTION_HASH_VERSION: &str = "v13";
 
 /// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`
 /// spelling so pre-1.0 env configs keep working. The new name wins; an empty

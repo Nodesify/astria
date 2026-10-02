@@ -114,6 +114,7 @@ crates/
   astria-report/    Markdown report generation
   astria-semantic/  LLM semantic extraction (Claude / OpenAI-compatible / Gemini), with vision
   astria-ingest/    URL ingestion (arXiv/tweet/webpage/image), SCIP + Postgres intake, SSRF protection
+  astria-audio/     Audio/video transcription via whisper.cpp (external whisper-cli + ffmpeg)
   astria-pdf/       PDF text extraction
   astria-napi/      napi-rs bindings, pipeline orchestration, merge/diff, JSON/HTML/GraphML/tree export
 packages/

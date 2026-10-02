@@ -4,6 +4,13 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+### Video/audio ingestion — Whisper transcription (#82)
+- **Media files join the graph** — `mp4`/`mov`/`webm`/`mkv`/`avi` video and `mp3`/`wav`/`m4a`/`flac`/`ogg`/`opus`/`aac`/`wma` audio files are transcribed during `run`/`update` and enter the graph as transcript documents through the same markdown pipeline PDFs use. External-binary mode, like `add --postgres` requiring `psql`: transcription runs in [whisper.cpp](https://github.com/ggml-org/whisper.cpp)'s `whisper-cli`, video files also need `ffmpeg` on PATH to demux the audio track (audio-only repos transcribe without it). Nothing is vendored, no API key is involved, and the napi binaries stay small.
+- **Missing tooling degrades to a notice, not a failure** — without `whisper-cli`, a model, or (for video) `ffmpeg`, media files are skipped with one actionable notice per cause per run while the rest of the graph builds normally; failed attempts are never cached, so installing the tooling is picked up on the next run even for unchanged files. Model resolution order: `$ASTRIA_WHISPER_MODEL`, then the first `*.bin` in `<project>/.astria/models/`, then `~/.astria/models/`.
+- **Plumbing** — `FileType` gains `audio` (detect classifies the new extensions; the extraction cache hash bumps to v13, forcing one clean re-extraction on upgrade), and a std-only `astria-audio` crate joins the workspace between `astria-ingest` and `astria-pdf`.
+
 ## [1.0.11] — 2026-10-02
 
 ### Code audit — data safety, installer ownership, native loading, CI and site
