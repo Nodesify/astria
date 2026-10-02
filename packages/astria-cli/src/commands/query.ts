@@ -1,4 +1,5 @@
 import { queryGraph } from '../native';
+import { DEFAULT_QUERY_BUDGET } from '../defaults';
 
 export async function queryCommand(question: string, opts: {
   graph: string;
@@ -14,7 +15,7 @@ export async function queryCommand(question: string, opts: {
   try {
     const mode = opts.dfs ? 'dfs' : 'bfs';
     const depth = parseInt(opts.depth || '2', 10);
-    const budget = parseInt(opts.budget || '2000', 10);
+    const budget = parseInt(opts.budget || String(DEFAULT_QUERY_BUDGET), 10);
     const cursor = parseInt(opts.cursor || '0', 10) || 0;
     // The native layer reads ASTRIA_EMBED at query time; the flag shares the
     // same switch so CLI and MCP callers get identical behavior.

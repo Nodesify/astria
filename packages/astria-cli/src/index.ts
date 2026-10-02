@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+import { DEFAULT_QUERY_BUDGET } from './defaults';
 import { runCommand } from './commands/run';
 import { healthCommand } from './commands/health';
 import { riskCommand } from './commands/risk';
@@ -97,7 +98,7 @@ program
   .option('--graph <path>', 'Path to project root', '.')
   .option('--dfs', 'Use depth-first search instead of breadth-first')
   .option('--depth <n>', 'Traversal depth', '2')
-  .option('--budget <n>', 'Token budget for output', '2000')
+  .option('--budget <n>', 'Token budget for output', String(DEFAULT_QUERY_BUDGET))
   .option('--directed', 'Follow edges only in their stored direction (caller -> callee)')
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
   .option('--cursor <n>', 'Continuation token from a previous truncated query', '0')
@@ -120,7 +121,7 @@ program
   .command('map')
   .description('Repo map: PageRank-ranked files with top symbols, within a token budget')
   .option('--graph <path>', 'Path to project root', '.')
-  .option('--budget <n>', 'Token budget for output', '2000')
+  .option('--budget <n>', 'Token budget for output', String(DEFAULT_QUERY_BUDGET))
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
   .option('--json', 'Emit machine-readable JSON')
   .action(mapCommand);
