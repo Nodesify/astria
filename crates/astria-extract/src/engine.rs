@@ -19,6 +19,7 @@ use crate::langs;
 use crate::refs::resolve_cross_file_references;
 use crate::schema::Extraction;
 use crate::walkers::extract_single;
+use astria_audio::TranscribeError;
 use astria_core::AstriaError;
 
 pub fn extract(
@@ -27,6 +28,10 @@ pub fn extract(
     db: &Connection,
 ) -> Result<Vec<Extraction>, AstriaError> {
     let mut results = Vec::new();
+    // Distinct transcription-unavailable causes already reported this run:
+    // one actionable notice per cause, not one per media file.
+    let mut transcription_notices: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     for file_path in files {
         let extension = file_path
@@ -78,6 +83,51 @@ pub fn extract(
             let extraction = extract_markdown_from_string(file_path, "pdf", &md_text, naming);
             save_cache(db, file_path, &hash, &extraction);
             results.push(extraction);
+            continue;
+        }
+
+        // Video/audio: transcribe via external whisper-cli (ffmpeg demuxes
+        // video), then parse the transcript as markdown - the same shape as
+        // the PDF route above. Missing tooling or model, or a failed run,
+        // skips the file with a notice and an empty, UNcached extraction so
+        // installing the tooling is picked up on the next run even though
+        // the file content is unchanged.
+        if astria_core::is_transcribable_extension(ext) {
+            if let Some(cached) = check_cache(db, file_path, &hash) {
+                results.push(cached);
+                continue;
+            }
+            match astria_audio::transcribe_to_markdown(file_path, root) {
+                Ok(md_text) => {
+                    let extraction =
+                        extract_markdown_from_string(file_path, "transcript", &md_text, naming);
+                    save_cache(db, file_path, &hash, &extraction);
+                    results.push(extraction);
+                }
+                Err(TranscribeError::Unavailable(notice)) => {
+                    if transcription_notices.insert(notice.clone()) {
+                        eprintln!("[astria] media transcription skipped: {notice}");
+                    }
+                    results.push(Extraction {
+                        file_path: file_path.clone(),
+                        language: "media".into(),
+                        nodes: Vec::new(),
+                        edges: Vec::new(),
+                    });
+                }
+                Err(TranscribeError::Failed(message)) => {
+                    eprintln!(
+                        "warning: transcription failed for {}: {message}",
+                        file_path.display()
+                    );
+                    results.push(Extraction {
+                        file_path: file_path.clone(),
+                        language: "media".into(),
+                        nodes: Vec::new(),
+                        edges: Vec::new(),
+                    });
+                }
+            }
             continue;
         }
 
@@ -148,6 +198,47 @@ mod tests {
     use crate::schema::ExtractedEdge;
     use astria_core::db::open_db_in_memory;
     use std::fs;
+
+    #[test]
+    fn media_without_transcriber_is_empty_and_uncached() {
+        // Whatever the failure mode (no whisper-cli on PATH, or the fake
+        // content failing to decode on machines that have it), a media file
+        // that cannot be transcribed must produce an empty `media` extraction
+        // and must not poison the extraction cache: installing whisper-cli
+        // later has to be picked up on the next run even though the file
+        // content is unchanged.
+        let dir = tempfile::tempdir().unwrap();
+        let media = dir.path().join("talk.mp3");
+        fs::write(&media, b"definitely not real audio").unwrap();
+
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[media], dir.path(), &db).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].language, "media");
+        assert!(results[0].nodes.is_empty());
+        let cached: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM extraction_cache WHERE file_path LIKE '%talk.mp3'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cached, 0, "failed transcription must not be cached");
+    }
+
+    #[test]
+    fn video_extension_routes_to_media_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let media = dir.path().join("clip.mp4");
+        fs::write(&media, b"not a real video").unwrap();
+
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[media], dir.path(), &db).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].language, "media");
+    }
 
     #[test]
     fn extract_python_file() {

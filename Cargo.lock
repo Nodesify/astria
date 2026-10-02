@@ -74,6 +74,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "astria-audio"
+version = "1.0.0"
+dependencies = [
+ "astria-core",
+ "tempfile",
+]
+
+[[package]]
 name = "astria-bolt"
 version = "1.0.0"
 dependencies = [
@@ -145,6 +153,7 @@ dependencies = [
 name = "astria-extract"
 version = "1.0.0"
 dependencies = [
+ "astria-audio",
  "astria-core",
  "astria-paths",
  "astria-pdf",
