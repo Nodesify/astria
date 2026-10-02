@@ -100,4 +100,8 @@ Releases are tagged (`vX.Y.Z`) and published by the `Release` workflow via npm t
 3. Tag `vX.Y.Z`. The workflow's verify job fails fast when the section is missing (`scripts/extract-changelog.mjs --check`), and the publish job uses that same section as the GitHub Release body — relative links are rewritten to the tag so the notes render on the release page.
 4. The narrative release post goes to the docs-site blog (`website/blog/`); cut a versioned docs copy (`cd website && npm run docusaurus docs:version X.Y.Z`) when the release becomes the documented default.
 
+### Versioning policy
+
+The npm package (`@nodesify/astria`) is the single version line: every Rust crate is workspace-internal (`publish = false`), so crates never version independently. Patch releases carry fixes, hardening, and docs only; anything a user can notice from the outside — a new command, MCP tool, flag, language, or a behavior change — goes out as a minor bump (`1.X.0`). Features landing in patch releases make range-pinning meaningless for consumers. `cargo-semver-checks` is intentionally absent: with no crate published to crates.io there is no public Rust API contract to guard — the compatibility surface that needs discipline is the CLI/MCP JSON output, which should only ever gain fields.
+
 The README deliberately carries no per-version "What's new" sections — it links to the changelog and blog instead, so release notes have exactly one home per audience: the GitHub Release (curated), the blog (narrative), and `CHANGELOG.md` (the record).

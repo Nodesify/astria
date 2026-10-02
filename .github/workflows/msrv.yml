@@ -1,0 +1,35 @@
+name: MSRV
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# The workspace declares rust-version = 1.88 (Cargo.toml
+# [workspace.package]); the CI and release legs all run latest stable. This
+# workflow is the proof that the declared floor actually compiles — without
+# it, the "build from source" fallback the loader suggests to unsupported
+# platform users is untested at the version we promise.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Separate cache key: an MSRV build populates different artifacts
+          # than the stable legs sharing the default lockfile key.
+          key: ${{ hashFiles('**/Cargo.lock') }}-msrv
+      - name: Check workspace on the declared MSRV
+        run: cargo check --workspace --locked

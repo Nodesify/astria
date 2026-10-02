@@ -1,0 +1,45 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# Test density is wildly uneven across crates (extract has 57 tests, report
+# has 2). This workflow makes the gaps visible on every PR; it is
+# informational on purpose — no threshold gate until the numbers have a
+# baseline to compare against. The lcov artifact is downloadable from the
+# run page for line-level inspection.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@stable # branch ref on purpose: tracks latest stable Rust; not SHA-pinned so updates keep flowing
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: ${{ hashFiles('**/Cargo.lock') }}-cov
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Measure coverage
+        run: cargo llvm-cov --workspace --locked --no-fail-fast --lcov --output-path lcov.info
+      - name: Per-crate summary
+        if: always()
+        run: cargo llvm-cov --workspace --locked --summary-only --fail-under-lines 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-lcov
+          path: lcov.info
