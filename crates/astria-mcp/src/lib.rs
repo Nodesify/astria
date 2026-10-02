@@ -14,6 +14,10 @@ use astria_core::Result;
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const SERVER_NAME: &str = "astria";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Default output token budget for query_graph and repo_map. One value shared
+/// by the MCP schema, the MCP handler fallbacks, and the CLI defaults
+/// (packages/astria-cli/src/defaults.ts must match).
+pub const DEFAULT_QUERY_BUDGET: u64 = 2000;
 
 fn tools() -> Value {
     json!([
@@ -22,7 +26,7 @@ fn tools() -> Value {
             "question": {"type": "string"},
             "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs"},
             "depth": {"type": "integer", "default": 2},
-            "budget": {"type": "integer", "default": 2000},
+            "budget": {"type": "integer", "default": DEFAULT_QUERY_BUDGET},
             "directed": {"type": "boolean", "default": false,
                 "description": "Follow edges only in their stored direction (caller -> callee, importer -> module) instead of both ways."},
             "detail": {"type": "string", "enum": ["all", "high"], "default": "all",
@@ -32,7 +36,7 @@ fn tools() -> Value {
             "required": ["question"]}},
         {"name": "repo_map", "description": "Aider-style repo map: files ranked by PageRank over the reference graph with top symbols per file. One budgeted blob to orient on a codebase.",
          "inputSchema": {"type": "object", "properties": {
-            "budget": {"type": "integer", "default": 2000},
+            "budget": {"type": "integer", "default": DEFAULT_QUERY_BUDGET},
             "detail": {"type": "string", "enum": ["all", "high"], "default": "all"}}}},
         {"name": "explain", "description": "Explain a node: metadata plus its strongest 20 connections with real edge direction (--> it calls/imports the neighbor, <-- the neighbor points back) and evidence tier per connection.",
          "inputSchema": {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}},
@@ -105,7 +109,10 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             let question = str_arg(args, "question").unwrap_or_default();
             let mode = str_arg(args, "mode").unwrap_or_else(|| "bfs".into());
             let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
-            let budget = args.get("budget").and_then(|v| v.as_u64()).unwrap_or(2000) as usize;
+            let budget = args
+                .get("budget")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(DEFAULT_QUERY_BUDGET) as usize;
             let directed = bool_arg(args, "directed").unwrap_or(false);
             let detail = str_arg(args, "detail");
             let cursor = args.get("cursor").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -124,7 +131,10 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             .map(|(text, _, _, _)| text_result(text))
         }
         "repo_map" => {
-            let budget = args.get("budget").and_then(|v| v.as_u64()).unwrap_or(2000) as i64;
+            let budget = args
+                .get("budget")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(DEFAULT_QUERY_BUDGET) as i64;
             let detail = str_arg(args, "detail");
             astria_query::repo_map(db, db_path, budget, min_strength_for(&detail))
                 .map(|(text, files)| text_result(format!("{text}\n\n({files} files shown)")))
