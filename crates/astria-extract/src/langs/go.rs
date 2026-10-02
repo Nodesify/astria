@@ -6,7 +6,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Go
             .registration()
             .extensions,
+        #[cfg(feature = "lang-go")]
         language_fn: || tree_sitter_go::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-go"))]
+        language_fn: || crate::langs::config::missing_language("go"),
+        compiled_in: cfg!(feature = "lang-go"),
         class_types: &["type_declaration"],
         function_types: &["function_declaration", "method_declaration"],
         import_types: &["import_declaration"],

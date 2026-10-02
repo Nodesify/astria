@@ -6,7 +6,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Java
             .registration()
             .extensions,
+        #[cfg(feature = "lang-java")]
         language_fn: || tree_sitter_java::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-java"))]
+        language_fn: || crate::langs::config::missing_language("java"),
+        compiled_in: cfg!(feature = "lang-java"),
         class_types: &[
             "class_declaration",
             "interface_declaration",

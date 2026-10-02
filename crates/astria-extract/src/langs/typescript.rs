@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Typescript
             .registration()
             .extensions,
+        #[cfg(feature = "lang-typescript")]
         language_fn: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        #[cfg(not(feature = "lang-typescript"))]
+        language_fn: || crate::langs::config::missing_language("typescript"),
+        compiled_in: cfg!(feature = "lang-typescript"),
         class_types: &["class_declaration"],
         function_types: &[
             "function_declaration",

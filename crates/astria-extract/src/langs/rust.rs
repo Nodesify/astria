@@ -6,7 +6,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Rust
             .registration()
             .extensions,
+        #[cfg(feature = "lang-rust")]
         language_fn: || tree_sitter_rust::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-rust"))]
+        language_fn: || crate::langs::config::missing_language("rust"),
+        compiled_in: cfg!(feature = "lang-rust"),
         class_types: &["struct_item", "enum_item", "trait_item", "impl_item"],
         function_types: &["function_item", "function_signature_item"],
         import_types: &["use_declaration"],

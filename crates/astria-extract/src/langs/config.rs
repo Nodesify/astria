@@ -1,7 +1,19 @@
 use tree_sitter::Language;
 
+/// Panic path for a `language_fn` whose grammar was compiled out.
+/// Never called in default builds (every `lang-*` feature is on); the
+/// engine checks `compiled_in` first and skips the file instead.
+pub(crate) fn missing_language(name: &str) -> ! {
+    panic!("language {name} is not compiled into this build; enable its lang-* cargo feature")
+}
+
 pub struct LanguageConfig {
     pub name: &'static str,
+    /// False when this build was compiled without the language's grammar
+    /// (its `lang-*` cargo feature is off). The engine skips such files
+    /// with a one-time warning instead of calling `language_fn` (which
+    /// would hit the missing-grammar panic path).
+    pub compiled_in: bool,
     pub extensions: &'static [&'static str],
     pub language_fn: fn() -> Language,
     /// Positional name fallback for grammars without named fields (HCL):

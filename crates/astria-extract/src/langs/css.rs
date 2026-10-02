@@ -6,7 +6,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Css
             .registration()
             .extensions,
+        #[cfg(feature = "lang-css")]
         language_fn: || tree_sitter_css::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-css"))]
+        language_fn: || crate::langs::config::missing_language("css"),
+        compiled_in: cfg!(feature = "lang-css"),
         class_types: &["rule_set"], // CSS selector blocks act as "classes"
         function_types: &[],        // CSS has no functions in the traditional sense
         import_types: &["import_statement"], // @import

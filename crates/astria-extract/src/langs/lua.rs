@@ -6,7 +6,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Lua
             .registration()
             .extensions,
+        #[cfg(feature = "lang-lua")]
         language_fn: || tree_sitter_lua::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-lua"))]
+        language_fn: || crate::langs::config::missing_language("lua"),
+        compiled_in: cfg!(feature = "lang-lua"),
         class_types: &[], // Lua has no native class system
         function_types: &["function_declaration", "function_definition"],
         // Lua uses require("module") via function_call nodes. Using function_call as

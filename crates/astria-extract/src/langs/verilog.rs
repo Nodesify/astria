@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Verilog
             .registration()
             .extensions,
+        #[cfg(feature = "lang-verilog")]
         language_fn: || tree_sitter_systemverilog::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-verilog"))]
+        language_fn: || crate::langs::config::missing_language("verilog"),
+        compiled_in: cfg!(feature = "lang-verilog"),
         class_types: &[
             "module_declaration",
             "interface_declaration",

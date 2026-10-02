@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Python
             .registration()
             .extensions,
+        #[cfg(feature = "lang-python")]
         language_fn: || tree_sitter_python::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-python"))]
+        language_fn: || crate::langs::config::missing_language("python"),
+        compiled_in: cfg!(feature = "lang-python"),
         class_types: &["class_definition"],
         function_types: &["function_definition"],
         import_types: &["import_statement", "import_from_statement"],

@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Shell
             .registration()
             .extensions,
+        #[cfg(feature = "lang-shell")]
         language_fn: || tree_sitter_bash::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-shell"))]
+        language_fn: || crate::langs::config::missing_language("shell"),
+        compiled_in: cfg!(feature = "lang-shell"),
         class_types: &[], // Shell has no class system
         function_types: &["function_definition"],
         // `command` is too broad (matches every command). Shell sourcing via

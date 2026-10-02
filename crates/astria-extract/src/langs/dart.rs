@@ -6,7 +6,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Dart
             .registration()
             .extensions,
+        #[cfg(feature = "lang-dart")]
         language_fn: || tree_sitter_dart::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-dart"))]
+        language_fn: || crate::langs::config::missing_language("dart"),
+        compiled_in: cfg!(feature = "lang-dart"),
         class_types: &[
             "class_definition",
             "mixin_declaration",

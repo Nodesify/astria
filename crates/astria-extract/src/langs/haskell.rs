@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Haskell
             .registration()
             .extensions,
+        #[cfg(feature = "lang-haskell")]
         language_fn: || tree_sitter_haskell::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-haskell"))]
+        language_fn: || crate::langs::config::missing_language("haskell"),
+        compiled_in: cfg!(feature = "lang-haskell"),
         class_types: &["class", "data_type", "newtype", "type_alias"],
         function_types: &["decl", "signature"],
         import_types: &["import"],
