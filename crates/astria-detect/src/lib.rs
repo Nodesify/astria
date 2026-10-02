@@ -103,7 +103,16 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
 
     let astriaignore = root.join(".astriaignore");
     if astriaignore.exists() {
-        let _ = ignore_builder.add_ignore(astriaignore);
+        // A read/parse failure must not silently proceed: the user's explicit
+        // exclusions would not apply and the graph would contain files they
+        // told astria to ignore. `add_ignore` returns Some(error) on failure
+        // and parses the file eagerly, so malformed patterns are caught here.
+        if let Some(error) = ignore_builder.add_ignore(&astriaignore) {
+            return Err(astria_core::AstriaError::Graph(format!(
+                "failed to load {}: {error}",
+                astriaignore.display()
+            )));
+        }
     }
 
     for entry in ignore_builder.build() {
@@ -334,5 +343,42 @@ mod tests {
 
         assert_eq!(result2.removed.len(), 1);
         assert!(result2.removed[0].path.to_string_lossy().contains("b.py"));
+    }
+
+    #[test]
+    fn detect_respects_astriaignore() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("keep.py"), "a\n").unwrap();
+        fs::write(dir.path().join("skip.py"), "b\n").unwrap();
+        fs::write(dir.path().join(".astriaignore"), "skip.py\n").unwrap();
+
+        let db = open_db_in_memory().unwrap();
+        let result = detect(dir.path(), &db).unwrap();
+
+        assert!(result
+            .new
+            .iter()
+            .any(|f| f.path.to_string_lossy().contains("keep.py")));
+        assert!(!result
+            .new
+            .iter()
+            .any(|f| f.path.to_string_lossy().contains("skip.py")));
+    }
+
+    #[test]
+    fn detect_fails_loudly_when_astriaignore_cannot_be_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("main.py"), "def hello(): pass\n").unwrap();
+        // A directory where the ignore file should be makes `add_ignore`
+        // fail deterministically on every platform.
+        fs::create_dir(dir.path().join(".astriaignore")).unwrap();
+
+        let db = open_db_in_memory().unwrap();
+        let result = detect(dir.path(), &db);
+
+        let error = result.expect_err(
+            "a .astriaignore that cannot be loaded must fail the run instead of silently proceeding without the user's exclusions",
+        );
+        assert!(error.to_string().contains(".astriaignore"));
     }
 }
