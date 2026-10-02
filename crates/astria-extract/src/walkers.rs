@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Parser};
 
 use crate::builtins::is_language_builtin;
+use crate::langs::javascript::{javascript_name, walk_javascript_function};
+use crate::langs::php::php_route_name;
+use crate::langs::python::python_overload_has_implementation;
+use crate::langs::rust::{is_rust_test_function, rust_doc_comment, rust_is_pub, rust_module_doc};
 use crate::langs::LanguageConfig;
 use crate::naming::{file_stem, make_node_id, make_target_id};
 use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};
@@ -24,7 +28,7 @@ pub(crate) fn node_text<'a>(node: &Node, source: &'a [u8]) -> &'a str {
 }
 
 /// Get the text of the first child of a node. Returns None if no children.
-fn first_child_text<'a>(node: &Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+pub(crate) fn first_child_text<'a>(node: &Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     let mut cursor = node.walk();
     let child = node.children(&mut cursor).next()?;
     Some(node_text(&child, source))
@@ -43,7 +47,7 @@ fn nth_named_child<'a>(node: &Node<'a>, n: usize) -> Option<Node<'a>> {
     named.get(n.saturating_sub(1)).copied()
 }
 
-fn second_child<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+pub(crate) fn second_child<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     let child = node.children(&mut cursor).nth(1);
     drop(cursor);
@@ -52,7 +56,7 @@ fn second_child<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 
 /// Find the body node using body_field first, then falling back to child types.
 #[allow(clippy::manual_find)]
-fn find_body<'a>(node: &Node<'a>, cfg: &LanguageConfig) -> Option<Node<'a>> {
+pub(crate) fn find_body<'a>(node: &Node<'a>, cfg: &LanguageConfig) -> Option<Node<'a>> {
     if let Some(field) = cfg.body_field {
         if let Some(body) = node.child_by_field_name(field) {
             return Some(body);
@@ -71,7 +75,7 @@ fn find_body<'a>(node: &Node<'a>, cfg: &LanguageConfig) -> Option<Node<'a>> {
 /// Signature line(s): source text from the item start to the start of its
 /// body, whitespace-collapsed and capped. Lets agents see WHAT a symbol is
 /// without opening the file.
-fn node_signature(node: &Node, source: &[u8], cfg: &LanguageConfig) -> Option<String> {
+pub(crate) fn node_signature(node: &Node, source: &[u8], cfg: &LanguageConfig) -> Option<String> {
     let body_start = find_body(node, cfg)
         .map(|b| b.byte_range().start)
         .unwrap_or_else(|| node.byte_range().end);
@@ -97,7 +101,11 @@ fn node_signature(node: &Node, source: &[u8], cfg: &LanguageConfig) -> Option<St
 }
 
 /// Extract the docstring: the first string/expression in the body.
-fn extract_docstring(node: &Node, source: &[u8], cfg: &LanguageConfig) -> Option<String> {
+pub(crate) fn extract_docstring(
+    node: &Node,
+    source: &[u8],
+    cfg: &LanguageConfig,
+) -> Option<String> {
     let body = find_body(node, cfg)?;
     let mut cursor = body.walk();
     if let Some(child) = body.children(&mut cursor).next() {
@@ -122,41 +130,9 @@ fn extract_docstring(node: &Node, source: &[u8], cfg: &LanguageConfig) -> Option
     None
 }
 
-/// Rust `///` doc comment block attached to the item above it. Rust doc
-/// comments are sibling `line_comment`/`block_comment` nodes — unlike the
-/// in-body docstrings `extract_docstring` handles — so they need their own
-/// walk up the sibling chain. Non-doc comments stop the walk; `//!` module
-/// comments are not item docs and never start it.
-fn rust_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(comment) = current {
-        let raw = node_text(&comment, source);
-        let trimmed = raw.trim_start();
-        let is_doc = trimmed.starts_with("///") || trimmed.starts_with("/**");
-        if !is_doc {
-            break;
-        }
-        let stripped = trimmed
-            .trim_start_matches("///")
-            .trim_start_matches("/**")
-            .trim_end_matches("*/")
-            .trim()
-            .to_string();
-        lines.push(stripped);
-        current = comment.prev_sibling();
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    lines.reverse();
-    let joined = lines.join(" ").trim().to_string();
-    (!joined.is_empty()).then_some(joined)
-}
-
 /// An item's docstring in the language's own convention: Rust documents
 /// above the item (`///`), the others document inside the body.
-fn item_docstring(state: &ExtractionState, node: &Node) -> Option<String> {
+pub(crate) fn item_docstring(state: &ExtractionState, node: &Node) -> Option<String> {
     if state.cfg.name == "Rust" {
         rust_doc_comment(node, state.source)
     } else {
@@ -164,35 +140,11 @@ fn item_docstring(state: &ExtractionState, node: &Node) -> Option<String> {
     }
 }
 
-/// Rust `//!` module doc block: contiguous inner doc comments at the top of
-/// the file, describing the module itself — the file node's own words for
-/// "what is this file" questions. A leading plain comment (license header)
-/// stops the block, so only a genuine module doc is captured.
-fn rust_module_doc(root: &Node, source: &[u8]) -> Option<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut cursor = root.walk();
-    for child in root.children(&mut cursor) {
-        if child.kind() != "line_comment" {
-            break;
-        }
-        let raw = node_text(&child, source);
-        let Some(doc) = raw.trim_start().strip_prefix("//!") else {
-            break;
-        };
-        lines.push(doc.trim().to_string());
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    let joined = lines.join(" ").trim().to_string();
-    (!joined.is_empty()).then_some(joined)
-}
-
 /// Whitespace-collapsed declaration text of a const/static item, capped
 /// like `node_signature`. There is no body to cut at — the initializer IS
 /// the answer content ("pub const MODEL: ... = JinaEmbeddingsV2BaseCode;")
 /// for value questions no function node can carry.
-fn const_signature(node: &Node, source: &[u8]) -> Option<String> {
+pub(crate) fn const_signature(node: &Node, source: &[u8]) -> Option<String> {
     let raw = node_text(node, source);
     let mut sig = String::new();
     for word in raw.split_whitespace() {
@@ -207,24 +159,6 @@ fn const_signature(node: &Node, source: &[u8]) -> Option<String> {
     let sig = sig.trim_end().to_string();
     (!sig.is_empty()).then_some(sig)
 }
-
-/// True when the item carries a visibility modifier (`pub`, `pub(crate)`,
-/// ...). Prefers the grammar's `visibility` field, with a kind-scan
-/// fallback for grammar versions without it.
-fn rust_is_pub(node: &Node) -> bool {
-    if node.child_by_field_name("visibility").is_some() {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let any = node
-        .children(&mut cursor)
-        .any(|child| child.kind() == "visibility_modifier");
-    any
-}
-
-// ---------------------------------------------------------------------------
-// Pass 1: Structural extraction + inline call-graph
-// ---------------------------------------------------------------------------
 
 pub(crate) struct ExtractionState<'a> {
     pub cfg: &'a LanguageConfig,
@@ -252,293 +186,6 @@ pub(crate) struct ExtractionState<'a> {
 
 fn is_javascript(cfg: &LanguageConfig) -> bool {
     matches!(cfg.name, "JavaScript" | "TypeScript")
-}
-
-fn python_overload(node: Node<'_>, source: &[u8]) -> bool {
-    let Some(decorated) = node.parent().filter(|p| p.kind() == "decorated_definition") else {
-        return false;
-    };
-    let mut cursor = decorated.walk();
-    let found = decorated.named_children(&mut cursor).any(|decorator| {
-        if decorator.kind() != "decorator" {
-            return false;
-        }
-        let Some(expression) = decorator.named_child(0) else {
-            return false;
-        };
-        match expression.kind() {
-            "identifier" => node_text(&expression, source) == "overload",
-            "attribute" => expression
-                .child_by_field_name("attribute")
-                .is_some_and(|name| node_text(&name, source) == "overload"),
-            _ => false,
-        }
-    });
-    found
-}
-
-/// An overload is a declaration of the following runtime callable, not an
-/// alternative body. Keep declarations only when no implementation exists
-/// in their lexical block (as in a stub file).
-fn python_overload_has_implementation(node: Node<'_>, source: &[u8]) -> bool {
-    if !python_overload(node, source) {
-        return false;
-    }
-    let Some(name) = node.child_by_field_name("name") else {
-        return false;
-    };
-    let Some(block) = node.parent().and_then(|decorated| decorated.parent()) else {
-        return false;
-    };
-    let mut cursor = block.walk();
-    let found = block.named_children(&mut cursor).any(|sibling| {
-        let definition = if sibling.kind() == "decorated_definition" {
-            sibling.child_by_field_name("definition")
-        } else {
-            Some(sibling)
-        };
-        definition.is_some_and(|definition| {
-            definition.kind() == "function_definition"
-                && definition
-                    .child_by_field_name("name")
-                    .is_some_and(|other| node_text(&other, source) == node_text(&name, source))
-                && !python_overload(definition, source)
-        })
-    });
-    found
-}
-
-/// Rust attributes are sibling AST nodes, not part of a function's text.
-/// Inspect only attached attributes and enclosing items so strings/comments
-/// mentioning tests cannot classify production functions as tests.
-fn is_rust_test_function(node: Node<'_>, source: &[u8]) -> bool {
-    let mut current = Some(node);
-    while let Some(item) = current {
-        if item.kind() == "mod_item"
-            && item
-                .child_by_field_name("name")
-                .is_some_and(|name| node_text(&name, source) == "tests")
-        {
-            return true;
-        }
-        let mut previous = item.prev_named_sibling();
-        while let Some(attribute) = previous {
-            match attribute.kind() {
-                "attribute_item" => {
-                    let text: String = node_text(&attribute, source)
-                        .chars()
-                        .filter(|ch| !ch.is_whitespace())
-                        .collect();
-                    let content = text.strip_prefix("#[").and_then(|s| s.strip_suffix(']'));
-                    if content.is_some_and(|content| {
-                        content == "cfg(test)"
-                            || ["test", "tokio::test", "async_std::test"]
-                                .iter()
-                                .any(|name| {
-                                    content == *name
-                                        || content
-                                            .strip_prefix(name)
-                                            .is_some_and(|suffix| suffix.starts_with('('))
-                                })
-                    }) {
-                        return true;
-                    }
-                }
-                "line_comment" | "block_comment" => {}
-                _ => break,
-            }
-            previous = attribute.prev_named_sibling();
-        }
-        current = item.parent();
-    }
-    false
-}
-
-/// Canonicalize statically named access without guessing dynamic receivers or
-/// computed values. `api['run']` and `api.run` denote the same binding.
-fn javascript_name(node: Node<'_>, source: &[u8]) -> Option<String> {
-    match node.kind() {
-        "identifier" | "property_identifier" | "private_property_identifier" | "this" | "super" => {
-            Some(node_text(&node, source).to_string())
-        }
-        "string" => Some(unquote_literal(node_text(&node, source)).to_string()),
-        "member_expression" => Some(format!(
-            "{}.{}",
-            javascript_name(node.child_by_field_name("object")?, source)?,
-            javascript_name(node.child_by_field_name("property")?, source)?
-        )),
-        "subscript_expression" => {
-            let index = node.child_by_field_name("index")?;
-            if index.kind() != "string" {
-                return None;
-            }
-            Some(format!(
-                "{}.{}",
-                javascript_name(node.child_by_field_name("object")?, source)?,
-                javascript_name(index, source)?
-            ))
-        }
-        "computed_property_name" => {
-            let key = node.named_child(0)?;
-            (key.kind() == "string")
-                .then(|| javascript_name(key, source))
-                .flatten()
-        }
-        "parenthesized_expression" | "non_null_expression" => {
-            javascript_name(node.named_child(0)?, source)
-        }
-        _ => None,
-    }
-}
-
-/// Follow the value's binding, rather than an expression's private function
-/// name. Object literals retain their containing binding (exports.api.run).
-fn javascript_binding(node: Node<'_>, source: &[u8]) -> Option<String> {
-    let parent = node.parent()?;
-    let field = match parent.kind() {
-        "variable_declarator" => "name",
-        "assignment_expression" => "left",
-        "pair" => "key",
-        "public_field_definition" | "field_definition" => "name",
-        "parenthesized_expression"
-        | "as_expression"
-        | "satisfies_expression"
-        | "type_assertion"
-        | "non_null_expression" => {
-            return javascript_binding(parent, source);
-        }
-        _ => return None,
-    };
-    let value_field = if parent.kind() == "assignment_expression" {
-        "right"
-    } else {
-        "value"
-    };
-    if parent
-        .child_by_field_name(value_field)
-        .is_none_or(|value| value.id() != node.id())
-    {
-        return None;
-    }
-    let key = parent.child_by_field_name(field)?;
-    let name = javascript_name(key, source).unwrap_or_else(|| node_text(&key, source).to_string());
-    if parent.kind() == "pair" {
-        if let Some(prefix) = parent
-            .parent()
-            .and_then(|object| javascript_binding(object, source))
-        {
-            return Some(format!("{prefix}.{name}"));
-        }
-    }
-    Some(name)
-}
-
-fn javascript_doc(node: Node<'_>, source: &[u8]) -> Option<String> {
-    let mut anchor = node;
-    loop {
-        if let Some(comment) = anchor
-            .prev_named_sibling()
-            .filter(|n| n.kind() == "comment")
-        {
-            let raw = node_text(&comment, source);
-            if raw.starts_with("/**") {
-                return Some(
-                    raw.trim_start_matches("/**")
-                        .trim_end_matches("*/")
-                        .lines()
-                        .map(|line| line.trim().trim_start_matches('*').trim())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                        .trim()
-                        .to_string(),
-                );
-            }
-        }
-        let parent = anchor.parent()?;
-        if !matches!(
-            parent.kind(),
-            "variable_declarator"
-                | "lexical_declaration"
-                | "variable_declaration"
-                | "assignment_expression"
-                | "expression_statement"
-                | "pair"
-                | "export_statement"
-                | "parenthesized_expression"
-                | "as_expression"
-                | "satisfies_expression"
-                | "public_field_definition"
-                | "field_definition"
-        ) {
-            return None;
-        }
-        anchor = parent;
-    }
-}
-
-fn walk_javascript_function<'a>(state: &mut ExtractionState<'a>, node: &Node<'a>) {
-    let parent_id = state
-        .lexical_scopes
-        .last()
-        .unwrap_or(&state.file_id)
-        .clone();
-    let name = javascript_binding(*node, state.source)
-        .or_else(|| {
-            node.child_by_field_name("name").map(|name| {
-                let name = javascript_name(name, state.source)
-                    .unwrap_or_else(|| node_text(&name, state.source).to_string());
-                if node.kind() == "method_definition" {
-                    if let Some(prefix) = node
-                        .parent()
-                        .filter(|p| p.kind() == "object")
-                        .and_then(|object| javascript_binding(object, state.source))
-                    {
-                        return format!("{prefix}.{name}");
-                    }
-                }
-                name
-            })
-        })
-        .unwrap_or_else(|| {
-            let count = state.closure_counts.entry(parent_id.clone()).or_insert(0);
-            *count += 1;
-            format!("{{closure#{count}}}")
-        });
-    let base_id = make_node_id(&[&parent_id, &name]);
-    // Separate block-local bindings and repeated assignments in the same scope.
-    let mut func_id = base_id.clone();
-    let mut ordinal = 1;
-    while state.nodes.iter().any(|existing| existing.id == func_id) {
-        ordinal += 1;
-        func_id = make_node_id(&[&base_id, &ordinal.to_string()]);
-    }
-    state.nodes.push(ExtractedNode {
-        id: func_id.clone(),
-        label: format!("{name}()"),
-        source_file: state.file_path.clone(),
-        source_line: Some(node.start_position().row as u32),
-        docstring: javascript_doc(*node, state.source),
-        signature: node_signature(node, state.source, state.cfg),
-        node_type: "function".to_string(),
-    });
-    state.edges.push(ExtractedEdge {
-        source: parent_id,
-        target: func_id.clone(),
-        relation: "contains".to_string(),
-        confidence: "EXTRACTED".to_string(),
-        confidence_score: Some(1.0),
-        source_file: state.file_path.clone(),
-        source_line: Some(node.start_position().row as u32),
-    });
-    if let Some(body) = find_body(node, state.cfg) {
-        walk_calls(state, &func_id, &body);
-    }
-    state.lexical_scopes.push(func_id);
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_structural(state, &child);
-    }
-    state.lexical_scopes.pop();
 }
 
 /// Maximum reference nodes extracted from one file — bounds the graph cost
@@ -579,7 +226,7 @@ fn is_reference_literal(s: &str) -> bool {
 
 /// Strip a string literal's raw source text down to its content: remove
 /// surrounding quotes/backticks and language prefixes (`r#"..."`, `b".."`).
-fn unquote_literal(raw: &str) -> &str {
+pub(crate) fn unquote_literal(raw: &str) -> &str {
     let t = raw.trim();
     let body = if t.len() > 2 && t.as_bytes()[0].is_ascii_alphabetic() {
         &t[1..]
@@ -638,158 +285,13 @@ fn collect_string_refs(state: &mut ExtractionState<'_>, node: &Node<'_>) {
 // Anonymous closures (PHP): synthesized names and attribution boundaries
 // ---------------------------------------------------------------------------
 
-/// PHP routing verbs whose first string argument is a route path. A closure
-/// passed directly to one of these gets a `VERB /path` label instead of an
-/// ordinal (#3409).
-const PHP_ROUTING_VERBS: &[&str] = &[
-    "get", "post", "put", "patch", "delete", "options", "any", "match", "map",
-];
-
-/// First string literal among `arg_list`'s children, stopping at `before`
-/// (the argument the closure itself sits in) when given. Handles both bare
-/// string children and `argument`-wrapped strings.
-fn first_string_arg<'a>(
-    arg_list: &Node<'a>,
-    before: Option<&Node<'_>>,
-    source: &'a [u8],
-) -> Option<String> {
-    let mut cursor = arg_list.walk();
-    for child in arg_list.children(&mut cursor) {
-        if before.is_some_and(|b| child.id() == b.id()) {
-            break;
-        }
-        let target = if child.kind() == "argument" {
-            let mut c = child.walk();
-            let found = child
-                .children(&mut c)
-                .find(|g| g.kind() == "string" || g.kind() == "encapsed_string");
-            drop(c);
-            found
-        } else if child.kind() == "string" || child.kind() == "encapsed_string" {
-            Some(child)
-        } else {
-            None
-        };
-        if let Some(t) = target {
-            return Some(unquote_literal(node_text(&t, source)).to_string());
-        }
-    }
-    None
-}
-
-/// Route-derived name for a PHP closure passed to a routing call: walk up the
-/// AST collecting the innermost route's verb/path plus any enclosing
-/// `group()`/`prefix()` path arguments and fluent-chain prefixes, composing
-/// e.g. `GET /api/v1/users/{id}`. Returns None when the innermost enclosing
-/// call is not a route (so `$cache->get('key', fn)` stays an ordinal).
-fn php_route_name(closure: &Node<'_>, source: &[u8]) -> Option<String> {
-    let mut prefixes: Vec<String> = Vec::new();
-    let mut verb: Option<String> = None;
-    let mut curr = closure.parent();
-
-    while let Some(n) = curr {
-        let kind = n.kind();
-        if matches!(
-            kind,
-            "function_definition" | "method_declaration" | "class_declaration"
-        ) {
-            break;
-        }
-        if kind == "argument" {
-            let arg_list = n.parent().filter(|a| a.kind() == "arguments");
-            let call = arg_list.and_then(|a| a.parent());
-            if let Some(call) = call.filter(|c| {
-                matches!(
-                    c.kind(),
-                    "member_call_expression"
-                        | "function_call_expression"
-                        | "scoped_call_expression"
-                )
-            }) {
-                let name_node = call
-                    .child_by_field_name("name")
-                    .or_else(|| call.child_by_field_name("function"));
-                let raw_method = name_node
-                    .map(|m| node_text(&m, source))
-                    .unwrap_or("")
-                    .to_lowercase();
-                let path_text = first_string_arg(&arg_list.unwrap(), Some(&n), source);
-                if verb.is_none() {
-                    // The innermost call must be a routing verb whose path
-                    // starts with '/', or this closure is not a route.
-                    match path_text {
-                        Some(p)
-                            if p.starts_with('/')
-                                && PHP_ROUTING_VERBS.contains(&raw_method.as_str()) =>
-                        {
-                            verb = Some(raw_method.to_uppercase());
-                            prefixes.push(p);
-                        }
-                        _ => return None,
-                    }
-                } else if let Some(p) = path_text.filter(|p| !p.is_empty()) {
-                    // Outer calls (group()/prefix()) contribute path prefixes.
-                    prefixes.push(if p.starts_with('/') {
-                        p
-                    } else {
-                        format!("/{}", p)
-                    });
-                }
-
-                // Fluent chain prefixes on the same statement
-                // (Route::prefix('/x')->group(...)).
-                let mut fluent = call.child_by_field_name("object");
-                while let Some(f) = fluent.filter(|f| f.kind() == "member_call_expression") {
-                    if let Some(f_args) = f.child_by_field_name("arguments") {
-                        if let Some(p) = first_string_arg(&f_args, None, source) {
-                            if !p.is_empty() {
-                                prefixes.push(if p.starts_with('/') {
-                                    p
-                                } else {
-                                    format!("/{}", p)
-                                });
-                            }
-                        }
-                    }
-                    fluent = f.child_by_field_name("object");
-                }
-
-                curr = call.parent();
-                continue;
-            }
-        } else if kind == "anonymous_function" || kind == "arrow_function" {
-            // A non-route closure nested inside another closure never adopts
-            // the outer one's route; with a route already found, jump across
-            // the closure boundary to its own argument.
-            verb.as_ref()?;
-            curr = n.parent();
-            continue;
-        }
-        curr = n.parent();
-    }
-
-    let verb = verb?;
-    // Prefixes are collected inside-out; join outermost-first under '/'.
-    let full = format!(
-        "/{}",
-        prefixes
-            .iter()
-            .rev()
-            .map(|p| p.trim_matches('/'))
-            .filter(|p| !p.is_empty())
-            .collect::<Vec<_>>()
-            .join("/")
-    );
-    Some(format!("{} {}", verb, full))
-}
-
 /// Synthesized name for an anonymous closure node: route label when PHP
 /// routing detection matches, else a stable per-scope ordinal. The ordinal
 /// label carries its scope (`PriceCalc::{closure#1}()`, or
 /// `<file-stem>::{closure#1}()` at file scope) so two closures never share a
 /// label — the build's fuzzy dedup merges same-label nodes and would
 /// otherwise misattribute one closure's call edges onto the other.
-fn synthesize_closure_name(state: &mut ExtractionState<'_>, node: &Node<'_>) -> String {
+pub(crate) fn synthesize_closure_name(state: &mut ExtractionState<'_>, node: &Node<'_>) -> String {
     if state.cfg.name == "PHP" {
         if let Some(route) = php_route_name(node, state.source) {
             return route;
@@ -1269,7 +771,7 @@ fn extract_import_module(text: &str, kind: &str, language: &str) -> Option<Strin
 // Pass 2: Call-graph extraction (walked inline during pass 1)
 // ---------------------------------------------------------------------------
 
-fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, body: &Node<'a>) {
+pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, body: &Node<'a>) {
     let kind = body.kind();
     // An expression-bodied arrow can return another function directly.
     // That returned function owns its calls, just like a nested declaration.

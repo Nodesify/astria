@@ -221,3 +221,173 @@ mod tests {
         );
     }
 }
+
+// --- Language-specific walker functions (moved from walkers.rs) ---
+// These branches belong beside the language's config: each one encodes how
+// THIS language's tree-sitter grammar names, documents, or classifies items.
+
+#[allow(unused_imports)]
+use crate::builtins::is_language_builtin;
+#[allow(unused_imports)]
+use crate::naming::{file_stem, make_node_id, make_target_id};
+#[allow(unused_imports)]
+use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};
+#[allow(unused_imports)]
+use crate::walkers::ExtractionState;
+#[allow(unused_imports)]
+use crate::walkers::{
+    const_signature, extract_docstring, find_body, first_child_text, item_docstring,
+    node_signature, node_text, second_child, synthesize_closure_name, unquote_literal, walk_calls,
+    walk_structural,
+};
+#[allow(unused_imports)]
+use astria_core::AstriaError;
+#[allow(unused_imports)]
+use std::collections::{HashMap, HashSet};
+#[allow(unused_imports)]
+use tree_sitter::{Node, Parser};
+
+/// PHP routing verbs whose first string argument is a route path. A closure
+/// passed directly to one of these gets a `VERB /path` label instead of an
+/// ordinal (#3409).
+pub(crate) const PHP_ROUTING_VERBS: &[&str] = &[
+    "get", "post", "put", "patch", "delete", "options", "any", "match", "map",
+];
+
+/// First string literal among `arg_list`'s children, stopping at `before`
+/// (the argument the closure itself sits in) when given. Handles both bare
+/// string children and `argument`-wrapped strings.
+pub(crate) fn first_string_arg<'a>(
+    arg_list: &Node<'a>,
+    before: Option<&Node<'_>>,
+    source: &'a [u8],
+) -> Option<String> {
+    let mut cursor = arg_list.walk();
+    for child in arg_list.children(&mut cursor) {
+        if before.is_some_and(|b| child.id() == b.id()) {
+            break;
+        }
+        let target = if child.kind() == "argument" {
+            let mut c = child.walk();
+            let found = child
+                .children(&mut c)
+                .find(|g| g.kind() == "string" || g.kind() == "encapsed_string");
+            drop(c);
+            found
+        } else if child.kind() == "string" || child.kind() == "encapsed_string" {
+            Some(child)
+        } else {
+            None
+        };
+        if let Some(t) = target {
+            return Some(unquote_literal(node_text(&t, source)).to_string());
+        }
+    }
+    None
+}
+
+/// Route-derived name for a PHP closure passed to a routing call: walk up the
+/// AST collecting the innermost route's verb/path plus any enclosing
+/// `group()`/`prefix()` path arguments and fluent-chain prefixes, composing
+/// e.g. `GET /api/v1/users/{id}`. Returns None when the innermost enclosing
+/// call is not a route (so `$cache->get('key', fn)` stays an ordinal).
+pub(crate) fn php_route_name(closure: &Node<'_>, source: &[u8]) -> Option<String> {
+    let mut prefixes: Vec<String> = Vec::new();
+    let mut verb: Option<String> = None;
+    let mut curr = closure.parent();
+
+    while let Some(n) = curr {
+        let kind = n.kind();
+        if matches!(
+            kind,
+            "function_definition" | "method_declaration" | "class_declaration"
+        ) {
+            break;
+        }
+        if kind == "argument" {
+            let arg_list = n.parent().filter(|a| a.kind() == "arguments");
+            let call = arg_list.and_then(|a| a.parent());
+            if let Some(call) = call.filter(|c| {
+                matches!(
+                    c.kind(),
+                    "member_call_expression"
+                        | "function_call_expression"
+                        | "scoped_call_expression"
+                )
+            }) {
+                let name_node = call
+                    .child_by_field_name("name")
+                    .or_else(|| call.child_by_field_name("function"));
+                let raw_method = name_node
+                    .map(|m| node_text(&m, source))
+                    .unwrap_or("")
+                    .to_lowercase();
+                let path_text = first_string_arg(&arg_list.unwrap(), Some(&n), source);
+                if verb.is_none() {
+                    // The innermost call must be a routing verb whose path
+                    // starts with '/', or this closure is not a route.
+                    match path_text {
+                        Some(p)
+                            if p.starts_with('/')
+                                && PHP_ROUTING_VERBS.contains(&raw_method.as_str()) =>
+                        {
+                            verb = Some(raw_method.to_uppercase());
+                            prefixes.push(p);
+                        }
+                        _ => return None,
+                    }
+                } else if let Some(p) = path_text.filter(|p| !p.is_empty()) {
+                    // Outer calls (group()/prefix()) contribute path prefixes.
+                    prefixes.push(if p.starts_with('/') {
+                        p
+                    } else {
+                        format!("/{}", p)
+                    });
+                }
+
+                // Fluent chain prefixes on the same statement
+                // (Route::prefix('/x')->group(...)).
+                let mut fluent = call.child_by_field_name("object");
+                while let Some(f) = fluent.filter(|f| f.kind() == "member_call_expression") {
+                    if let Some(f_args) = f.child_by_field_name("arguments") {
+                        if let Some(p) = first_string_arg(&f_args, None, source) {
+                            if !p.is_empty() {
+                                prefixes.push(if p.starts_with('/') {
+                                    p
+                                } else {
+                                    format!("/{}", p)
+                                });
+                            }
+                        }
+                    }
+                    fluent = f.child_by_field_name("object");
+                }
+
+                curr = call.parent();
+                continue;
+            }
+        } else if kind == "anonymous_function" || kind == "arrow_function" {
+            // A non-route closure nested inside another closure never adopts
+            // the outer one's route; with a route already found, jump across
+            // the closure boundary to its own argument.
+            verb.as_ref()?;
+            curr = n.parent();
+            continue;
+        }
+        curr = n.parent();
+    }
+
+    let verb = verb?;
+    // Prefixes are collected inside-out; join outermost-first under '/'.
+    let full = format!(
+        "/{}",
+        prefixes
+            .iter()
+            .rev()
+            .map(|p| p.trim_matches('/'))
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("/")
+    );
+    Some(format!("{} {}", verb, full))
+}
