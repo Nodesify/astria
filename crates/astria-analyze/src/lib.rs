@@ -1,7 +1,9 @@
 // astria-analyze: god nodes, surprises, question detection, and impact analysis
 
 pub mod affected;
+pub mod diagnose;
 pub mod health;
+pub mod risk;
 
 use rusqlite::Connection;
 use std::collections::HashMap;

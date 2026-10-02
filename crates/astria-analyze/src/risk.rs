@@ -93,7 +93,7 @@ pub fn compute_risk(db: &Connection, changed_files: &[String]) -> astria_core::R
         files_with_symbols += 1;
         for (seed_id, _label) in &seeds {
             seed_ids.push(seed_id.clone());
-            let result = match astria_analyze::affected::affected(db, seed_id, 2, None) {
+            let result = match crate::affected::affected(db, seed_id, 2, None) {
                 Ok(r) => r,
                 // A seed that no longer resolves (mid-refactor working
                 // tree) must not sink the whole report.

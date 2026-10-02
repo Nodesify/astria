@@ -86,6 +86,7 @@ name = "astria-bolt"
 version = "1.0.0"
 dependencies = [
  "astria-core",
+ "rusqlite",
  "tempfile",
 ]
 
@@ -146,6 +147,20 @@ dependencies = [
  "astria-core",
  "fastembed",
  "rusqlite",
+ "tempfile",
+]
+
+[[package]]
+name = "astria-export"
+version = "1.0.0"
+dependencies = [
+ "astria-analyze",
+ "astria-build",
+ "astria-core",
+ "petgraph",
+ "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
@@ -230,6 +245,7 @@ dependencies = [
  "astria-core",
  "astria-detect",
  "astria-embed",
+ "astria-export",
  "astria-extract",
  "astria-ingest",
  "astria-mcp",

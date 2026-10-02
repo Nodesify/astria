@@ -8,7 +8,7 @@ use serde::Serialize;
 /// Source lives in packages/viewer; run `npm run build` there and commit the
 /// rebuilt asset. Kept dependency-free and fully inlined so the exported page
 /// also works in sandboxed HTML previewers with no network access.
-const VIEWER_JS: &str = include_str!("assets/viewer.js");
+const VIEWER_JS: &str = include_str!("../assets/viewer.js");
 /// Maximum graph size accepted by the reference/standard HTML exporter.
 pub const MAX_NODES_FOR_VIZ: usize = 5_000;
 

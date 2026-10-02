@@ -6,6 +6,7 @@ members = [
     "crates/astria-paths",
     "crates/astria-detect",
     "crates/astria-extract",
+    "crates/astria-export",
     "crates/astria-build",
     "crates/astria-cluster",
     "crates/astria-analyze",
@@ -26,6 +27,7 @@ astria-core = { path = "crates/astria-core" }
 astria-paths = { path = "crates/astria-paths" }
 astria-detect = { path = "crates/astria-detect" }
 astria-extract = { path = "crates/astria-extract" }
+astria-export = { path = "crates/astria-export" }
 astria-build = { path = "crates/astria-build" }
 astria-cluster = { path = "crates/astria-cluster" }
 astria-analyze = { path = "crates/astria-analyze" }

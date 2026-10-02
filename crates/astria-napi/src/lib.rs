@@ -1,11 +1,11 @@
 pub mod benchmark;
-pub mod diagnose;
-pub mod export_cypher;
-pub mod export_graphml;
-pub mod export_html;
-pub mod export_obsidian;
-pub mod export_tree;
-pub mod export_wiki;
+pub use astria_analyze::diagnose;
+pub use astria_export::export_cypher;
+pub use astria_export::export_graphml;
+pub use astria_export::export_html;
+pub use astria_export::export_obsidian;
+pub use astria_export::export_tree;
+pub use astria_export::export_wiki;
 // ---------------------------------------------------------------------------
 // Diagnose, feedback, global graph, and extra ingest sources
 // ---------------------------------------------------------------------------
@@ -407,14 +407,14 @@ pub fn ingest_postgres(root: String, dsn: String) -> napi::Result<IngestCountsJs
     })
 }
 
-mod export_svg;
+use astria_export::export_svg;
 pub mod feedback;
 pub mod global;
 pub mod merge;
-mod neo4j_push;
+use astria_bolt::neo4j_push;
 pub mod pipeline;
 pub mod query;
-mod risk;
+pub use astria_analyze::risk;
 
 use napi_derive::napi;
 use std::collections::HashMap;
