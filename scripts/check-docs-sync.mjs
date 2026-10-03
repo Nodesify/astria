@@ -51,6 +51,7 @@ const countClaims = [
   ['ARCHITECTURE.md', /Uses (\d+) registered language configurations/, languageCount, 'registered language configurations'],
   ['website/docs/explanation/architecture.md', /Uses (\d+) registered language configurations/, languageCount, 'registered language configurations'],
   ['README.md', /\((\d+) languages incl\./, languageCount, 'languages'],
+  ['ARCHITECTURE.md', /registry currently defines (\d+) language configurations/, languageCount, 'language configurations'],
 ];
 for (const [file, re, expected, label] of countClaims) {
   const m = read(file).match(re);

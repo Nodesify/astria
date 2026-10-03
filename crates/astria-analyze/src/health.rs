@@ -4,7 +4,6 @@
 // circular file dependencies, hub concentration, and graph staleness.
 // Every signal is a heuristic over static data — the report says so.
 
-use crate::NodeAnalysis;
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::DiGraph;
 use rusqlite::Connection;
@@ -43,6 +42,76 @@ const ENTRY_LABELS: &[&str] = &[
     "route",
 ];
 
+/// Relations that carry NO usage semantics: containment (`contains` — every
+/// file "reaches" the symbols it defines), co-occurrence (similarity,
+/// hyperedge membership), and merge lineage. Counting them as reachability
+/// would make every definition reachable simply because its file contains
+/// it, and every file a hub because it has many members. Unknown future
+/// relations stay counted (usage) — the conservative direction: a symbol
+/// wrongly "reachable" is a missed hint, a wrongly "dead" one is a false
+/// accusation.
+const NON_USAGE_RELATIONS: &[&str] = &[
+    "contains",
+    "similar_to",
+    "relates_to",
+    "shares_reference",
+    "participate_in",
+    "rationale_for",
+    "forks",
+];
+
+/// A hub must clear BOTH this floor and the graph's own 95th-percentile
+/// usage degree. The floor keeps small graphs from calling every connector
+/// a hub; the percentile keeps dense-but-uniform graphs from flagging their
+/// ordinary top connectors.
+const HUB_DEGREE_FLOOR: usize = 10;
+const HUB_DEGREE_PERCENTILE: f64 = 0.95;
+
+/// SQL fragment selecting only usage edges (see NON_USAGE_RELATIONS).
+fn usage_edge_clause() -> String {
+    format!(
+        "relation NOT IN ({})",
+        NON_USAGE_RELATIONS
+            .iter()
+            .map(|r| format!("'{r}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// Largest usage degree (over NON_USAGE-filtered edges) per node id.
+fn usage_degrees(db: &Connection) -> astria_core::Result<HashMap<String, usize>> {
+    let mut degrees: HashMap<String, usize> = HashMap::new();
+    let mut add_side = |sql: &str| -> astria_core::Result<()> {
+        let mut stmt = db.prepare(sql)?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+        })?;
+        for (id, count) in rows.flatten() {
+            *degrees.entry(id).or_insert(0) += count;
+        }
+        Ok(())
+    };
+    add_side(&format!(
+        "SELECT target, COUNT(*) FROM edges WHERE {} GROUP BY target",
+        usage_edge_clause()
+    ))?;
+    add_side(&format!(
+        "SELECT source, COUNT(*) FROM edges WHERE {} GROUP BY source",
+        usage_edge_clause()
+    ))?;
+    Ok(degrees)
+}
+
+/// Nearest-rank percentile of a non-empty sorted slice.
+fn percentile(sorted: &[usize], p: f64) -> usize {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let rank = ((p * sorted.len() as f64).ceil() as usize).clamp(1, sorted.len());
+    sorted[rank - 1]
+}
+
 #[derive(Debug, Clone)]
 pub struct DeadCodeCandidate {
     pub id: String,
@@ -72,6 +141,13 @@ pub struct HealthReport {
     pub dead_code_candidates: Vec<DeadCodeCandidate>,
     pub cycles: Vec<FileCycle>,
     pub hub_churn: Vec<HubChurn>,
+    /// The usage-degree threshold the flagged hubs had to clear — stated in
+    /// the report so "no hubs" is readable as "nothing abnormal", not
+    /// "nothing checked".
+    pub hub_threshold: usize,
+    /// Hub-shaped nodes in test/spec files, excluded from `hub_churn`.
+    /// Fixtures are intentionally hub-shaped; they are reported, not scored.
+    pub test_hubs_skipped: usize,
     /// Days since the last completed pipeline run, when one exists.
     pub age_days: Option<u64>,
     pub node_count: usize,
@@ -129,7 +205,7 @@ pub fn health(db: &Connection) -> astria_core::Result<HealthReport> {
 
     let dead_code_candidates = dead_code(db)?;
     let cycles = file_cycles(db)?;
-    let hub_churn = hub_churn(db)?;
+    let (hub_churn, hub_threshold, test_hubs_skipped) = hub_churn(db)?;
     let age_days = graph_age_days(db);
 
     // Honest deduction schedule, stated in the rendered report: unreachable
@@ -146,24 +222,44 @@ pub fn health(db: &Connection) -> astria_core::Result<HealthReport> {
         dead_code_candidates,
         cycles,
         hub_churn,
+        hub_threshold,
+        test_hubs_skipped,
         age_days,
         node_count,
         edge_count,
     })
 }
 
-/// Code symbols with outgoing references and zero incoming ones. Deliberately
-/// conservative: entry-point names and test/spec files are excluded, because
-/// a static graph cannot see dynamic dispatch or external invocation.
+/// Code symbols with outgoing usage references and zero incoming ones.
+/// Degrees count only usage edges — a `contains` edge (file holds symbol)
+/// is structural bookkeeping, not a reference: counting it would make every
+/// definition "reachable" because its own file contains it. Deliberately
+/// conservative otherwise: entry-point names and test/spec files are
+/// excluded, because a static graph cannot see dynamic dispatch or
+/// external invocation.
 fn dead_code(db: &Connection) -> astria_core::Result<Vec<DeadCodeCandidate>> {
-    let indegree: HashMap<String, i64> = {
-        let mut stmt = db.prepare("SELECT target, COUNT(*) FROM edges GROUP BY target")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    // Incoming and outgoing counted separately over usage edges only: a
+    // `contains` edge (file holds symbol) is structural bookkeeping, not a
+    // reference — counting it would make every definition "reachable"
+    // because its own file contains it.
+    let indegree: HashMap<String, usize> = {
+        let mut stmt = db.prepare(&format!(
+            "SELECT target, COUNT(*) FROM edges WHERE {} GROUP BY target",
+            usage_edge_clause()
+        ))?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+        })?;
         rows.filter_map(|r| r.ok()).collect()
     };
-    let outdegree: HashMap<String, i64> = {
-        let mut stmt = db.prepare("SELECT source, COUNT(*) FROM edges GROUP BY source")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    let outdegree: HashMap<String, usize> = {
+        let mut stmt = db.prepare(&format!(
+            "SELECT source, COUNT(*) FROM edges WHERE {} GROUP BY source",
+            usage_edge_clause()
+        ))?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+        })?;
         rows.filter_map(|r| r.ok()).collect()
     };
 
@@ -183,8 +279,8 @@ fn dead_code(db: &Connection) -> astria_core::Result<Vec<DeadCodeCandidate>> {
     let mut candidates: Vec<DeadCodeCandidate> = Vec::new();
     for row in rows.filter_map(|r| r.ok()) {
         let (id, label, source_file) = row;
-        let incoming = *indegree.get(&id).unwrap_or(&0);
-        let outgoing = *outdegree.get(&id).unwrap_or(&0) as usize;
+        let incoming = indegree.get(&id).copied().unwrap_or(0);
+        let outgoing = outdegree.get(&id).copied().unwrap_or(0);
         if incoming > 0 || outgoing == 0 {
             continue;
         }
@@ -263,41 +359,83 @@ fn file_cycles(db: &Connection) -> astria_core::Result<Vec<FileCycle>> {
     Ok(cycles)
 }
 
-/// The god nodes, with their community's label — everything routes through
-/// them, so every change nearby is a change to them.
-fn hub_churn(db: &Connection) -> astria_core::Result<Vec<HubChurn>> {
+/// The genuinely abnormal connectors: nodes whose USAGE degree (containment
+/// and co-occurrence excluded) clears both the absolute floor and the
+/// graph's own 95th-percentile degree. Returns `(hubs, threshold,
+/// test_hubs_skipped)` — test/spec files are intentionally hub-shaped, so
+/// their candidates are counted and reported rather than scored.
+fn hub_churn(db: &Connection) -> astria_core::Result<(Vec<HubChurn>, usize, usize)> {
     let community_labels: HashMap<i64, String> = {
         let mut stmt = match db.prepare("SELECT id, label FROM communities") {
             Ok(stmt) => stmt,
-            Err(_) => return Ok(Vec::new()),
+            Err(_) => return Ok((Vec::new(), HUB_DEGREE_FLOOR, 0)),
         };
         let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
         rows.filter_map(|r| r.ok()).collect()
     };
-    let analysis = crate::analyze(db)?;
-    let hubs: Vec<HubChurn> = analysis
-        .god_nodes
-        .iter()
-        .take(MAX_HUBS)
-        .map(
-            |NodeAnalysis {
-                 label,
-                 degree,
-                 community,
-                 ..
-             }| HubChurn {
-                label: label.clone(),
-                degree: *degree,
-                community: community.map(|c| {
-                    community_labels
-                        .get(&(c as i64))
-                        .cloned()
-                        .unwrap_or_else(|| c.to_string())
-                }),
-            },
-        )
+    let degrees = usage_degrees(db)?;
+
+    let mut stmt = db.prepare("SELECT id, label, source_file, community FROM nodes")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, Option<i64>>(3)?,
+        ))
+    })?;
+    struct Candidate {
+        label: String,
+        degree: usize,
+        community: Option<i64>,
+        test_file: bool,
+    }
+    let mut candidates: Vec<Candidate> = rows
+        .flatten()
+        .map(|(id, label, source_file, community)| Candidate {
+            degree: degrees.get(&id).copied().unwrap_or(0),
+            test_file: is_test_file(&source_file),
+            label,
+            community,
+        })
         .collect();
-    Ok(hubs)
+    candidates.sort_by(|a, b| b.degree.cmp(&a.degree).then_with(|| a.label.cmp(&b.label)));
+
+    // Threshold from this graph's own distribution: a hub is abnormal
+    // relative to the graph, not merely in the top five.
+    let mut nonzero: Vec<usize> = candidates
+        .iter()
+        .map(|c| c.degree)
+        .filter(|d| *d > 0)
+        .collect();
+    nonzero.sort_unstable();
+    let threshold = HUB_DEGREE_FLOOR.max(percentile(&nonzero, HUB_DEGREE_PERCENTILE));
+
+    let mut hubs: Vec<HubChurn> = Vec::new();
+    let mut test_skipped = 0usize;
+    for candidate in &candidates {
+        if candidate.degree < threshold {
+            break;
+        }
+        if candidate.test_file {
+            test_skipped += 1;
+            continue;
+        }
+        if hubs.len() >= MAX_HUBS {
+            break;
+        }
+        hubs.push(HubChurn {
+            label: candidate.label.clone(),
+            degree: candidate.degree,
+            community: candidate.community.map(|c| {
+                community_labels
+                    .get(&c)
+                    .cloned()
+                    .unwrap_or_else(|| c.to_string())
+            }),
+        });
+    }
+    Ok((hubs, threshold, test_skipped))
 }
 
 fn graph_age_days(db: &Connection) -> Option<u64> {
@@ -380,7 +518,10 @@ pub fn render(report: &HealthReport, root: Option<&str>) -> String {
         report.hub_churn.len()
     ));
     if report.hub_churn.is_empty() {
-        out.push_str("No hub nodes.\n\n");
+        out.push_str(&format!(
+            "No abnormal hubs (flagged only above usage-degree {}, containment excluded).\n\n",
+            report.hub_threshold
+        ));
     } else {
         for h in &report.hub_churn {
             let community = h.community.as_deref().unwrap_or("-");
@@ -390,6 +531,12 @@ pub fn render(report: &HealthReport, root: Option<&str>) -> String {
             ));
         }
         out.push('\n');
+    }
+    if report.test_hubs_skipped > 0 {
+        out.push_str(&format!(
+            "({} test/spec hub-shaped node(s) excluded from scoring)\n\n",
+            report.test_hubs_skipped
+        ));
     }
 
     match report.age_days {
@@ -554,5 +701,141 @@ mod tests {
         assert!(!is_file_shaped_label("helper_util()"));
         assert!(!is_file_shaped_label("auth::login()"));
         assert!(!is_file_shaped_label("no_extension"));
+    }
+
+    #[test]
+    fn containment_edges_do_not_make_symbols_reachable() {
+        // The measured artifact: a `contains` edge (file holds symbol) used
+        // to count as an incoming reference, so every definition in the
+        // graph looked reachable and dead-code detection found nothing.
+        let db = open_db_in_memory().unwrap();
+        seed(
+            &db,
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('file', 'util.py', 'code', 'src/util.py'),
+                ('helper', 'helper_util()', 'code', 'src/util.py'),
+                ('other', 'other_fn()', 'code', 'src/other.py');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('file', 'helper', 'contains', 'EXTRACTED', 'src/util.py'),
+                ('helper', 'other', 'calls', 'EXTRACTED', 'src/util.py');",
+        );
+        let report = health(&db).unwrap();
+        assert_eq!(
+            report.dead_code_candidates.len(),
+            1,
+            "contains is containment, not a reference"
+        );
+        assert_eq!(report.dead_code_candidates[0].label, "helper_util()");
+    }
+
+    #[test]
+    fn co_occurrence_edges_do_not_make_symbols_reachable() {
+        let db = open_db_in_memory().unwrap();
+        seed(
+            &db,
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('a', 'fn_a()', 'code', 'src/a.py'),
+                ('b', 'fn_b()', 'code', 'src/b.py');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('a', 'b', 'similar_to', 'SEMANTIC', 'src/a.py'),
+                ('b', 'a', 'shares_reference', 'EXTRACTED', 'src/b.py');",
+        );
+        let report = health(&db).unwrap();
+        // Both have outgoing usage? No — only co-occurrence edges exist, so
+        // neither has usage degree at all: no dead-code claims either.
+        assert!(
+            report.dead_code_candidates.is_empty(),
+            "co-occurrence is not usage in either direction"
+        );
+    }
+
+    #[test]
+    fn hubs_require_abnormal_degree() {
+        // A uniform small graph: every connector has degree 2, far below the
+        // absolute floor — the old heuristic still flagged the top five.
+        let db = open_db_in_memory().unwrap();
+        let mut sql = String::new();
+        for i in 0..6 {
+            sql.push_str(&format!(
+                "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('n{i}', 'fn_{i}()', 'code', 'src/m{i}.py');\n"
+            ));
+        }
+        for i in 0..5 {
+            sql.push_str(&format!(
+                "INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('n{i}', 'n{}', 'calls', 'EXTRACTED', 'src/m{i}.py');\n",
+                i + 1
+            ));
+        }
+        seed(&db, &sql);
+        let report = health(&db).unwrap();
+        assert!(
+            report.hub_churn.is_empty(),
+            "uniform low-degree graphs have no abnormal hubs"
+        );
+        assert!(
+            report.hub_threshold >= 10,
+            "threshold never drops below the floor"
+        );
+
+        // Now add one genuine outlier: 40 callers through one symbol while
+        // the rest of the distribution stays low.
+        let mut sql = String::new();
+        for i in 0..40 {
+            sql.push_str(&format!(
+                "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('x{i}', 'caller_{i}()', 'code', 'src/x{i}.py');\n"
+            ));
+            sql.push_str(&format!(
+                "INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('x{i}', 'n0', 'calls', 'EXTRACTED', 'src/x{i}.py');\n"
+            ));
+        }
+        db.execute_batch(&sql).unwrap();
+        let report = health(&db).unwrap();
+        assert_eq!(report.hub_churn.len(), 1, "only the outlier is abnormal");
+        assert!(report.hub_churn[0].label.starts_with("fn_0"));
+    }
+
+    #[test]
+    fn test_file_hubs_are_reported_not_scored() {
+        let db = open_db_in_memory().unwrap();
+        let mut sql = String::new();
+        for i in 0..30 {
+            sql.push_str(&format!(
+                "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('p{i}', 'prod_{i}()', 'code', 'src/p{i}.py'), ('t{i}', 'fixture_{i}()', 'code', 'tests/t{i}.py');\n"
+            ));
+            sql.push_str(&format!(
+                "INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('p{i}', 't0', 'calls', 'EXTRACTED', 'src/p{i}.py');\n"
+            ));
+        }
+        seed(&db, &sql);
+        let report = health(&db).unwrap();
+        // The only hub-shaped node lives in tests/ — excluded from scoring,
+        // but the report says it was skipped instead of hiding it.
+        assert!(report.hub_churn.is_empty());
+        assert_eq!(report.test_hubs_skipped, 1);
+    }
+
+    #[test]
+    fn containment_edges_do_not_create_hubs() {
+        // A file with 200 contained symbols has 200 contains edges — that is
+        // a container, not a hub; only usage edges may concentrate.
+        let db = open_db_in_memory().unwrap();
+        let mut sql = String::new();
+        sql.push_str(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('big', 'big.py', 'code', 'src/big.py');\n",
+        );
+        for i in 0..200 {
+            sql.push_str(&format!(
+                "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('s{i}', 'sym_{i}()', 'code', 'src/big.py');\n"
+            ));
+            sql.push_str(&format!(
+                "INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('big', 's{i}', 'contains', 'EXTRACTED', 'src/big.py');\n"
+            ));
+        }
+        seed(&db, &sql);
+        let report = health(&db).unwrap();
+        assert!(
+            report.hub_churn.iter().all(|h| h.label != "big.py"),
+            "containment degree must not qualify a file as a hub"
+        );
     }
 }

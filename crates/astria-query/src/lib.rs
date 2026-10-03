@@ -543,16 +543,32 @@ fn query_graph_loaded(
     );
     if let Some(timestamp) = graph_built_at {
         header.push_str(&format!("# graph built at {timestamp}\n"));
-        // Staleness disclosure: hooked editors and the git hook keep the
-        // graph fresh, but edits through other paths (print-mode sessions,
-        // editors without hooks, plain typing) do not — and an agent that
-        // does not notice the timestamp answers from the past. Stat-only
-        // (no re-hashing), so this costs milliseconds even on large repos.
+        // Source-freshness disclosure (distinct from the graph AGE above):
+        // the manifest is the graph's source snapshot, and editors without
+        // hooks let the working tree drift from it — an agent that does not
+        // notice answers from the past. Stat-only (no re-hashing), so this
+        // costs milliseconds even on large repos; deletions and
+        // timestamp-preserving edits are included, added files are the
+        // merge gate's job.
         if let Ok(built) = timestamp.parse::<u64>() {
-            if let Some(changed) = files_changed_since(db, built) {
-                if changed > 0 {
+            if let Some(drift) = source_drift_since(db, built, loaded.root.as_deref()) {
+                if drift.total() > 0 {
+                    let mut parts = Vec::new();
+                    if drift.modified > 0 {
+                        parts.push(format!("{} modified", drift.modified));
+                    }
+                    if drift.deleted > 0 {
+                        parts.push(format!("{} deleted", drift.deleted));
+                    }
+                    if drift.size_changed > 0 {
+                        parts.push(format!(
+                            "{} size-changed (timestamp preserved)",
+                            drift.size_changed
+                        ));
+                    }
                     header.push_str(&format!(
-                        "# {changed} file(s) changed since this build — run `astria update` before trusting answers\n"
+                        "# source drift since this build: {} — run `astria update` before trusting answers\n",
+                        parts.join(", ")
                     ));
                 }
             }
@@ -2461,7 +2477,7 @@ at the lake house');",
         )
         .unwrap();
         assert!(
-            text.contains("changed since this build"),
+            text.contains("source drift since this build") && text.contains("1 modified"),
             "stale graph must disclose: {text}"
         );
 
@@ -2970,6 +2986,77 @@ at the lake house');",
         assert!(small_shown < shown1, "tiny budget shows fewer files");
         assert!(small.contains("truncated"), "truncation is declared");
         assert!(small.contains("Hub"), "the top-ranked file always fits");
+    }
+
+    #[test]
+    fn source_drift_counts_modified_deleted_and_size_changed() {
+        let db = open_db_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().replace('\\', "/");
+        let modified_f = dir.path().join("modified.py");
+        let deleted_f = dir.path().join("deleted.py");
+        let forged_f = dir.path().join("forged.py");
+        std::fs::write(
+            &modified_f,
+            "x = 1
+",
+        )
+        .unwrap();
+        std::fs::write(
+            &deleted_f, "x = 2
+",
+        )
+        .unwrap();
+        std::fs::write(&forged_f, "short").unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Manifest rows carry RELATIVE paths, as the pipeline writes them;
+        // the probe must resolve them against the supplied root.
+        for (name, size) in [("modified.py", 6), ("deleted.py", 6), ("forged.py", 5)] {
+            db.execute(
+                "INSERT INTO file_manifest (file_path, content_hash, file_type, language, last_seen_at, size_bytes)
+                 VALUES (?1, 'h', 'code', NULL, ?2, ?3)",
+                rusqlite::params![name, now.to_string(), size],
+            )
+            .unwrap();
+        }
+        // built_at far in the past: the two freshly written files that still
+        // exist count as modified; deleted.py exists for the stat, so
+        // remove it first.
+        std::fs::remove_file(&deleted_f).unwrap();
+        let drift = source_drift_since(&db, now - 3600, Some(&root)).unwrap();
+        assert_eq!(
+            drift.modified, 2,
+            "fresh mtimes after an old build (modified.py and forged.py)"
+        );
+        assert_eq!(drift.deleted, 1, "missing file is a deletion");
+        assert_eq!(drift.size_changed, 0);
+        assert_eq!(drift.total(), 3);
+        // Without the root, relative rows cannot be resolved: nothing is
+        // provably deleted (the old behavior from a foreign cwd — no
+        // disclosure, never a false one).
+        let unresolved = source_drift_since(&db, now - 3600, None).unwrap();
+        assert_eq!(
+            unresolved.deleted, 3,
+            "relative rows do not resolve without a root"
+        );
+        // Same-second build (cutoff in the future): mtimes look fresh, so
+        // only a size mismatch can reveal the edit — the manifest claims a
+        // size the file does not have.
+        db.execute(
+            "UPDATE file_manifest SET size_bytes = 999 WHERE file_path = 'forged.py'",
+            [],
+        )
+        .unwrap();
+        let drift = source_drift_since(&db, now + 60, Some(&root)).unwrap();
+        assert_eq!(drift.modified, 0);
+        assert_eq!(
+            drift.size_changed, 1,
+            "size mismatch exposes a preserved-timestamp edit"
+        );
+        assert_eq!(drift.deleted, 1);
     }
 }
 

@@ -153,6 +153,45 @@ pub(super) fn publish(
         "INSERT OR REPLACE INTO _meta (key, value) VALUES ('extraction_hash_version', ?1)",
         [astria_core::EXTRACTION_HASH_VERSION],
     )?;
+    // Commit provenance: the HEAD the corpus was extracted from. The merge
+    // gate compares this with the repo's current HEAD to prove the graph
+    // represents that commit's content — a publish timestamp alone only
+    // proves the build happened LATER, not that it saw the commit.
+    if let Some(head) = git_head_commit(root) {
+        tx.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('git_head', ?1)",
+            [&head],
+        )?;
+    }
+    // The generation advances INSIDE this transaction: the moment the core
+    // graph changes commit, snapshot caches must key on the new state — even
+    // if a later pipeline stage (clustering, report, export) fails before
+    // the terminal stamp lands.
+    tx.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', ?1)",
+        [&super::generation_stamp(&tx)],
+    )?;
     tx.commit()?;
     Ok(result)
+}
+
+/// Current HEAD commit of the project repository, when the project is a git
+/// work tree and git is available. Best-effort provenance: `None` means
+/// "unknown commit" and never fails the publish.
+fn git_head_commit(root: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let head = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let plausible =
+        (head.len() == 40 || head.len() == 64) && head.chars().all(|c| c.is_ascii_hexdigit());
+    plausible.then_some(head)
 }

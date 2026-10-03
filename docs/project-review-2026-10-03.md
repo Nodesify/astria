@@ -4,6 +4,35 @@ This review found **36 source-backed defects or implementation gaps**, followed 
 
 This is a broad source review, not a claim that every possible defect has been discovered. Findings describe reachable code paths; security attacks and external integrations were not executed. Priorities account for the conditions under which each feature is used.
 
+## Status (updated after implementation)
+
+All 42 findings below were implemented and reviewed across commits `22c0482` (backlog implementation), `e12af80` (deferred-media regression fix), `72c469a` (documentation), and the follow-up review work of the same day. Status legend: **resolved-tested** = implemented with unit/integration regression tests; **resolved-runtime** = implemented, and validated only where noted (live external service or manual assistive-tech validation not performed in CI).
+
+| Finding | Status | Notes |
+|---|---|---|
+| F01, F02, F06, F08, F09, F16, F19, F25, F27, F29, F30, F32, F33, F35, R01, R03, R04, R06 | resolved-tested | verified in the first implementation pass |
+| F04, F05, F07, F10, F11, F12, F13, F15, F20, F22, F23, F24, F26, F28, F31, F36, R02 | resolved-tested | completed in the second pass; R02's snapshot cache is now a bounded multi-project LRU (see follow-up item U4) |
+| F03 | resolved-runtime | `+s`/`+ssc` ride rustls with scheme-preserving transport; no live Neo4j TLS server in CI |
+| F14 | resolved-tested | cross-repo id disambiguation on merge |
+| F17 | resolved-runtime | Docker manifests restored; image build exercised in release CI only |
+| F18 | resolved-tested | viewer asset path fixed; CI bundle-drift guard added |
+| F21 | resolved-tested | pending-retry mechanism; the deferred-media regression it introduced was caught by the version A/B benchmark and pinned with `unextractable_binaries_do_not_keep_the_graph_dirty` |
+| F34 | resolved-runtime | keyboard/screen-reader navigation improved; manual screen-reader pass still recommended |
+| R05 | resolved-runtime | compatibility removals per project policy |
+
+### Follow-up review (later, 3 October 2026)
+
+A second review pass found six further issues (U1–U6). U1–U4 and U6 are implemented in the same follow-up change set; U5 is partially done — the reporting side landed, the corpus-growth work remains open.
+
+| # | Finding | Status | Notes |
+|---|---|---|---|
+| U1 | Cache invalidation not part of graph publication; cluster-only changed communities without advancing the generation or republishing artifacts | resolved-tested | the generation now advances inside the publication transaction and after every committed content change (dedup, deep links, embeddings, learned edges, community memberships, labels); unchanged runs reuse the previous generation; `cluster_only` publishes through the shared artifact workflow |
+| U2 | Freshness verified by timestamps only (merge gate; query warnings) | resolved-tested | merge gate compares the recorded git HEAD (`_meta.git_head`) with the current HEAD and re-hashes every manifest file; query headers report source drift (modified/deleted/size-changed) separately from graph age |
+| U3 | Health-score heuristics: containment counted as reachability; hubs flagged without thresholds | resolved-tested | usage/non-usage relation split; hubs need degree >= max(10, p95) with test-file hubs reported instead of scored |
+| U4 | Process-wide snapshot cache held one graph; multi-project MCP thrashed | resolved-tested | bounded LRU keyed by path + generation (default 3, `ASTRIA_SNAPSHOT_CACHE_ENTRIES` 1..=16) |
+| U5 | Retrieval evidence: track exact-symbol ranking alongside file recall and tokens; grow held-out corpora | partial | `scripts/bench/paired/report.mjs` now emits the metric trio plus a per-case definition-miss triage list, and `retrieval-validation.md` ranks the known failure modes; authoring genuinely held-out corpora remains open |
+| U6 | Documentation drift (language counts, cache claims, backlog statuses) | resolved | registry-derived count claims drift-checked by `scripts/check-docs-sync.mjs`; stale hand-maintained list removed; this status section added |
+
 ## Scope and verification
 
 Reviewed the Rust workspace and TypeScript CLI across discovery/extraction, persistence, graph identity, queries, merges/global stores, semantic enrichment, URL/media/Office/Workspace ingestion, MCP transports, HTML exports/viewer, Docker, release/CI, and documentation. Existing architecture documentation and `.astria/graph_report.md` provided orientation. Graph queries reported **76 changed files**, so conclusions were checked against current source rather than accepted from the graph.

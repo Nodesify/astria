@@ -11,7 +11,7 @@
 import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { graphBuildInfo, healthReport, riskReport } from '../native';
+import { graphBuildInfo, healthReport, riskReport, verifySourceCommit } from '../native';
 
 const BOLD = '\x1b[1m';
 const GREEN = '\x1b[32m';
@@ -36,20 +36,6 @@ interface Check {
   name: string;
   passed: boolean;
   detail: string;
-}
-
-function lastCommitTime(projectRoot: string): number | null {
-  try {
-    const out = execFileSync('git', ['log', '-1', '--format=%ct'], {
-      cwd: projectRoot,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    const t = Number(out.trim());
-    return Number.isFinite(t) && t > 0 ? t : null;
-  } catch {
-    return null;
-  }
 }
 
 // Git work-tree detection that distinguishes the three outcomes: inside a
@@ -106,11 +92,13 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
       detail: exists ? `built by astria ${build?.astriaVersion ?? '?'}, pipeline ${build?.pipelineVersion ?? '?'}` : `no graph at ${dbPath} — run 'astria run' first`,
     });
 
-    // 2. Freshness: the graph must postdate the last commit and be younger
-    //    than the configured ceiling. Both signals matter — a graph built
-    //    after a commit can still be ancient, and a recent build can
-    //    predate the commit it is supposed to describe.
-    // One probe for both freshness (covers-head) and diff-risk.
+    // 2. Two distinct freshness signals:
+    //    - graph AGE (how long since publication, ceiling-configured), and
+    //    - source COVERAGE (does the graph represent the current HEAD —
+    //      commit identity plus manifest content comparison).
+    //    A graph built after a commit can still fail coverage: it may have
+    //    been built from a dirty tree, an older commit, or drifted since.
+    // One probe for both coverage and diff-risk.
     const gitStatus = gitWorkTreeStatus(opts.graph);
     if (exists) {
       const publishedAt = Number(build?.graphPublishedAt);
@@ -122,36 +110,39 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
         passed: ageHours !== null && ageHours <= maxAgeHours,
         detail: ageHours === null
           ? 'graph has no publish timestamp (pre-provenance build) — rebuild with `astria run`'
-          : `graph is ${ageHours.toFixed(1)} h old (limit ${maxAgeHours} h)`,
+          : `graph is ${ageHours.toFixed(1)} h old (age limit ${maxAgeHours} h; source coverage is a separate check below)`,
       });
 
-      // Freshness also verifies the graph covers the current HEAD. Inside a
-      // repository, an unreadable commit time is a failed check, not a
-      // silently skipped one.
-      if (Number.isFinite(publishedAt) && publishedAt > 0) {
-        if (gitStatus.error !== null) {
+      // Coverage: the HEAD recorded at publication must equal the current
+      // HEAD, and every manifest file must still hash to the content the
+      // graph was built from. A publish timestamp alone only proved the
+      // build happened LATER — never that it saw the commit.
+      if (gitStatus.error !== null) {
+        checks.push({
+          name: 'graph-covers-head',
+          passed: false,
+          detail: `git detection failed: ${gitStatus.error} — cannot verify the graph covers HEAD`,
+        });
+      } else if (gitStatus.inside) {
+        try {
+          const coverage = verifySourceCommit(opts.graph);
+          const samples = coverage.driftSamples.length > 0
+            ? ` (${coverage.driftSamples.join('; ')})`
+            : '';
+          const verified = coverage.filesChecked > 0
+            ? ` — ${coverage.filesChecked} manifest file(s) content-verified`
+            : '';
+          checks.push({
+            name: 'graph-covers-head',
+            passed: coverage.coversHead === true,
+            detail: `${coverage.reason}${verified}${samples}`,
+          });
+        } catch (e: any) {
           checks.push({
             name: 'graph-covers-head',
             passed: false,
-            detail: `git detection failed: ${gitStatus.error} — cannot verify the graph covers HEAD`,
+            detail: `coverage verification failed: ${e?.message || e}`,
           });
-        } else if (gitStatus.inside) {
-          const commitTime = lastCommitTime(opts.graph);
-          if (commitTime === null) {
-            checks.push({
-              name: 'graph-covers-head',
-              passed: false,
-              detail: 'could not determine the last commit time — cannot verify the graph covers HEAD',
-            });
-          } else {
-            checks.push({
-              name: 'graph-covers-head',
-              passed: publishedAt >= commitTime,
-              detail: publishedAt >= commitTime
-                ? 'graph was built after the last commit'
-                : 'graph predates the last commit — run `astria update` before merging',
-            });
-          }
         }
       }
     }

@@ -54,12 +54,21 @@ Each run prints one JSON line; take medians per phase per label. Notes:
 - HTML export uses `--mode large` (the corpus exceeds the 5,000-node
   standard-mode limit).
 
-## October 2026 result (d43bc92 → e12af80)
+## October 2026 results
 
-Corpus: this repository's source (1,193 files, ~30 MB), Windows, release
-builds, medians of 3 interleaved rounds after a warmup. Full table and
-reading: see the "Version-to-version A/B" section of
-`website/docs/explanation/benchmarks.md`. Headline: build paths at parity,
-read paths 1.2–7× faster (generation-keyed snapshot cache); the harness
-caught a no-op-update regression (unextractable binaries flagged as pending
-media) that shipped fixed in `e12af80`.
+**d43bc92 → e12af80** (project-review backlog). Corpus: this repository's
+source (1,193 files, ~30 MB), Windows, release builds, medians of 3
+interleaved rounds after a warmup. Full table and reading: see the
+"Version-to-version A/B" section of `website/docs/explanation/benchmarks.md`.
+Headline: build paths at parity, read paths 1.2–7× faster (generation-keyed
+snapshot cache); the harness caught a no-op-update regression (unextractable
+binaries flagged as pending media) that shipped fixed in `e12af80`.
+
+**72c469a → follow-up review fixes** (4 October; publication-time cache
+invalidation, commit-identity coverage, health heuristics, LRU snapshot
+cache). Corpus refreshed to the then-current source (1,205 files, ~59 MB —
+exclude the repo's committed `packages/astria-cli/npm/` prebuilt binaries
+when mirroring, or the corpus quadruples). Headline: identical graph output,
+build paths +2.8–4.3% (the measured price of in-transaction provenance and
+mutation detection), reads at parity or slightly better. Same benchmarks.md
+section, "Follow-up A/B".

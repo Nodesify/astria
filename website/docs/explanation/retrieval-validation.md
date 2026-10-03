@@ -23,6 +23,14 @@ Self MRR is 0.618 (0.674 in the 1.0.5 run) and hit@5 holds at 82.9%: chunked pro
 
 ## Correctness diagnostics
 
+### Failure-mode priorities
+
+Ranked evaluation priorities for retrieval changes, derived from the measured weaknesses below. Any ranking or corpus change must be evaluated against all three, reported side by side — the paired runner's `report.mjs` table now emits the required trio (definition recall@5 + definition MRR, file recall@5 + file MRR, average delivered tokens with over-budget counts) plus a per-case miss list for triage:
+
+1. **Ambiguous same-name symbols.** Unqualified prose over colliding bare names (`invoke` x4 on Click) still ranks the right definition outside the top five. Definition-recall metrics, not file recall, are the acceptance bar here — a file hit with the wrong symbol is a silent failure.
+2. **Prose displacing code results.** Chunked document prose competes with code symbols in rankings and occasionally hijacks seeds (the two ripgrep `command`-helper lexical hijacks). Code-intent questions must not regress when document ranking improves.
+3. **Small external datasets.** Every external corpus is tiny (2–5 questions per split) and all non-reserved sets have been exercised; no result generalizes. Growing genuinely held-out corpora (the reserved splits stay reserved until their first evaluation run) matters more than further paired re-runs of the same questions.
+
 All query processes succeeded across the eight corpus/split builds. Astria stayed within budget for every response at both budgets (Graphify exceeded its own 1,000-token budget on 29/35 self questions). Every extraction-cache definition ID survived publication (1,432/1,432 self, 1,147/1,147 Click, 3,263/3,263 Express, 3,076/3,076 ripgrep). All known Click/Express/ripgrep-heldout definitions were present at their implementation lines (5/5, 2/2+1/1, 4/4).
 
 Exact-symbol top-five recall is weaker than file recall, and the September 28 ranking fixes narrowed the gap on the 1.0.6 pinned graphs: the additional Click cases moved from 0% to 2/2 definitions surfaced (the missing `BaseCommand.get_usage` had lost a seed slot to a same-name label tie and now reserves one via its qualified scope), the additional ripgrep cases from 25% to 3/4 (the remaining miss ranks 7th), and the self code set's MRR rose from 0.618 (paired run) to 0.687 at unchanged recall. Two same-name `invoke` implementations on Click still land at ranks 6 and 9 — genuinely ambiguous unqualified prose over four same-name symbols.
