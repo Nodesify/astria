@@ -711,13 +711,27 @@ fn run_pipeline_inner(
             semantic_pass::enrich_with_semantics(&files, &mut extractions, db, &configuration)?;
         // Deferred extractions (unavailable media tooling, missing workspace
         // credentials) publish nothing this run and stay pending: their old
-        // facts are preserved and the next run retries them.
+        // facts are preserved and the next run retries them. Only files
+        // whose deferral is ACTIONABLE are deferred: a transcribable media
+        // file can succeed once whisper is installed, a workspace shortcut
+        // once credentials return. The engine also labels files with NO
+        // extractor at all (svg/png/unknown binaries) as language "media" —
+        // those can never succeed through the media route, so deferring
+        // them would flag the graph dirty on every run forever and force a
+        // full republish per no-op update.
         let deferred: Vec<std::path::PathBuf> = extractions
             .iter()
             .filter(|e| {
-                (e.language == "media" || e.language == "gws")
-                    && e.nodes.is_empty()
-                    && e.edges.is_empty()
+                if !e.nodes.is_empty() || !e.edges.is_empty() {
+                    return false;
+                }
+                let ext = e
+                    .file_path
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .unwrap_or("");
+                e.language == "gws"
+                    || (e.language == "media" && astria_core::is_transcribable_extension(ext))
             })
             .map(|e| e.file_path.clone())
             .collect();
@@ -1481,6 +1495,29 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn unextractable_binaries_do_not_keep_the_graph_dirty() {
+        // Files with no extractor at all (svg/png/unknown binaries) get an
+        // empty language="media" extraction from the engine. They must NOT
+        // be counted as deferred media waiting on tooling: nothing can make
+        // them succeed through the media route, so deferring them would
+        // republish the entire graph on every no-op update forever.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("logo.svg"), b"<svg/>").unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "pub fn entry() {}\n").unwrap();
+
+        let first = run_pipeline_with(dir.path(), true, false, false, false, None).unwrap();
+        assert!(first.build_result.nodes_added > 0, "first run builds");
+
+        let second = run_pipeline_with(dir.path(), true, false, false, false, None).unwrap();
+        assert_eq!(
+            second.build_result.nodes_added, 0,
+            "no-op update must skip the rebuild: pending_retry must not hold \
+             unextractable binaries"
+        );
+    }
+
     fn deep_linking_writes_inferred_edges_then_caches() {
         let _guard = TEST_LOCK.lock().unwrap();
         reset_stubs();
