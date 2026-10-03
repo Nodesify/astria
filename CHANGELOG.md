@@ -6,6 +6,30 @@ this file is the per-version summary.
 
 ## [Unreleased]
 
+## [1.0.12] — 2026-10-04
+
+
+### Project-review backlog — 36 defects + 6 engineering improvements (3 October)
+
+Source-backed review of every workspace crate and the CLI; findings and statuses in `docs/project-review-2026-10-03.md`.
+
+- **Security boundaries** — HTML exports escape every `<` in embedded graph JSON (mixed-case `</SCRIPT>` could terminate the data element); MCP configuration files are excluded from raw LLM enrichment (literal credentials can no longer leave the machine through a remote backend); `bolt+s://`/`bolt+ssc://` now ride rustls with scheme-preserving transport instead of silently downgrading to plaintext TCP; HTTP MCP enforces a whole-request deadline with per-read recomputation and exact loopback matching (`127.attacker.example` is not loopback); `yt-dlp` media downloads are resolved and vetted through the SSRF policy (`-J --simulate`) before any byte moves; URL classification parses host/path instead of substring-matching the whole URL.
+- **Graph identity & integrity** — node ids are case-preserving (`Foo`/`foo` stay distinct; matching stays case-folded), with duplicate-id disambiguation rewiring edges to the surviving definition and the extraction cache version advanced to v14 so pre-fix caches invalidate cleanly; automatic global tags check existing names before allocating (no more repo duplication/replacement); merge is atomic — edges reconcile, the database swaps with rollback, artifacts stage as `.new` and flip only after the swap, and the generation is stamped inside the transaction; global replace runs fully transactionally with relation reconciliation after commit.
+- **Freshness & publication trust** — every publication mints a generation stamp (`_meta.graph_generation`, `generation.txt`, `_meta` in `graph.json`, report footer) so database, JSON, and report of one build are matchable and snapshot caches key on it; unchanged Google Workspace shortcuts re-check their remote revision instead of trusting shortcut bytes; the merge gate fails on git-detection errors instead of silently skipping its checks.
+- **Semantic backend honesty** — token reservations span the whole request+response with guard-based release and per-backend `max_tokens` sharing the same constants (the advertised budget is reserved before the call, not audited after); content needing more than the chunk cap fails loudly (`ASTRIA_LLM_MAX_CHUNKS`) instead of truncating and caching as success; Bedrock `stopReason` is checked before accepting text; derived-text lookup validates against the extraction-hash family (config-hash lookups that never matched what extraction wrote are gone); malformed LLM replies never become cached empty successes.
+- **Everywhere else** — XLSX decompression bounds are pre-checked via a bounded `<dimension>` zip scan before allocation; non-ASCII document titles can't panic filename creation; watch mode covers every supported file type and directory renames; database decode errors surface instead of silently truncating graphs; Bolt 3 RUN carries its third (extra) field per the official spec; risk traversal propagates errors; the viewer bundle is drift-checked in CI; a version-to-version A/B harness ships in `scripts/bench/ab/`.
+
+### Follow-up review — publication, coverage, health, cache (3–4 October)
+
+- **Cache invalidation is part of graph publication** — the generation advances inside the core transaction and immediately after every derived pass that commits a content change; unchanged runs reuse the previous generation; `cluster-only` republishes through the same artifact workflow as full pipelines.
+- **Merge-gate coverage is commit identity, not timestamps** — the pipeline records `_meta.git_head` at publication and `verifySourceCommit` compares it with the current HEAD while re-hashing every manifest file (the graph's own versioned scheme); query headers disclose source drift (modified / deleted / size-changed) separately from graph age, and relative manifest paths resolve against the project root so probes work from any cwd.
+- **Health-score heuristics corrected** — containment and co-occurrence edges no longer count as reachability (dead-code detection finds real candidates again); hubs must clear max(10, the graph's own 95th-percentile usage degree), and test-file hubs are reported, not scored.
+- **Multi-project snapshot cache** — the process-wide graph cache becomes a bounded LRU keyed by database path + generation (default 3 entries, `ASTRIA_SNAPSHOT_CACHE_ENTRIES` 1–16); alternating MCP projects share snapshots instead of evicting each other.
+- **Retrieval evidence** — the paired runner's report emits exact-symbol ranking (definition recall@5 + MRR) beside file recall and delivered tokens, plus a per-case definition-miss triage list; known failure modes are ranked as evaluation priorities.
+- **Documentation** — architecture claims derive from the registry (language counts drift-checked by `scripts/check-docs-sync.mjs`), the snapshot-cache description matches the LRU, and the review backlog carries per-finding status tables.
+
+
+
 ### Platform & integration — team serving, cloud backends, CI artifacts (#B1–B5)
 
 - **MCP over HTTP + multi-project serving** — `astria mcp --http` serves one or many project graphs over MCP Streamable HTTP (JSON responses; `GET /healthz` for liveness) from a single process, complementing the stdio transport. Clients select a project with the `x-astria-project` header or `?project=` query (unknown names 404 — no silent fallback); `--graph` is the default project and `--projects name=path` adds more. Bearer auth (`--token` / `ASTRIA_MCP_TOKEN`) is mandatory whenever the server binds a non-loopback host — unauthenticated remote serving is refused at startup. No async runtime: thread-per-connection, a fresh SQLite handle per request. Transport routing, auth, and project resolution are tested without sockets.
