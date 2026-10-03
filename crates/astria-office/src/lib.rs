@@ -108,7 +108,11 @@ fn docx_to_markdown(bytes: &[u8]) -> std::result::Result<String, String> {
                 _ => {}
             },
             Ok(quick_xml::events::Event::Text(t)) => {
-                let decoded = t.unescape().map_err(|e| e.to_string())?;
+                let decoded = t.decode().map_err(|e| e.to_string()).and_then(|s| {
+                    quick_xml::escape::unescape(&s)
+                        .map(|c| c.into_owned())
+                        .map_err(|e| e.to_string())
+                })?;
                 if in_cell {
                     cell_text.push_str(&decoded);
                 } else {
@@ -418,7 +422,10 @@ fn heading_level(style: &str) -> u8 {
 fn attr(event: &quick_xml::events::BytesStart<'_>, name: &[u8]) -> Option<String> {
     for a in event.attributes().flatten() {
         if a.key.local_name().as_ref() == name {
-            return a.unescape_value().ok().map(|v| v.to_string());
+            return a
+                .decoded_and_normalized_value(quick_xml::XmlVersion::Explicit1_0, event.decoder())
+                .ok()
+                .map(|v| v.to_string());
         }
     }
     None
