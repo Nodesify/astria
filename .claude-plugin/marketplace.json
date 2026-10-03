@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Astria: codebase knowledge graph for AI coding agents",
-    "version": "1.0.11"
+    "version": "1.0.12"
   },
   "plugins": [
     {
       "name": "astria",
       "source": "./",
       "description": "Codebase knowledge graph: PageRank repo maps, natural-language graph queries, blast radius, and health scoring. Bundles the MCP server, the graph-first skill, and slash commands.",
-      "version": "1.0.11",
+      "version": "1.0.12",
       "author": {
         "name": "Nodesify"
       },

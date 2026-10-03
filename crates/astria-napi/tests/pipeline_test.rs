@@ -45,6 +45,29 @@ fn full_pipeline_on_python_fixture() {
 }
 
 #[test]
+fn full_pipeline_survives_untranscribable_media() {
+    // The mp3 fixture is not decodable audio and CI has no whisper-cli:
+    // either way the file skips transcription with a notice while the rest
+    // of the graph builds normally.
+    let tmp = copy_fixture_to_temp("media");
+    let root = tmp.path();
+    astria_napi::pipeline::run_pipeline(root).unwrap();
+
+    let db = rusqlite::Connection::open(root.join(".astria/db.sqlite")).unwrap();
+    let file_type: String = db
+        .query_row(
+            "SELECT file_type FROM file_manifest WHERE file_path = 'standup.mp3'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        file_type, "audio",
+        "media file is detected and manifest-tracked"
+    );
+}
+
+#[test]
 fn full_pipeline_on_rust_fixture() {
     let tmp = copy_fixture_to_temp("rust");
     let root = tmp.path();

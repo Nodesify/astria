@@ -4,7 +4,7 @@ astria turns source code into a queryable knowledge graph. It uses AST-based ext
 
 ## Overview
 
-The project is structured as a Rust workspace with 16 domain-specific crates and a Node.js CLI.
+The project is structured as a Rust workspace with 20 domain-specific crates and a Node.js CLI.
 
 **Language**: Rust 2021
 **Build system**: Cargo + npm
@@ -19,7 +19,7 @@ detect() → extract() → enrich_with_semantics() → build() → dedup_nodes()
 The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 
 1.  **detect()** (`astria-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run.
-2.  **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Uses 25 registered language configurations; discovery and parser selection share `astria-core/src/languages.rs`, with AST rules in `src/langs/`.
+2.  **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Uses 42 registered language configurations; discovery and parser selection share `astria-core/src/languages.rs`, with AST rules in `src/langs/`.
 3.  **enrich_with_semantics()** (`astria-semantic`, optional): When `--backend` or `ASTRIA_LLM_BACKEND` explicitly selects a backend, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results. With `--judge jev`, a TypeSafe System One judge layer wraps the engine: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking.
 4.  **build()** (`astria-build`): Publishes extracted nodes and edges into SQLite. The extraction reference pass reconciles cross-file references before publication; semantic entity deduplication runs as a derived pass. Code and test definitions, packages, rationale nodes and file identities are excluded from fuzzy merging: identical method names in different scopes remain separate definitions.
 5.  **embed()** (`astria-embed`, optional `--embed`): Computes local node embeddings (fastembed/ONNX, no API key) and adds `similar_to` edges ahead of the cluster() stage, so community detection consumes semantic similarity.
@@ -31,11 +31,13 @@ The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 
 AST parsing is incremental: unchanged source reuses its versioned extraction cache. The extraction reference pass reconciles the complete current corpus, so adding, removing, or renaming a definition also updates callers from unchanged files. Name-based resolution is still `INFERRED`; deterministic execution does not make a guessed target a declared fact.
 
-Validated file-owned graph facts, the file manifest, and `_meta.graph_published_at` commit in one SQLite transaction. Query freshness (`graph_built_at`) uses that publication timestamp, so a failed later stage does not hide a successful core publication. The build configuration fingerprint includes deduplication options; changing those options triggers reconciliation. Extraction or semantic extraction errors leave that core graph and manifest unadvanced. Derived passes run after the core commit and rerun on subsequent updates, including unchanged updates, so a failed derived pass can be retried. These later passes and exported files are not part of the core transaction.
+Validated file-owned graph facts, the file manifest, `_meta.graph_published_at`, the covered git HEAD (`_meta.git_head`), and a fresh publication generation (`_meta.graph_generation`) commit in one SQLite transaction — so a core publication can never leave snapshot caches keyed on the previous state, even if a later stage fails. Derived passes run after the core commit and advance the generation immediately after any pass that actually changes content (dedup merges, deep links, embedding edges, learned edges, community memberships, community labels); unchanged runs reuse the previous generation instead of minting a new one. Clustering-only reruns publish through the same workflow (stamped report, `graph.json`, `generation.txt`) as full pipelines. Extraction or semantic extraction errors leave that core graph and manifest unadvanced; derived passes rerun on subsequent updates, so a failed derived pass can be retried.
+
+Merge-gate freshness is commit identity, not timestamps: the gate compares `_meta.git_head` with the repository's current HEAD and re-hashes every manifest file against the graph's own versioned content scheme, so a graph built from a dirty tree, an older commit, or one whose sources drifted since publication fails `graph-covers-head` (query headers carry the cheaper stat-only version of the same signal: modified, deleted, and size-changed files since publication).
 
 Semantic caches include source inputs and non-secret effective backend, endpoint, model, judge, and prompt configuration. Cached and fresh semantic results use the same merge path. Community labels and deep links also fingerprint their effective inputs and configuration. Source changes invalidate deep edges; restoring them requires another run with `--deep`, which replays matching cache entries or generates fresh links.
 
-CLI and MCP queries use the same hybrid retrieval path. Each request loads a fresh SQLite graph snapshot in O(V + E) time and memory instead of reusing a process-global graph cache. `--detail high` filters on evidence kind (`EXTRACTED`), independent of usage-adjusted scores; learned, name-resolved, and semantic edges remain inferred.
+CLI and MCP queries use the same hybrid retrieval path, served from a bounded process-wide snapshot cache: an LRU (default 3 entries, `ASTRIA_SNAPSHOT_CACHE_ENTRIES` 1..=16) keyed by database path AND publication generation (`_meta.graph_generation`). A hit shares an immutable in-memory snapshot — no O(V + E) reload; any generation advance (every committed graph mutation performs one) invalidates the key, and un-stamped databases bypass the cache entirely. The bound trades memory (each entry is a full node+edge snapshot) for multi-project MCP alternation latency. `--detail high` filters on evidence kind (`EXTRACTED`), independent of usage-adjusted scores; learned, name-resolved, and semantic edges remain inferred.
 
 ## Crate Responsibilities
 
@@ -55,6 +57,11 @@ CLI and MCP queries use the same hybrid retrieval path. Each request loads a fre
 | `astria-report` | Markdown generation for the final user-facing report. |
 | `astria-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. `--judge jev` wraps the selected engine with a TypeSafe System One judge layer: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking. |
 | `astria-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection. |
+| `astria-audio` | Audio/video transcription via the external `whisper-cli` binary (whisper.cpp) and `ffmpeg` demux — transcript markdown feeds the document extractor. |
+| `astria-office` | Office document text extraction: `.docx` (via `word/document.xml`) and `.xlsx` (via calamine) become markdown for the document extractor. |
+| `astria-gws` | Google Workspace shortcut ingestion: `.gdoc`/`.gsheet`/`.gslides` links are exported through the Drive API and become document nodes. Missing credentials degrade to a notice. |
+| `astria-export` | Graph export: JSON, interactive HTML, GraphML, SVG, Neo4j Cypher (with push), FalkorDB openCypher (with Redis push). |
+
 | `astria-pdf` | PDF text extraction. |
 | `astria-napi` | The bridge between Rust and Node.js: pipeline orchestration (semantic enrichment, community labeling, deep linking), query surface, merge/diff, JSON/HTML/GraphML/SVG/tree/Cypher export, live Neo4j push, health and risk reports. |
 | `astria-cli` | The Node.js-based user interface, responsible for argument parsing and installing AI skills. |
@@ -110,4 +117,4 @@ Hyperedges (n-ary, stored in the `hyperedges` table):
 
 Language names, extensions, and parser registration are defined once in `crates/astria-core/src/languages.rs`. Discovery and extraction consume that registry. The language-support documentation is generated by `scripts/generate-language-support.mjs` from the registry and actual AST configs; `scripts/check-docs-sync.mjs` rejects drift. Extraction rules are defined in `crates/astria-extract/src/langs/`. Each language module provides a `LanguageConfig` specifying which AST nodes represent classes, functions, and relationships.
 
-Currently supported (25 configurations): Python, JS, TS, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Shell, Dart, Zig, CSS, Terraform/HCL, PowerShell, Verilog/SystemVerilog, and Metal.
+The registry currently defines 42 language configurations; the authoritative per-language table (names, extensions, AST coverage) is generated from it into `website/docs/reference/language-support.md` — this count is drift-checked by `scripts/check-docs-sync.mjs`, and the hand-maintained list that used to live here was removed after it fell 17 languages behind the registry.

@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Scala
             .registration()
             .extensions,
+        #[cfg(feature = "lang-scala")]
         language_fn: || tree_sitter_scala::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-scala"))]
+        language_fn: || crate::langs::config::missing_language("scala"),
+        compiled_in: cfg!(feature = "lang-scala"),
         class_types: &[
             "class_definition",
             "object_definition",

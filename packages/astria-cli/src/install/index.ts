@@ -1,7 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { PLATFORMS, PlatformConfig } from './platforms';
+import { PLATFORMS, PLATFORM_NAMES, PlatformConfig } from './platforms';
+import { uninstallGitHooks } from './hooks';
+import { mergeDriverUninstall } from '../commands/merge-driver';
 import { injectSection, removeSection, PROJECT_MD_SECTION, SKILL_REGISTRATION, SectionResult } from './markdown-inject';
 import {
   injectClaudeHook, removeClaudeHook,
@@ -324,6 +326,67 @@ export function installPlatform(platform: string, projectDir: string): string[] 
         ? `${label.name} -> ${label.file}`
         : `${label.name}: already registered`
     );
+  }
+
+  return messages;
+}
+
+/// Deep clean (`uninstall --purge`): everything uninstall does, plus the
+/// artifacts uninstall deliberately leaves alone — git hooks, the merge
+/// driver wiring, the project's `.astria/` data directory, and the global
+/// cross-repo store. Explicit-flag consent only; there is no interactive
+/// prompt, so CI can run it unattended.
+export function purgeEverything(projectDir: string): string[] {
+  const messages: string[] = [];
+
+  // 1. Every platform's skill/MCP/hook registrations.
+  for (const platform of PLATFORM_NAMES) {
+    try {
+      messages.push(...uninstallPlatform(platform, projectDir));
+    } catch (e: any) {
+      messages.push(`${platform}: ${e.message || e}`);
+    }
+  }
+
+  // 2. Git post-commit / post-checkout hooks installed by `astria hook install`.
+  try {
+    messages.push(...uninstallGitHooks(projectDir));
+  } catch (e: any) {
+    messages.push(`git hooks: ${e.message || e}`);
+  }
+
+  // 3. Merge-driver wiring from `astria merge-driver install`.
+  try {
+    messages.push(...mergeDriverUninstall(projectDir));
+  } catch (e: any) {
+    messages.push(`merge driver: ${e.message || e}`);
+  }
+
+  // 4. The project's graph data: graphs, wiki, transcripts, caches,
+  //    history — everything lives under .astria/.
+  const projectData = path.join(projectDir, '.astria');
+  if (fs.existsSync(projectData)) {
+    try {
+      fs.rmSync(projectData, { recursive: true, force: true });
+      messages.push(`Project graph data removed: ${projectData}`);
+    } catch (e: any) {
+      messages.push(`Project graph data (${projectData}): ${e.message || e}`);
+    }
+  } else {
+    messages.push('Project graph data: not found');
+  }
+
+  // 5. The global cross-repo store (~/.astria/global.db and friends).
+  const globalDir = path.join(os.homedir(), '.astria');
+  if (fs.existsSync(globalDir)) {
+    try {
+      fs.rmSync(globalDir, { recursive: true, force: true });
+      messages.push(`Global store removed: ${globalDir}`);
+    } catch (e: any) {
+      messages.push(`Global store (${globalDir}): ${e.message || e}`);
+    }
+  } else {
+    messages.push('Global store: not found');
   }
 
   return messages;

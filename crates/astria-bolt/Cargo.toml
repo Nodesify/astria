@@ -8,6 +8,17 @@ publish = false
 
 [dependencies]
 astria-core = { workspace = true }
+rusqlite = { workspace = true }
+# TLS for bolt+s/bolt+ssc schemes. Same feature set ureq already builds this
+# workspace with (ring provider, no defaults), so this adds no new crypto
+# backend to the dependency tree.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "logging",
+    "std",
+    "tls12",
+] }
+webpki-roots = "1"
 
 [dev-dependencies]
 tempfile = "3"

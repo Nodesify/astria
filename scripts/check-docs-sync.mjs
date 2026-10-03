@@ -40,6 +40,28 @@ for (const name of members) {
   }
 }
 
+// 1b. Counted claims must match the manifests: "N crates" equals workspace
+// members, "N registered language configurations"/"N languages" equals the
+// language registry macro arms. These numbers rot silently otherwise.
+const languageRegistry = read('crates/astria-core/src/languages.rs');
+const languageCount = (languageRegistry.match(/^\s*[A-Z][A-Za-z0-9]*, "/gm) || []).length;
+const countClaims = [
+  ['ARCHITECTURE.md', /(\d+) domain-specific crates/, members.length, 'domain-specific crates'],
+  ['README.md', /Rust workspace with (\d+) crates/, members.length, 'crates'],
+  ['ARCHITECTURE.md', /Uses (\d+) registered language configurations/, languageCount, 'registered language configurations'],
+  ['website/docs/explanation/architecture.md', /Uses (\d+) registered language configurations/, languageCount, 'registered language configurations'],
+  ['README.md', /\((\d+) languages incl\./, languageCount, 'languages'],
+  ['ARCHITECTURE.md', /registry currently defines (\d+) language configurations/, languageCount, 'language configurations'],
+];
+for (const [file, re, expected, label] of countClaims) {
+  const m = read(file).match(re);
+  if (!m) {
+    problems.push(`${file}: ${label} claim not found (pattern ${re})`);
+  } else if (Number(m[1]) !== expected) {
+    problems.push(`${file}: claims ${m[1]} ${label}, manifest says ${expected}`);
+  }
+}
+
 // 2. Every relation literal the code emits is documented in ARCHITECTURE.md's
 //    relationship section. Scan the files that construct edges.
 const relationFiles = [

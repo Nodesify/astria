@@ -8,7 +8,7 @@ use serde::Serialize;
 /// Source lives in packages/viewer; run `npm run build` there and commit the
 /// rebuilt asset. Kept dependency-free and fully inlined so the exported page
 /// also works in sandboxed HTML previewers with no network access.
-const VIEWER_JS: &str = include_str!("assets/viewer.js");
+const VIEWER_JS: &str = include_str!("../assets/viewer.js");
 /// Maximum graph size accepted by the reference/standard HTML exporter.
 pub const MAX_NODES_FOR_VIZ: usize = 5_000;
 
@@ -122,17 +122,55 @@ struct Payload {
     meta: Meta,
 }
 
+/// Escape HTML script-breaking sequences in inline JavaScript. The committed
+/// viewer bundle is expected to contain none of these (tests enforce it), but
+/// defense here is cheap: `</script` (case-insensitively, since HTML tag
+/// matching ignores case) and `<!--` (which can flip an HTML parser into
+/// script-data-escaped state) both lose their leading `<`. Unlike the data
+/// JSON, JS code uses `<` as an operator, so only these two sequences are
+/// rewritten rather than every `<`.
+fn neutralize_script_terminators(js: &str) -> String {
+    let lower = js.to_ascii_lowercase();
+    let mut out = String::with_capacity(js.len());
+    let bytes = js.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            if lower[i..].starts_with("</script") {
+                out.push_str("\\u003c/script");
+                i += "</script".len();
+                continue;
+            }
+            if lower[i..].starts_with("<!--") {
+                out.push_str("\\u003c!--");
+                i += "<!--".len();
+                continue;
+            }
+        }
+        let ch = js[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
 fn export_html_impl(db: &Connection, out_path: &Path) -> astria_core::Result<()> {
-    let payload = build_payload(db)?;
+    // One read snapshot for every table the payload touches: without a
+    // shared transaction a concurrent publisher can land between the node
+    // and edge reads and the exported page would mix two builds.
+    let snapshot = db.unchecked_transaction()?;
+    let payload = build_payload(&snapshot)?;
 
     let data_json = serde_json::to_string(&payload)?;
-    // Keep the embedded JSON from terminating the surrounding <script> block
-    // (\u003c is valid in both JSON and JS string literals).
-    let data_json = data_json
-        .replace("</script", "\\u003c/script")
-        .replace("<!--", "\\u003c!--");
+    // HTML parsers accept mixed-case closing tags, and JSON serialization
+    // alone does not make a string safe inside a script element — a label
+    // like `</SCRIPT><script>…` would terminate the data script. `<` can
+    // only occur inside JSON string values, so escaping every one to its
+    // `\u003c` JSON escape makes breakout sequences impossible without
+    // touching structure.
+    let data_json = data_json.replace('<', "\\u003c");
 
-    let viewer_js = VIEWER_JS.replace("</script", "\\u003c/script");
+    let viewer_js = neutralize_script_terminators(VIEWER_JS);
 
     let html = format!(
         r##"<!DOCTYPE html>
@@ -158,7 +196,11 @@ fn export_html_impl(db: &Connection, out_path: &Path) -> astria_core::Result<()>
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(out_path, html)?;
+    // Publish whole: temp sibling + rename so a reader never sees a torn
+    // page, mirroring the pipeline's artifact writes.
+    let tmp = out_path.with_extension("html.new");
+    std::fs::write(&tmp, html)?;
+    std::fs::rename(&tmp, out_path)?;
     Ok(())
 }
 
@@ -414,7 +456,7 @@ mod tests {
         db.execute_batch(
             "
             INSERT INTO nodes (id, label, file_type, source_file) VALUES
-              ('a', '</script><script>alert(1)</script>', 'html', 'a<!--b.html');
+              ('a', '</SCRIPT><script>alert(1)</script>', 'html', 'a<!--b.html');
         ",
         )
         .unwrap();
@@ -424,8 +466,31 @@ mod tests {
         export_html(&db, &out).unwrap();
 
         let html = std::fs::read_to_string(&out).unwrap();
-        assert!(html.contains(r#"\u003c/script"#));
-        assert!(html.contains(r#"\u003c!--"#));
+        // Every literal `<` in the embedded JSON is escaped, so no mixed-case
+        // or lowercase `</script`/`<!--` from labels can survive into markup.
+        let data_line = html
+            .lines()
+            .find(|l| l.contains("var DATA ="))
+            .expect("data script present");
+        assert!(!data_line.contains("</SCRIPT"));
+        assert!(!data_line.contains("</script"));
+        assert!(!data_line.contains("<!--"));
+        assert!(data_line.contains("\\u003c"));
+    }
+
+    #[test]
+    fn neutralizer_matches_mixed_case_and_keeps_operators() {
+        // Mixed-case terminators must be neutralized...
+        assert_eq!(
+            neutralize_script_terminators("x</ScRiPT>y"),
+            "x\\u003c/script>y"
+        );
+        assert_eq!(neutralize_script_terminators("a<!--b"), "a\\u003c!--b");
+        // ...while comparison operators in real JS stay untouched.
+        assert_eq!(
+            neutralize_script_terminators("if (a < b && b > c) {}"),
+            "if (a < b && b > c) {}"
+        );
     }
 
     #[test]

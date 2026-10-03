@@ -11,6 +11,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { Command } from 'commander';
 import { program } from '../index';
+import { DEFAULT_QUERY_BUDGET } from '../defaults';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const pkg = require('../../package.json');
@@ -99,7 +100,14 @@ assert(!!modeOpt && (modeOpt.defaultValue ?? 'standard') === 'standard', 'export
 // stale pin makes npm install a previous version's .node binary (0.6.0
 // shipped 0.5.0's binary because the pins were not bumped)
 const optDeps: Record<string, string> = pkg.optionalDependencies ?? {};
-assert(Object.keys(optDeps).length === 5, 'all 5 napi platform packages should be pinned');
+// One pin per published release target. Bump deliberately when a target
+// is added or retired — this assert exists to force that update to be
+// conscious (and to catch a stale pin, which ships an old .node binary).
+// Five targets are published today; @nodesify/astria-linux-x64-musl,
+// -win32-arm64-msvc and -linux-arm64-musl still 404 on the registry and
+// must NOT be pinned until they publish (a pin npm cannot resolve breaks
+// `npm ci` for every consumer).
+assert(Object.keys(optDeps).length === 5, 'all 5 published napi platform packages should be pinned');
 for (const [name, pinned] of Object.entries(optDeps)) {
   assert(pinned === pkg.version, `${name} pinned at ${pinned} should match package version ${pkg.version}`);
 }
@@ -146,6 +154,21 @@ if (existsSync(entry)) {
   }
 } else {
   console.log('(dist not built - skipping entrypoint load check)');
+}
+
+// Test 5: the --budget default comes from the shared constant in
+// src/defaults.ts (kept in sync with DEFAULT_QUERY_BUDGET in
+// crates/astria-mcp/src/lib.rs) — not a hardcoded literal that can drift
+// from the MCP server's default.
+function budgetDefault(commandName: string): unknown {
+  const command = program.commands.find((c: Command) => c.name() === commandName);
+  return command?.options.find((o) => o.long === '--budget')?.defaultValue;
+}
+for (const name of ['query', 'map']) {
+  assert(
+    budgetDefault(name) === String(DEFAULT_QUERY_BUDGET),
+    `${name} --budget default should be String(DEFAULT_QUERY_BUDGET), got ${budgetDefault(name)}`,
+  );
 }
 
 // Summary

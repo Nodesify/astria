@@ -11,8 +11,11 @@ use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use astria_audio::TranscribeError;
 use astria_core::AstriaError;
 use astria_core::Result;
+use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver as UreqResolver};
+use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 use url::Url;
 
 /// Maximum download size: 50 MB.
@@ -32,6 +35,7 @@ pub struct IngestOptions {
 /// Classified URL kind, driving the save strategy.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum UrlKind {
+    Media,
     Tweet,
     ArxivAbstract,
     ArxivPdf,
@@ -41,23 +45,48 @@ pub enum UrlKind {
 }
 
 pub fn classify_url(url: &str) -> UrlKind {
-    let lower = url.to_lowercase();
-    if lower.contains("twitter.com/") || lower.contains("x.com/") {
+    // Classification works on the parsed host and path, never on raw
+    // substrings of the whole URL: `https://example.com/x.com/...` is not a
+    // tweet, and `file.pdf?download=1` is still a PDF.
+    let Ok(parsed) = Url::parse(url) else {
+        return UrlKind::Webpage;
+    };
+    let host = parsed.host_str().unwrap_or("").to_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    let is_host = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+
+    if is_host("twitter.com") || is_host("x.com") {
         return UrlKind::Tweet;
     }
-    if lower.contains("arxiv.org/") {
-        if lower.contains("/pdf/") || lower.ends_with(".pdf") {
-            return UrlKind::ArxivPdf;
-        }
-        return UrlKind::ArxivAbstract;
+    if is_host("arxiv.org") {
+        let path = parsed.path();
+        return if path.starts_with("/pdf/") || path.ends_with(".pdf") {
+            UrlKind::ArxivPdf
+        } else {
+            UrlKind::ArxivAbstract
+        };
     }
-    if lower.ends_with(".pdf") {
+    // Path extension checks ignore the query string and fragment.
+    let path = parsed.path().to_lowercase();
+    if path.ends_with(".pdf") {
         return UrlKind::Pdf;
     }
     for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"] {
-        if lower.ends_with(ext) {
+        if path.ends_with(ext) {
             return UrlKind::Image;
         }
+    }
+    if is_host("youtube.com")
+        || is_host("youtu.be")
+        || is_host("vimeo.com")
+        || is_host("dailymotion.com")
+        || is_host("twitch.tv")
+    {
+        return UrlKind::Media;
+    }
+    let ext = path.rsplit('.').next().unwrap_or("");
+    if path.contains('.') && astria_core::is_transcribable_extension(ext) {
+        return UrlKind::Media;
     }
     UrlKind::Webpage
 }
@@ -69,6 +98,38 @@ pub fn ingest_url(url: &str, out_dir: &Path, opts: &IngestOptions) -> Result<Pat
     std::fs::create_dir_all(out_dir)?;
 
     match classify_url(url) {
+        UrlKind::Media => {
+            // Media rides an external downloader (yt-dlp) rather than
+            // fetch_bytes. The downloader runs a --simulate resolution pass
+            // FIRST and hands every post-redirect media URL back to
+            // `validate_resolved_hosts` — the same SSRF policy as the vetted
+            // fetch agent — before any media byte moves. The download itself
+            // still resolves inside yt-dlp (no transport pinning without a
+            // proxy); the size/socket/deadline bounds in `download_media_to`
+            // constrain that residual window.
+            validate_resolved_hosts(url)?;
+            let vet = |candidate: &str| {
+                validate_resolved_hosts(candidate)
+                    .err()
+                    .map(|e| e.to_string())
+            };
+            match astria_audio::download_media_to(url, out_dir, &vet) {
+                Ok(path) => Ok(path),
+                Err(TranscribeError::Unavailable(notice)) => save_markdown(
+                    out_dir,
+                    annotated_markdown(
+                        url,
+                        "media",
+                        &format!("Media URL not ingested: {notice}"),
+                        "media-link",
+                        opts,
+                    ),
+                ),
+                Err(TranscribeError::Failed(m)) => {
+                    Err(AstriaError::Graph(format!("media download failed: {m}")))
+                }
+            }
+        }
         UrlKind::Tweet => save_markdown(out_dir, tweet_markdown(url, opts)?),
         UrlKind::ArxivAbstract => save_markdown(out_dir, arxiv_markdown(url, opts)),
         UrlKind::ArxivPdf | UrlKind::Pdf => save_binary(url, out_dir, pdf_name(url)),
@@ -181,15 +242,66 @@ fn annotated_markdown(
 // Fetch + save primitives
 // ---------------------------------------------------------------------------
 
+/// SSRF boundary for every HTTP(S) request ingestion makes. DNS is resolved
+/// once, here, and only addresses that pass the private-range checks are
+/// handed to ureq — which then connects through exactly these addresses
+/// instead of re-resolving. That closes the classic rebinding race where the
+/// pre-flight lookup sees a public IP and the real connection gets a private
+/// one.
+#[derive(Debug)]
+struct VettedResolver(DefaultResolver);
+
+impl UreqResolver for VettedResolver {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: NextTimeout,
+    ) -> std::result::Result<ResolvedSocketAddrs, ureq::Error> {
+        let resolved = self.0.resolve(uri, config, timeout)?;
+        let host = uri.host().unwrap_or_default().to_string();
+        // Placeholder-filled ArrayVec (the type has no empty constructor);
+        // `resolved` is itself capped at 16, so push can never overflow.
+        let mut vetted = ResolvedSocketAddrs::from_fn(|_| {
+            std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
+        });
+        for addr in resolved.iter() {
+            if is_private_ip(addr.ip()) {
+                return Err(ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("host {host} resolves to a private/internal address (blocked)"),
+                )));
+            }
+            vetted.push(*addr);
+        }
+        if vetted.is_empty() {
+            return Err(ureq::Error::HostNotFound);
+        }
+        Ok(vetted)
+    }
+}
+
+/// The shared fetch agent: manual redirects (every hop re-validated), a
+/// global request deadline, and the vetted resolver above.
+fn fetch_agent() -> ureq::Agent {
+    let config = ureq::config::Config::builder()
+        .timeout_global(Some(REQUEST_TIMEOUT))
+        .max_redirects(0)
+        .build();
+    ureq::Agent::with_parts(
+        config,
+        DefaultConnector::default(),
+        VettedResolver(DefaultResolver::default()),
+    )
+}
+
 fn fetch_bytes(url: &str) -> Result<(Vec<u8>, String)> {
     // Auto-follow is disabled so redirects surface here and every hop
     // re-runs URL validation: a public server answering 302 -> internal
-    // address must not become an internal fetch.
-    let agent = ureq::config::Config::builder()
-        .timeout_global(Some(REQUEST_TIMEOUT))
-        .max_redirects(0)
-        .build()
-        .new_agent();
+    // address must not become an internal fetch. The vetted resolver
+    // independently re-checks each hop's resolved addresses at connect
+    // time.
+    let agent = fetch_agent();
     let mut current = url.to_string();
     for _ in 0..=MAX_REDIRECTS {
         validate_url(&current)?;
@@ -297,12 +409,17 @@ fn derive_doc_name(content: &str) -> String {
         })
         .collect();
     let slug = slug.trim_matches('_').to_string();
-    let mut name = if slug.is_empty() {
+    let mut name: String = if slug.is_empty() {
         "document".to_string()
     } else {
         slug
     };
-    name.truncate(80);
+    // Limit by characters, not bytes: String::truncate(80) panics when
+    // byte 80 splits a multi-byte character (27 CJK chars = 81 bytes).
+    name = name.chars().take(80).collect();
+    if is_windows_reserved(&name) {
+        name = format!("f_{name}");
+    }
     format!("{name}.md")
 }
 
@@ -585,13 +702,14 @@ fn resolve_redirect(base: &str, location: &str) -> Result<String> {
 /// Catches what the string-level `validate_url` checks cannot see: DNS names
 /// that resolve to internal addresses (rebinding or lookalike records) and
 /// non-canonical IPv4 spellings (`2130706433`, `0x7f000001`), which the OS
-/// resolver normalizes to an `IpAddr` before we inspect it. Called before
-/// every request, including every manual redirect hop.
+/// resolver normalizes to an `IpAddr` before we inspect it.
 ///
-/// Residual risk: ureq re-resolves independently at connect time, so a
-/// rebinding attacker with a fast-TTL record can still win the race between
-/// this check and the connection. Blocking is standard-practice mitigation,
-/// not a hard guarantee.
+/// Used as the pre-flight for routes that leave `fetch_bytes` (media goes
+/// through an external downloader); requests made by `fetch_bytes` are
+/// instead vetted inside the resolver ureq connects through, where the
+/// check and the connection see the same DNS answer. For the external
+/// downloader this remains a time-of-check mitigation — redirects followed
+/// inside yt-dlp cannot be constrained without a proxy boundary.
 fn validate_resolved_hosts(url: &str) -> Result<()> {
     let parsed =
         Url::parse(url).map_err(|e| AstriaError::Graph(format!("invalid URL {url}: {e}")))?;
@@ -691,6 +809,60 @@ mod tests {
             UrlKind::Image
         );
         assert_eq!(classify_url("https://example.com/page"), UrlKind::Webpage);
+    }
+
+    #[test]
+    fn classification_uses_parsed_host_and_path() {
+        // A path that mentions x.com on another host is not a tweet.
+        assert_eq!(
+            classify_url("https://example.com/x.com/karpathy/status/1"),
+            UrlKind::Webpage
+        );
+        // Query strings and fragments do not defeat extension checks.
+        assert_eq!(
+            classify_url("https://example.com/file.pdf?download=1"),
+            UrlKind::Pdf
+        );
+        assert_eq!(
+            classify_url("https://cdn.example.com/audio.mp3?token=abc"),
+            UrlKind::Media
+        );
+        assert_eq!(
+            classify_url("https://cdn.example.com/pic.jpeg#fragment"),
+            UrlKind::Image
+        );
+        // Subdomains of media hosts are media; www prefixes are ignored.
+        assert_eq!(
+            classify_url("https://www.youtube.com/watch?v=abc"),
+            UrlKind::Media
+        );
+        assert_eq!(
+            classify_url("https://music.example.com/track.wav"),
+            UrlKind::Media
+        );
+    }
+
+    #[test]
+    fn long_non_ascii_titles_do_not_panic() {
+        // 27 CJK characters = 81 bytes: byte-truncation at 80 panicked by
+        // splitting a character. The doc name must cap by characters.
+        let title = "图".repeat(27);
+        let md = annotated_markdown(
+            "https://example.com/a",
+            "paper",
+            &format!(
+                "# {title}
+
+body"
+            ),
+            &title,
+            &IngestOptions::default(),
+        );
+        let name = derive_doc_name(&md);
+        assert!(name.ends_with(".md"));
+        // 80 CJK chars would be 240 bytes; the cap is 80 characters.
+        let stem = name.trim_end_matches(".md");
+        assert!(stem.chars().count() <= 80);
     }
 
     #[test]
@@ -857,6 +1029,23 @@ mod tests {
         assert!(validate_resolved_hosts("http://localhost/x").is_err());
         assert!(validate_resolved_hosts("https://127.0.0.1/x").is_err());
         assert!(validate_resolved_hosts("http://[::1]:8080/x").is_err());
+    }
+
+    #[test]
+    fn vetted_resolver_refuses_private_answers() {
+        // The resolver ureq actually connects through must independently
+        // reject loopback answers — `localhost` resolves hermetically.
+        let resolver = VettedResolver(DefaultResolver::default());
+        let uri: ureq::http::Uri = "http://localhost/x".parse().unwrap();
+        let config = ureq::config::Config::builder().build();
+        let timeout = NextTimeout {
+            after: ureq::unversioned::transport::time::Duration::Exact(
+                std::time::Duration::from_secs(5),
+            ),
+            reason: ureq::Timeout::Global,
+        };
+        let err = resolver.resolve(&uri, &config, timeout).unwrap_err();
+        assert!(err.to_string().contains("private/internal"), "got: {err}");
     }
 
     // -- SSRF: redirect targets --

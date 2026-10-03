@@ -9,6 +9,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+astria-audio = { workspace = true }
 astria-core = { workspace = true }
 astria-extract = { workspace = true }
 sha2 = { workspace = true }

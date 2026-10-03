@@ -1,11 +1,12 @@
 pub mod benchmark;
-pub mod diagnose;
-pub mod export_cypher;
-pub mod export_graphml;
-pub mod export_html;
-pub mod export_obsidian;
-pub mod export_tree;
-pub mod export_wiki;
+pub mod cost;
+pub use astria_analyze::diagnose;
+pub use astria_export::export_cypher;
+pub use astria_export::export_graphml;
+pub use astria_export::export_html;
+pub use astria_export::export_obsidian;
+pub use astria_export::export_tree;
+pub use astria_export::export_wiki;
 // ---------------------------------------------------------------------------
 // Diagnose, feedback, global graph, and extra ingest sources
 // ---------------------------------------------------------------------------
@@ -66,17 +67,43 @@ pub struct RiskReportJs {
 }
 
 #[napi]
-pub fn risk_report(root: String, staged: Option<bool>) -> napi::Result<RiskReportJs> {
+pub fn risk_report(
+    root: String,
+    staged: Option<bool>,
+    base: Option<String>,
+    head: Option<String>,
+) -> napi::Result<RiskReportJs> {
     let root_pb = PathBuf::from(&root);
     let root_canon = root_pb
         .canonicalize()
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let (db, _) = pipeline::load_graph_db_flexible(&root_pb)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let changed = risk::git_changed_files(&root_canon, staged.unwrap_or(false))
+    // Range mode scores a committed diff (base...head) — the CI/PR shape,
+    // where a clean checkout has no working-tree changes to diff. Without
+    // both refs, the working tree or index is scored for local use.
+    let scope = match (&base, &head) {
+        (Some(base), Some(head)) => risk::DiffScope::Range {
+            base: base.clone(),
+            head: head.clone(),
+        },
+        (None, None) => {
+            if staged.unwrap_or(false) {
+                risk::DiffScope::Staged
+            } else {
+                risk::DiffScope::WorkingTree
+            }
+        }
+        _ => {
+            return Err(napi::Error::from_reason(
+                "risk report range mode requires both --base and --head",
+            ))
+        }
+    };
+    let changed = risk::git_changed_files(&root_canon, &scope)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let outcome =
-        risk::compute_risk(&db, &changed).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let outcome = risk::compute_risk(&db, &changed, Some(&root_canon))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let project_root = Some(
         root_canon
             .to_string_lossy()
@@ -407,14 +434,14 @@ pub fn ingest_postgres(root: String, dsn: String) -> napi::Result<IngestCountsJs
     })
 }
 
-mod export_svg;
+use astria_export::export_svg;
 pub mod feedback;
 pub mod global;
 pub mod merge;
-mod neo4j_push;
+use astria_bolt::neo4j_push;
 pub mod pipeline;
 pub mod query;
-mod risk;
+pub use astria_analyze::risk;
 
 use napi_derive::napi;
 use std::collections::HashMap;
@@ -453,6 +480,10 @@ pub struct GraphStatsJs {
     pub community_count: i64,
     pub file_count: i64,
     pub type_counts: HashMap<String, i64>,
+    /// Whether this build includes the local embedding runtime (`--embed`).
+    /// Release targets without prebuilt ONNX binaries (x86_64-apple-darwin)
+    /// are compiled without the `embed` feature.
+    pub embeddings_supported: bool,
 }
 
 /// Build provenance read from the graph's `_meta` table, so callers can
@@ -683,6 +714,15 @@ fn pipeline_result_js(result: &pipeline::PipelineResult) -> PipelineResultJs {
     }
 }
 
+/// Whether this build includes the local embedding runtime (fastembed/ONNX,
+/// `--embed`). Platforms without prebuilt ONNX binaries ship a binary
+/// compiled without the `embed` feature; `--embed` errors clearly there.
+/// Surfaced here and in graph_stats so agents can check before trying.
+#[napi]
+pub fn embeddings_supported() -> bool {
+    cfg!(feature = "embed")
+}
+
 #[napi]
 pub fn graph_stats(root: String) -> napi::Result<GraphStatsJs> {
     let db = pipeline::load_graph_db(&PathBuf::from(&root))
@@ -717,6 +757,7 @@ pub fn graph_stats(root: String) -> napi::Result<GraphStatsJs> {
         community_count,
         file_count,
         type_counts,
+        embeddings_supported: embeddings_supported(),
     })
 }
 
@@ -753,6 +794,230 @@ pub fn graph_build_info(root: String) -> napi::Result<GraphBuildInfoJs> {
         build_configuration: meta_value(&db, "build_configuration"),
         current_extraction_hash_version: astria_core::EXTRACTION_HASH_VERSION.to_string(),
     })
+}
+
+#[napi(object)]
+pub struct SourceCoverageJs {
+    /// The project is a git work tree and git ran successfully.
+    pub inside_git: bool,
+    /// Why git could not be consulted, when it could not.
+    pub git_error: Option<String>,
+    pub current_head: Option<String>,
+    /// HEAD recorded in the graph at publication time. `None` on graphs
+    /// built before commit provenance was recorded.
+    pub recorded_head: Option<String>,
+    /// Whether the work tree has uncommitted/untracked changes, when known.
+    pub tree_dirty: Option<bool>,
+    pub files_checked: i32,
+    pub files_mismatched: i32,
+    pub files_missing: i32,
+    /// Up to five sample paths that drifted, for the gate's detail line.
+    pub drift_samples: Vec<String>,
+    /// `Some(true/false)` = proven; `None` = cannot determine (not a
+    /// repository, git failure, or unresolvable dirty-tree ambiguity).
+    pub covers_head: Option<bool>,
+    pub reason: String,
+}
+
+/// Prove (or disprove) that the graph represents the current HEAD commit —
+/// a publication timestamp only proves the build happened LATER, not that
+/// it saw the commit. The check is commit identity (the HEAD recorded at
+/// publication vs the repo's HEAD now) plus a content comparison of every
+/// manifest file against the working tree: hashing the manifest's exact
+/// scheme catches edits, deletions, and additions-then-reverts that mtimes
+/// miss. Intended for gate-time use (merge gate, CI), not per query — it
+/// re-reads the corpus.
+#[napi]
+pub fn verify_source_commit(root: String) -> napi::Result<SourceCoverageJs> {
+    use sha2::{Digest, Sha256};
+    let root_pb = PathBuf::from(&root);
+    let db =
+        pipeline::load_graph_db(&root_pb).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    // Current HEAD. Distinguish "not a repository" from "git failed".
+    let rev = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("HEAD")
+        .output();
+    let (inside_git, git_error, current_head) = match rev {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            (false, Some("git executable not found on PATH".into()), None)
+        }
+        Err(e) => (false, Some(format!("git failed to run: {e}")), None),
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if out.status.success() {
+                (
+                    true,
+                    None,
+                    Some(String::from_utf8_lossy(&out.stdout).trim().to_string()),
+                )
+            } else if stderr.to_lowercase().contains("not a git repository") {
+                (false, None, None)
+            } else {
+                (false, Some(stderr.trim().to_string()), None)
+            }
+        }
+    };
+
+    let mut coverage = SourceCoverageJs {
+        inside_git,
+        git_error,
+        current_head: current_head.clone(),
+        recorded_head: meta_value(&db, "git_head"),
+        tree_dirty: None,
+        files_checked: 0,
+        files_mismatched: 0,
+        files_missing: 0,
+        drift_samples: Vec::new(),
+        covers_head: None,
+        reason: String::new(),
+    };
+
+    if !inside_git {
+        coverage.reason = match &coverage.git_error {
+            Some(err) => {
+                format!("git detection failed: {err} — cannot verify the graph covers HEAD")
+            }
+            None => "not a git repository — commit coverage does not apply".to_string(),
+        };
+        return Ok(coverage);
+    }
+
+    // Uncommitted/untracked changes make HEAD-content equality unprovable
+    // without a blob-by-blob comparison; the graph may describe the dirty
+    // tree rather than the commit. The graph's own `.astria/` sidecars are
+    // expected to be untracked and never count as dirt.
+    let dirty = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("status")
+        .arg("--porcelain")
+        .arg("--untracked-files=normal")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                // Porcelain v1: "XY PATH" — the path starts after the two
+                // status columns and one space.
+                .any(|line| !line[3.min(line.len())..].starts_with(".astria/"))
+        });
+    coverage.tree_dirty = dirty;
+
+    // Content comparison: every manifest row must still hash to its
+    // recorded value (the manifest's versioned scheme, with the version
+    // this graph was built under — not the running binary's).
+    let hash_version = meta_value(&db, "extraction_hash_version")
+        .unwrap_or_else(|| astria_core::EXTRACTION_HASH_VERSION.to_string());
+    let mut stmt = db
+        .prepare("SELECT file_path, content_hash FROM file_manifest")
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?
+        .flatten()
+        .collect();
+    drop(stmt);
+    let mut samples: Vec<String> = Vec::new();
+    for (path, recorded) in &rows {
+        coverage.files_checked += 1;
+        // Manifest paths are stored relative to the project root; resolve
+        // them, or every read fails and the whole corpus looks deleted.
+        let stored = std::path::Path::new(path);
+        let resolved: std::path::PathBuf = if stored.is_absolute() {
+            stored.to_path_buf()
+        } else {
+            root_pb.join(stored)
+        };
+        let bytes = match std::fs::read(&resolved) {
+            Err(_) => {
+                coverage.files_missing += 1;
+                if samples.len() < 5 {
+                    samples.push(format!("{path:?} deleted"));
+                }
+                continue;
+            }
+            Ok(bytes) => bytes,
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(hash_version.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(&bytes);
+        let actual = format!("{:x}", hasher.finalize());
+        if !actual.eq_ignore_ascii_case(recorded) {
+            coverage.files_mismatched += 1;
+            if samples.len() < 5 {
+                samples.push(format!("{path:?} changed"));
+            }
+        }
+    }
+    coverage.drift_samples = samples;
+
+    // Verdict: identity first, then content, then tree cleanliness.
+    let short = |h: &Option<String>| {
+        h.as_deref()
+            .map(|s| s.chars().take(12).collect::<String>())
+            .unwrap_or_else(|| "unknown".into())
+    };
+    let Some(recorded) = coverage.recorded_head.clone() else {
+        coverage.covers_head = Some(false);
+        coverage.reason = "graph predates commit provenance — rebuild with `astria run` so the covered commit is recorded".to_string();
+        return Ok(coverage);
+    };
+    let Some(current) = current_head else {
+        coverage.reason = "could not determine the current HEAD".to_string();
+        return Ok(coverage);
+    };
+    if recorded != current {
+        coverage.covers_head = Some(false);
+        coverage.reason = format!(
+            "graph was built from {} but HEAD is {} — run `astria update` before merging",
+            short(&coverage.recorded_head),
+            short(&coverage.current_head)
+        );
+        return Ok(coverage);
+    }
+    if coverage.files_mismatched > 0 || coverage.files_missing > 0 {
+        coverage.covers_head = Some(false);
+        coverage.reason = format!(
+            "graph was built from {} but {} file(s) drifted since publication — run `astria update`",
+            short(&coverage.current_head),
+            coverage.files_mismatched + coverage.files_missing
+        );
+        return Ok(coverage);
+    }
+    match coverage.tree_dirty {
+        Some(true) => {
+            coverage.reason = format!(
+                "graph was built from {} and no manifest file drifted, but the work tree has uncommitted changes — commit or stash them so the graph can be tied to HEAD",
+                short(&coverage.current_head)
+            );
+            // Not provable: the dirty files are outside the manifest's
+            // verified set (untracked or post-build), so HEAD-content
+            // equality cannot be claimed.
+        }
+        Some(false) => {
+            coverage.covers_head = Some(true);
+            coverage.reason = format!(
+                "graph was built from HEAD {} and all {} manifest file(s) still match",
+                short(&coverage.current_head),
+                coverage.files_checked
+            );
+        }
+        None => {
+            coverage.reason = format!(
+                "graph was built from {} and the manifest matches; work-tree cleanliness could not be determined",
+                short(&coverage.current_head)
+            );
+        }
+    }
+    Ok(coverage)
 }
 
 #[napi]
@@ -1368,8 +1633,67 @@ pub fn run_mcp_server(root: String) -> napi::Result<()> {
     astria_mcp::serve(&db_path).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
+#[napi(object)]
+pub struct McpHttpOptions {
+    /// Default project root (served when a request names no project).
+    pub root: String,
+    pub host: Option<String>,
+    pub port: Option<u32>,
+    /// Bearer token for every request. Falls back to ASTRIA_MCP_TOKEN.
+    pub token: Option<String>,
+    /// Extra projects: "name=path" entries, or bare "path" entries whose
+    /// project name defaults to the directory's file name.
+    pub projects: Option<Vec<String>>,
+    /// Browser origins allowed to send requests (exact match, e.g.
+    /// "http://localhost:5173"). Requests carrying an Origin header are
+    /// refused unless listed; native clients send none and always pass.
+    pub allowed_origins: Option<Vec<String>>,
+}
+
+/// MCP over HTTP with multi-project serving: one process, many graphs.
+/// Project selection per request via the `x-astria-project` header or a
+/// `?project=` query parameter; `GET /healthz` for liveness.
 #[napi]
-pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
+pub fn run_mcp_http_server(opts: McpHttpOptions) -> napi::Result<()> {
+    let root_pb = PathBuf::from(&opts.root);
+    if !root_pb.exists() {
+        return Err(napi::Error::from_reason(format!(
+            "path does not exist: {}",
+            root_pb.display()
+        )));
+    }
+    let root_pb = root_pb
+        .canonicalize()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let mut config =
+        astria_mcp::HttpServerConfig::from_roots(&root_pb, &opts.projects.unwrap_or_default())
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    if let Some(host) = opts.host {
+        config.host = host;
+    }
+    if let Some(port) = opts.port {
+        config.port = port as u16;
+    }
+    // Explicit --token wins; the environment is the unattended (CI, Docker,
+    // hosted) configuration path.
+    config.token = opts
+        .token
+        .or_else(|| std::env::var("ASTRIA_MCP_TOKEN").ok())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    config.allowed_origins = opts.allowed_origins.unwrap_or_default();
+    astria_mcp::serve_http(config).map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+#[napi]
+pub fn cluster_only(
+    root: String,
+    // Minimum share of neighbors backing the winning label, 0.0–1.0.
+    // 0.0 = classic propagation; higher → more, smaller communities.
+    resolution: Option<f64>,
+    // Keep high-degree hub nodes from gluing communities together.
+    exclude_hubs: Option<bool>,
+) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
     let root_pb = root_pb
         .canonicalize()
@@ -1377,15 +1701,31 @@ pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
     let db =
         pipeline::load_graph_db(&root_pb).map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
-    let cluster_result =
-        astria_cluster::cluster(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let options = astria_cluster::ClusterOptions {
+        resolution: resolution.unwrap_or(0.0),
+        exclude_hubs: exclude_hubs.unwrap_or(false),
+    };
+    // Clustering commits membership writes; only an assignment that actually
+    // changed is a content mutation, and it must advance the publication
+    // generation so snapshot caches key on the new communities.
+    let memberships_before = pipeline::community_assignments(&db);
+    let cluster_result = astria_cluster::cluster_with(&db, &options)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let memberships_changed = pipeline::community_assignments(&db) != memberships_before;
+    if memberships_changed {
+        pipeline::advance_generation(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    }
     let analysis =
         astria_analyze::analyze(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let report = astria_report::generate_report(&db, &analysis)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
+    // Same publication workflow as the pipeline: stamped report, graph.json,
+    // and the generation sidecar move together, so re-clustering cannot
+    // leave derived artifacts describing the previous communities.
     let astria_dir = root_pb.join(".astria");
-    let _ = std::fs::write(astria_dir.join("graph_report.md"), &report);
+    pipeline::publish_artifacts(&db, &astria_dir, &report, memberships_changed)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(PipelineResultJs {
         nodes_added: 0,
@@ -1409,11 +1749,13 @@ pub fn merge_graphs(
     root_a: String,
     root_b: String,
     out_root: String,
+    same_repo: Option<bool>,
 ) -> napi::Result<PipelineResultJs> {
-    let result = merge::merge_graphs(
+    let result = merge::merge_graphs_with_policy(
         &PathBuf::from(&root_a),
         &PathBuf::from(&root_b),
         &PathBuf::from(&out_root),
+        same_repo.unwrap_or(false),
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     Ok(PipelineResultJs {
@@ -1723,5 +2065,95 @@ mod tests {
             transcript_file_name("standup-2026-09-30"),
             "standup-2026-09-30.md"
         );
+    }
+    #[test]
+    fn verify_source_commit_proves_and_disproves_head_coverage() {
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(repo.join("main.py"), "def a(): pass\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "first"]);
+        let head = String::from_utf8_lossy(&run(&["rev-parse", "--verify", "HEAD"]).stdout)
+            .trim()
+            .to_string();
+
+        // A graph "published" from this HEAD: the manifest row carries the
+        // exact versioned content hash the pipeline records.
+        let db = astria_core::db::open_db(&astria_paths::db_path(&repo).unwrap()).unwrap();
+        let version = astria_core::EXTRACTION_HASH_VERSION;
+        let mut hasher = Sha256::new();
+        hasher.update(version.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(b"def a(): pass\n");
+        let content_hash = format!("{:x}", hasher.finalize());
+        // Manifest rows are relative to the project root, as the pipeline
+        // writes them.
+        let manifest_path = "main.py".to_string();
+        db.execute(
+            "INSERT INTO file_manifest (file_path, content_hash, file_type, last_seen_at, size_bytes) VALUES (?1, ?2, 'code', '1', 15)",
+            rusqlite::params![manifest_path, content_hash],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('git_head', ?1)",
+            [&head],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('extraction_hash_version', ?1)",
+            [version],
+        )
+        .unwrap();
+
+        let coverage = crate::verify_source_commit(repo.to_string_lossy().to_string()).unwrap();
+        assert_eq!(coverage.covers_head, Some(true), "{}", coverage.reason);
+        assert_eq!(coverage.files_checked, 1);
+        assert_eq!(coverage.tree_dirty, Some(false));
+
+        // Edit after publication: a content mismatch flips the verdict even
+        // though the recorded HEAD still matches — mtime-ordered checks
+        // missed exactly this class.
+        std::fs::write(repo.join("main.py"), "def a(): return 1\n").unwrap();
+        let coverage = crate::verify_source_commit(repo.to_string_lossy().to_string()).unwrap();
+        assert_eq!(coverage.covers_head, Some(false), "{}", coverage.reason);
+        assert_eq!(coverage.files_mismatched, 1);
+        assert!(coverage.reason.contains("drifted"));
+
+        // Commit the edit: the recorded HEAD is now provably stale.
+        run(&["add", "."]);
+        run(&["commit", "-qm", "second"]);
+        let coverage = crate::verify_source_commit(repo.to_string_lossy().to_string()).unwrap();
+        assert_eq!(coverage.covers_head, Some(false));
+        assert!(
+            coverage.reason.contains("HEAD is"),
+            "reason names the commit mismatch: {}",
+            coverage.reason
+        );
+    }
+
+    #[test]
+    fn verify_source_commit_outside_git_reports_no_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("plain");
+        std::fs::create_dir_all(&repo).unwrap();
+        let _db = astria_core::db::open_db(&astria_paths::db_path(&repo).unwrap()).unwrap();
+        let coverage = crate::verify_source_commit(repo.to_string_lossy().to_string()).unwrap();
+        assert!(!coverage.inside_git);
+        assert_eq!(coverage.git_error, None);
+        assert_eq!(coverage.covers_head, None);
+        assert!(coverage.reason.contains("not a git repository"));
     }
 }

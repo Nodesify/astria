@@ -6,7 +6,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Ruby
             .registration()
             .extensions,
+        #[cfg(feature = "lang-ruby")]
         language_fn: || tree_sitter_ruby::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-ruby"))]
+        language_fn: || crate::langs::config::missing_language("ruby"),
+        compiled_in: cfg!(feature = "lang-ruby"),
         class_types: &["class", "module", "singleton_class"],
         function_types: &["method", "singleton_method"],
         import_types: &["call"],

@@ -12,37 +12,97 @@ publish = false
 astria-core = { workspace = true }
 astria-paths = { workspace = true }
 astria-pdf = { workspace = true }
+astria-audio = { workspace = true }
+astria-office = { workspace = true }
+astria-gws = { workspace = true }
 tree-sitter = { workspace = true }
-tree-sitter-python = { workspace = true }
-tree-sitter-javascript = { workspace = true }
-tree-sitter-typescript = { workspace = true }
-tree-sitter-rust = { workspace = true }
-tree-sitter-go = { workspace = true }
-tree-sitter-java = { workspace = true }
-tree-sitter-c = { workspace = true }
-tree-sitter-cpp = { workspace = true }
-tree-sitter-ruby = { workspace = true }
-tree-sitter-swift = { workspace = true }
-tree-sitter-scala = { workspace = true }
-tree-sitter-php = { workspace = true }
-tree-sitter-c-sharp = { workspace = true }
-tree-sitter-lua = { workspace = true }
-tree-sitter-haskell = { workspace = true }
-tree-sitter-elixir = { workspace = true }
-tree-sitter-bash = { workspace = true }
-tree-sitter-dart = { workspace = true }
-tree-sitter-zig = { workspace = true }
-tree-sitter-css = { workspace = true }
-tree-sitter-kotlin-ng = { workspace = true }
+tree-sitter-python = { workspace = true, optional = true }
+tree-sitter-javascript = { workspace = true, optional = true }
+tree-sitter-typescript = { workspace = true, optional = true }
+tree-sitter-rust = { workspace = true, optional = true }
+tree-sitter-go = { workspace = true, optional = true }
+tree-sitter-java = { workspace = true, optional = true }
+tree-sitter-c = { workspace = true, optional = true }
+tree-sitter-cpp = { workspace = true, optional = true }
+tree-sitter-ruby = { workspace = true, optional = true }
+tree-sitter-swift = { workspace = true, optional = true }
+tree-sitter-scala = { workspace = true, optional = true }
+tree-sitter-php = { workspace = true, optional = true }
+tree-sitter-c-sharp = { workspace = true, optional = true }
+tree-sitter-lua = { workspace = true, optional = true }
+tree-sitter-haskell = { workspace = true, optional = true }
+tree-sitter-elixir = { workspace = true, optional = true }
+tree-sitter-bash = { workspace = true, optional = true }
+tree-sitter-dart = { workspace = true, optional = true }
+tree-sitter-zig = { workspace = true, optional = true }
+tree-sitter-css = { workspace = true, optional = true }
+tree-sitter-kotlin-ng = { workspace = true, optional = true }
+tree-sitter-astro-next = { workspace = true, optional = true }
+tree-sitter-commonlisp = { workspace = true, optional = true }
+tree-sitter-dm = { workspace = true, optional = true }
+tree-sitter-fortran = { workspace = true, optional = true }
+tree-sitter-groovy = { workspace = true, optional = true }
+tree-sitter-julia = { workspace = true, optional = true }
+tree-sitter-luau = { workspace = true, optional = true }
+tree-sitter-objc = { workspace = true, optional = true }
+tree-sitter-ocaml = { workspace = true, optional = true }
+tree-sitter-r = { workspace = true, optional = true }
+tree-sitter-sequel = { workspace = true, optional = true }
+tree-sitter-solidity = { workspace = true, optional = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }
-tree-sitter-hcl = "1.1.0"
-tree-sitter-powershell = "0.26.4"
-tree-sitter-systemverilog = "0.4.1"
+tree-sitter-hcl = { workspace = true, optional = true }
+tree-sitter-powershell = { workspace = true, optional = true }
+tree-sitter-systemverilog = { workspace = true, optional = true }
+
+[features]
+# Compile out languages to slim builds: cargo build -p astria-extract \
+#   --no-default-features --features "lang-python,lang-javascript".
+# The engine skips files of languages whose grammar is not compiled in.
+lang-c = ["dep:tree-sitter-c"]
+lang-cpp = ["dep:tree-sitter-cpp"]
+lang-csharp = ["dep:tree-sitter-c-sharp"]
+lang-css = ["dep:tree-sitter-css"]
+lang-dart = ["dep:tree-sitter-dart"]
+lang-elixir = ["dep:tree-sitter-elixir"]
+lang-go = ["dep:tree-sitter-go"]
+lang-haskell = ["dep:tree-sitter-haskell"]
+lang-java = ["dep:tree-sitter-java"]
+lang-javascript = ["dep:tree-sitter-javascript"]
+lang-kotlin = ["dep:tree-sitter-kotlin-ng"]
+lang-lua = ["dep:tree-sitter-lua"]
+lang-metal = ["dep:tree-sitter-cpp"]
+lang-php = ["dep:tree-sitter-php"]
+lang-powershell = ["dep:tree-sitter-powershell"]
+lang-python = ["dep:tree-sitter-python"]
+lang-astro = ["dep:tree-sitter-astro-next"]
+lang-commonlisp = ["dep:tree-sitter-commonlisp"]
+lang-dm = ["dep:tree-sitter-dm"]
+lang-fortran = ["dep:tree-sitter-fortran"]
+lang-groovy = ["dep:tree-sitter-groovy"]
+lang-julia = ["dep:tree-sitter-julia"]
+lang-luau = ["dep:tree-sitter-luau"]
+lang-objc = ["dep:tree-sitter-objc"]
+lang-ocaml = ["dep:tree-sitter-ocaml"]
+lang-ocaml-interface = ["dep:tree-sitter-ocaml"]
+lang-r = ["dep:tree-sitter-r"]
+lang-solidity = ["dep:tree-sitter-solidity"]
+lang-sql = ["dep:tree-sitter-sequel"]
+lang-ruby = ["dep:tree-sitter-ruby"]
+lang-rust = ["dep:tree-sitter-rust"]
+lang-scala = ["dep:tree-sitter-scala"]
+lang-shell = ["dep:tree-sitter-bash"]
+lang-swift = ["dep:tree-sitter-swift"]
+lang-terraform = ["dep:tree-sitter-hcl"]
+lang-typescript = ["dep:tree-sitter-typescript"]
+lang-verilog = ["dep:tree-sitter-systemverilog"]
+lang-zig = ["dep:tree-sitter-zig"]
+lang-all = ["lang-c", "lang-cpp", "lang-csharp", "lang-css", "lang-dart", "lang-elixir", "lang-go", "lang-haskell", "lang-java", "lang-javascript", "lang-kotlin", "lang-lua", "lang-metal", "lang-php", "lang-powershell", "lang-python", "lang-ruby", "lang-rust", "lang-scala", "lang-shell", "lang-swift", "lang-terraform", "lang-typescript", "lang-verilog", "lang-zig", "lang-astro", "lang-commonlisp", "lang-dm", "lang-fortran", "lang-groovy", "lang-julia", "lang-luau", "lang-objc", "lang-ocaml", "lang-ocaml-interface", "lang-r", "lang-solidity", "lang-sql"]
+default = ["lang-all"]
 
 [dev-dependencies]
 tempfile = "3"

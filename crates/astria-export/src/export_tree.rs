@@ -177,11 +177,11 @@ pub fn export_tree(db: &Connection, out_path: &Path, max_children: usize) -> Res
     update_counts(&mut root);
 
     let data = serde_json::to_string(&root)?;
-    // Keep the embedded JSON from terminating the surrounding <script> block
-    // (\u003c is valid in both JSON and JS string literals).
-    let data = data
-        .replace("</script", "\\u003c/script")
-        .replace("<!--", "\\u003c!--");
+    // Escape every `<` in the embedded JSON: HTML tag matching is
+    // case-insensitive, so a mixed-case `</SCRIPT>` in a label must not be
+    // able to terminate the data script. `<` only occurs inside JSON string
+    // values, and `\u003c` is a valid JSON/JS escape.
+    let data = data.replace('<', "\\u003c");
     let html = render_html(&data, symbol_count);
     std::fs::write(out_path, html)?;
     Ok(symbol_count)
@@ -372,7 +372,7 @@ mod tests {
         db.execute_batch(
             "
             INSERT INTO nodes (id, label, file_type, source_file) VALUES
-              ('a', '</script><script>alert(1)</script>', 'html', 'a<!--b.html');
+              ('a', '</SCRIPT><script>alert(1)</script>', 'html', 'a<!--b.html');
         ",
         )
         .unwrap();
@@ -382,8 +382,14 @@ mod tests {
         export_tree(&db, &out, 40).unwrap();
 
         let html = std::fs::read_to_string(&out).unwrap();
-        assert!(html.contains(r#"\u003c/script"#));
-        assert!(html.contains(r#"\u003c!--"#));
+        let data_line = html
+            .lines()
+            .find(|l| l.contains("const DATA ="))
+            .expect("data script present");
+        assert!(!data_line.contains("</SCRIPT"));
+        assert!(!data_line.contains("</script"));
+        assert!(!data_line.contains("<!--"));
+        assert!(data_line.contains("\\u003c"));
     }
 
     #[test]

@@ -11,7 +11,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Metal
             .registration()
             .extensions,
+        #[cfg(feature = "lang-metal")]
         language_fn: || tree_sitter_cpp::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-metal"))]
+        language_fn: || crate::langs::config::missing_language("metal"),
+        compiled_in: cfg!(feature = "lang-metal"),
         class_types: &["struct_specifier", "class_specifier"],
         function_types: &["function_definition"],
         import_types: &["preproc_include"],

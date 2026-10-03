@@ -25,10 +25,20 @@ pub struct DetectResult {
     pub removed: Vec<FileEntry>,
 }
 
-const DOC_EXTENSIONS: &[&str] = &[".md", ".mdx", ".txt", ".rst"];
+const DOC_EXTENSIONS: &[&str] = &[
+    ".md", ".mdx", ".qmd", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".docx", ".xlsx",
+    ".gdoc", ".gsheet", ".gslides",
+];
+/// Document extensions that are actually text — the minified-content
+/// heuristic applies to these, never to the binary document formats
+/// sharing the Document classification.
+const TEXTUAL_DOC_EXTENSIONS: &[&str] = &[
+    ".md", ".mdx", ".qmd", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml",
+];
 const PAPER_EXTENSIONS: &[&str] = &[".pdf"];
 const IMAGE_EXTENSIONS: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
-const VIDEO_EXTENSIONS: &[&str] = &[".mp4", ".mov", ".webm", ".mkv", ".avi"];
+// Video/audio extension lists live in astria-core: detect classifies them
+// and the astria-extract transcription route consumes the same lists.
 
 pub fn classify_file(path: &Path) -> Option<FileType> {
     // Manifests first: `go.mod` has a `.mod` extension, the rest `.toml`/
@@ -65,8 +75,11 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
     if IMAGE_EXTENSIONS.contains(&ext_with_dot.as_str()) {
         return Some(FileType::Image);
     }
-    if VIDEO_EXTENSIONS.contains(&ext_with_dot.as_str()) {
+    if astria_core::VIDEO_EXTENSIONS.contains(&ext_with_dot.as_str()) {
         return Some(FileType::Video);
+    }
+    if astria_core::AUDIO_EXTENSIONS.contains(&ext_with_dot.as_str()) {
+        return Some(FileType::Audio);
     }
     None
 }
@@ -99,7 +112,16 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
 
     let astriaignore = root.join(".astriaignore");
     if astriaignore.exists() {
-        let _ = ignore_builder.add_ignore(astriaignore);
+        // A read/parse failure must not silently proceed: the user's explicit
+        // exclusions would not apply and the graph would contain files they
+        // told astria to ignore. `add_ignore` returns Some(error) on failure
+        // and parses the file eagerly, so malformed patterns are caught here.
+        if let Some(error) = ignore_builder.add_ignore(&astriaignore) {
+            return Err(astria_core::AstriaError::Graph(format!(
+                "failed to load {}: {error}",
+                astriaignore.display()
+            )));
+        }
     }
 
     for entry in ignore_builder.build() {
@@ -139,19 +161,36 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
         }
 
         let bytes = std::fs::read(path)?;
-        // Minified/generated blobs (bundler output = few, huge lines) are
-        // noise: they spawn single-letter function nodes that flood hubs
-        // and query results.
-        let sample_len = bytes.len().min(64 * 1024);
-        let sample_newlines = bytes[..sample_len].iter().filter(|&&b| b == b'\n').count();
-        if astria_core::security::looks_minified(bytes.len() as u64, sample_len, sample_newlines) {
-            continue;
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ext_with_dot = format!(".{}", ext.to_lowercase());
+
+        // The minified heuristic measures prose layout, so it is meaningful
+        // only for textual source formats. Binary documents, PDFs, images,
+        // and media have no line structure to measure — e.g. a large WAV
+        // whose sampled prefix is zero bytes has no newlines and would be
+        // misread as generated source, silently dropped before
+        // transcription/office extraction ever ran.
+        let heuristic_applies = file_type == FileType::Code
+            || (file_type == FileType::Document
+                && TEXTUAL_DOC_EXTENSIONS.contains(&ext_with_dot.as_str()));
+        if heuristic_applies {
+            // Minified/generated blobs (bundler output = few, huge lines) are
+            // noise: they spawn single-letter function nodes that flood hubs
+            // and query results.
+            let sample_len = bytes.len().min(64 * 1024);
+            let sample_newlines = bytes[..sample_len].iter().filter(|&&b| b == b'\n').count();
+            if astria_core::security::looks_minified(
+                bytes.len() as u64,
+                sample_len,
+                sample_newlines,
+            ) {
+                continue;
+            }
         }
 
         seen_paths.insert(rel_str.clone());
         let hash = hash_bytes(&bytes);
 
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let language = language_for_extension(ext).map(|s| s.to_string());
 
         let stored_hash: Option<String> = db
@@ -215,7 +254,19 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
     })
 }
 
-pub fn update_manifest(result: &DetectResult, db: &Connection) -> astria_core::Result<()> {
+/// Update the file manifest from a detection run. `deferred` files (their
+/// extraction could not run this pass — missing tooling, absent workspace
+/// credentials) keep their previous manifest row: an unchanged content
+/// hash would otherwise mark them fresh even though their extraction was
+/// skipped, so the promised retry after installing the dependency would
+/// never fire.
+pub fn update_manifest(
+    result: &DetectResult,
+    deferred: &[PathBuf],
+    db: &Connection,
+) -> astria_core::Result<()> {
+    let deferred_keys: std::collections::HashSet<String> =
+        deferred.iter().map(|p| normalize(p)).collect();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -229,6 +280,9 @@ pub fn update_manifest(result: &DetectResult, db: &Connection) -> astria_core::R
         .chain(result.unchanged.iter())
         .collect();
     for entry in &all_entries {
+        if deferred_keys.contains(&normalize(&entry.path)) {
+            continue;
+        }
         db.execute(
             "INSERT OR REPLACE INTO file_manifest (file_path, content_hash, file_type, language, last_seen_at, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -257,13 +311,81 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn binary_media_is_not_filtered_as_minified() {
+        // A large WAV whose prefix is zero-valued samples has no newlines:
+        // the prose-layout heuristic would have silently excluded it before
+        // transcription ever ran. Binary formats must skip the heuristic.
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("talk.wav");
+        let zeros = vec![0u8; 100_000];
+        fs::write(&wav, zeros).unwrap();
+        // Control: the same bytes as .js WOULD be filtered (generated blob).
+        let js = dir.path().join("bundle.js");
+        fs::write(&js, vec![b'a'; 100_000]).unwrap();
+
+        let db = open_db_in_memory().unwrap();
+        let result = detect(dir.path(), &db).unwrap();
+        let seen: Vec<&str> = result
+            .new
+            .iter()
+            .map(|e| e.path.to_str().unwrap())
+            .collect();
+        assert!(
+            seen.iter().any(|p| p.ends_with("talk.wav")),
+            "binary media must survive discovery: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|p| p.ends_with("bundle.js")),
+            "newline-free large source is still filtered: {seen:?}"
+        );
+    }
+
+    #[test]
     fn classify_known_extensions() {
         assert_eq!(classify_file(Path::new("foo.py")), Some(FileType::Code));
         assert_eq!(classify_file(Path::new("foo.rs")), Some(FileType::Code));
         assert_eq!(classify_file(Path::new("foo.md")), Some(FileType::Document));
+        assert_eq!(
+            classify_file(Path::new("foo.qmd")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.html")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.yaml")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.yml")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.docx")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.xlsx")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("report.gdoc")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("budget.gsheet")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("deck.gslides")),
+            Some(FileType::Document)
+        );
         assert_eq!(classify_file(Path::new("foo.pdf")), Some(FileType::Paper));
         assert_eq!(classify_file(Path::new("foo.png")), Some(FileType::Image));
         assert_eq!(classify_file(Path::new("foo.mp4")), Some(FileType::Video));
+        assert_eq!(classify_file(Path::new("foo.mp3")), Some(FileType::Audio));
+        assert_eq!(classify_file(Path::new("foo.wav")), Some(FileType::Audio));
         assert_eq!(classify_file(Path::new("foo.xyz")), None);
         assert_eq!(classify_file(Path::new("Makefile")), None);
     }
@@ -304,7 +426,7 @@ mod tests {
 
         let db = open_db_in_memory().unwrap();
         let result = detect(dir.path(), &db).unwrap();
-        update_manifest(&result, &db).unwrap();
+        update_manifest(&result, &[], &db).unwrap();
 
         fs::write(dir.path().join("main.py"), "def goodbye(): pass\n").unwrap();
         let result2 = detect(dir.path(), &db).unwrap();
@@ -321,12 +443,49 @@ mod tests {
 
         let db = open_db_in_memory().unwrap();
         let result = detect(dir.path(), &db).unwrap();
-        update_manifest(&result, &db).unwrap();
+        update_manifest(&result, &[], &db).unwrap();
 
         fs::remove_file(dir.path().join("b.py")).unwrap();
         let result2 = detect(dir.path(), &db).unwrap();
 
         assert_eq!(result2.removed.len(), 1);
         assert!(result2.removed[0].path.to_string_lossy().contains("b.py"));
+    }
+
+    #[test]
+    fn detect_respects_astriaignore() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("keep.py"), "a\n").unwrap();
+        fs::write(dir.path().join("skip.py"), "b\n").unwrap();
+        fs::write(dir.path().join(".astriaignore"), "skip.py\n").unwrap();
+
+        let db = open_db_in_memory().unwrap();
+        let result = detect(dir.path(), &db).unwrap();
+
+        assert!(result
+            .new
+            .iter()
+            .any(|f| f.path.to_string_lossy().contains("keep.py")));
+        assert!(!result
+            .new
+            .iter()
+            .any(|f| f.path.to_string_lossy().contains("skip.py")));
+    }
+
+    #[test]
+    fn detect_fails_loudly_when_astriaignore_cannot_be_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("main.py"), "def hello(): pass\n").unwrap();
+        // A directory where the ignore file should be makes `add_ignore`
+        // fail deterministically on every platform.
+        fs::create_dir(dir.path().join(".astriaignore")).unwrap();
+
+        let db = open_db_in_memory().unwrap();
+        let result = detect(dir.path(), &db);
+
+        let error = result.expect_err(
+            "a .astriaignore that cannot be loaded must fail the run instead of silently proceeding without the user's exclusions",
+        );
+        assert!(error.to_string().contains(".astriaignore"));
     }
 }

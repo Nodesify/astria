@@ -1,27 +1,24 @@
 use std::collections::{HashMap, HashSet};
 
-use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
+use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use rusqlite::Connection;
 
-use astria_paths::relative_display;
-
 /// How many near-miss labels to suggest when a query matches nothing.
 const SUGGESTION_COUNT: usize = 3;
 
-fn log_query(db: &Connection, question: &str, answer: &str) {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .to_string();
-    let _ = db.execute(
-        "INSERT INTO query_history (question, answer, path_taken, queried_at) VALUES (?1, ?2, '', ?3)",
-        rusqlite::params![question, answer.chars().take(500).collect::<String>(), ts],
-    );
-}
+// Domain modules split out of lib.rs: each owns one cohesive stage of the
+// query pipeline. The public API surface below is unchanged.
+mod render;
+mod scoring;
+mod store;
 
+#[allow(unused_imports)]
+pub use render::count_response_tokens;
+pub(crate) use render::*;
+pub(crate) use scoring::*;
+pub(crate) use store::*;
 #[derive(Debug)]
 struct NodeData {
     id: String,
@@ -75,1337 +72,6 @@ const SEMANTIC_WEAK_FLOOR: f64 = 0.65;
 /// about the question, not a distant neighbor.
 const SEMANTIC_SEED_FLOOR: f64 =
     astria_core::calibration::SEMANTIC_CALIBRATION.seed_slot_score_floor();
-
-/// Fallback strength for edges without a numeric score. Alphabetical
-/// string comparison of confidence labels does NOT order by strength
-/// ("SEMANTIC" > "LLM" lexicographically), so map labels to numbers.
-fn confidence_rank(confidence: &str) -> f64 {
-    match confidence.to_uppercase().as_str() {
-        "DECLARED" => 1.0,
-        "EXTRACTED" => 0.9,
-        // A call expression extracted from source whose bare name bound to
-        // exactly one definition: stronger than co-occurrence inference,
-        // deliberately below the EXTRACTED/DECLARED tier so `--detail high`
-        // (compiler-grade facts) still excludes it.
-        "RESOLVED" => 0.85,
-        "INFERRED" => 0.7,
-        "SEMANTIC" => 0.6,
-        _ => 0.5,
-    }
-}
-
-struct LoadedGraph {
-    /// Directed storage even though most traversals are undirected: the
-    /// edge orientation (caller → callee, importer → module) is preserved,
-    /// and `directed` queries can follow it.
-    graph: DiGraph<NodeData, EdgeData>,
-    id_to_idx: HashMap<String, NodeIndex>,
-    /// Project root derived from the DB path (`root/.astria/db.sqlite`),
-    /// used to shorten stored absolute paths in agent-facing output.
-    root: Option<String>,
-}
-
-impl LoadedGraph {
-    /// Root-relative display form of a stored path.
-    fn display_path(&self, path: &str) -> String {
-        match &self.root {
-            Some(root) => relative_display(path, root),
-            None => path.trim_start_matches("//?/").to_string(),
-        }
-    }
-}
-
-fn load_graph(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph> {
-    // Project root: two levels above the DB file (root/.astria/db.sqlite).
-    let root = std::path::Path::new(db_path)
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_string_lossy().replace('\\', "/"));
-
-    let mut nodes = Vec::new();
-    {
-        let mut stmt = db.prepare(
-            "SELECT id, label, file_type, source_file, source_line, community, docstring, signature FROM nodes",
-        )?;
-        #[allow(clippy::type_complexity)]
-        let rows: Vec<(
-            String,
-            String,
-            String,
-            String,
-            Option<i64>,
-            Option<i64>,
-            Option<String>,
-            Option<String>,
-        )> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                ))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        for (id, label, ft, sf, line, comm, doc, sig) in rows {
-            nodes.push((id, label, ft, sf, line, comm, doc, sig));
-        }
-    }
-
-    let mut graph = DiGraph::new();
-    let mut id_to_idx = HashMap::new();
-    for (id, label, ft, sf, line, comm, doc, sig) in &nodes {
-        let idx = graph.add_node(NodeData {
-            id: id.clone(),
-            label: label.clone(),
-            file_type: ft.clone(),
-            source_file: sf.clone(),
-            source_line: *line,
-            community: *comm,
-            docstring: doc.clone(),
-            signature: sig.clone(),
-        });
-        id_to_idx.insert(id.clone(), idx);
-    }
-
-    {
-        let mut stmt = db.prepare(
-            "SELECT source, target, relation, confidence, confidence_score, source_file, source_line FROM edges",
-        )?;
-        #[allow(clippy::type_complexity)]
-        let rows: Vec<(
-            String,
-            String,
-            String,
-            String,
-            Option<f64>,
-            String,
-            Option<i64>,
-        )> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                ))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        for (src, tgt, rel, conf, score, sf, line) in rows {
-            if let (Some(&s), Some(&t)) = (id_to_idx.get(&src), id_to_idx.get(&tgt)) {
-                graph.add_edge(
-                    s,
-                    t,
-                    EdgeData {
-                        relation: rel,
-                        confidence: conf,
-                        confidence_score: score,
-                        source_file: sf,
-                        source_line: line,
-                    },
-                );
-            }
-        }
-    }
-
-    Ok(LoadedGraph {
-        graph,
-        id_to_idx,
-        root,
-    })
-}
-
-// Read both tables in one SQLite snapshot. Reloading avoids stale state after
-// external commits, local writes, and rollbacks.
-fn read_snapshot(db: &Connection) -> astria_core::Result<Option<rusqlite::Transaction<'_>>> {
-    Ok(if db.is_autocommit() {
-        Some(db.unchecked_transaction()?)
-    } else {
-        None
-    })
-}
-
-fn load_graph_snapshot(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph> {
-    let transaction = read_snapshot(db)?;
-    let loaded = load_graph(db, db_path)?;
-    if let Some(transaction) = transaction {
-        transaction.commit()?;
-    }
-    Ok(loaded)
-}
-
-/// Neighbors of `idx`: outgoing only when traversing a directed graph,
-/// both directions otherwise.
-fn iter_neighbors<'a>(
-    graph: &'a DiGraph<NodeData, EdgeData>,
-    idx: NodeIndex,
-    directed: bool,
-) -> impl Iterator<Item = NodeIndex> + 'a {
-    let outgoing = graph.neighbors_directed(idx, Direction::Outgoing);
-    if directed {
-        Box::new(outgoing) as Box<dyn Iterator<Item = NodeIndex> + 'a>
-    } else {
-        Box::new(outgoing.chain(graph.neighbors_directed(idx, Direction::Incoming)))
-            as Box<dyn Iterator<Item = NodeIndex> + 'a>
-    }
-}
-
-/// Like `iter_neighbors`, but only crossing edges whose confidence strength
-/// meets `min_strength` — the fidelity-tier filter (`--detail high` keeps
-/// only EXTRACTED/DECLARED facts and drops INFERRED/SEMANTIC ones).
-fn iter_neighbors_filtered<'a>(
-    graph: &'a DiGraph<NodeData, EdgeData>,
-    idx: NodeIndex,
-    directed: bool,
-    min_strength: f64,
-    semantic_floor: f64,
-) -> impl Iterator<Item = (NodeIndex, EdgeIndex)> + 'a {
-    graph
-        .edges_directed(idx, Direction::Outgoing)
-        .filter(move |e| {
-            e.weight().meets_detail(min_strength)
-                && !below_semantic_floor(e.weight(), semantic_floor)
-        })
-        .map(|e| (e.target(), e.id()))
-        .chain(
-            graph
-                .edges_directed(idx, Direction::Incoming)
-                .filter(move |e| {
-                    !directed
-                        && e.weight().meets_detail(min_strength)
-                        && !below_semantic_floor(e.weight(), semantic_floor)
-                })
-                .map(|e| (e.source(), e.id())),
-        )
-}
-
-/// Opt-in hard floor (`ASTRIA_QUERY_MIN_SEMANTIC_CONFIDENCE`, 0.0 = off):
-/// SEMANTIC edges whose calibrated keep-probability falls below the floor
-/// are excluded from traversal entirely. Structural and inferred edges are
-/// never touched — this is how graph consumers act on the judge's
-/// existence verdicts at query time.
-fn below_semantic_floor(edge: &EdgeData, floor: f64) -> bool {
-    floor > 0.0 && edge.confidence.eq_ignore_ascii_case("SEMANTIC") && edge.strength() < floor
-}
-
-/// The strongest edge connecting `a` and `b`, in either direction.
-fn edge_between(
-    graph: &DiGraph<NodeData, EdgeData>,
-    a: NodeIndex,
-    b: NodeIndex,
-) -> Option<&EdgeData> {
-    let forward = graph
-        .edges_directed(a, Direction::Outgoing)
-        .find(|e| e.target() == b)
-        .map(|e| e.weight());
-    match forward {
-        Some(w) => Some(w),
-        None => graph
-            .edges_directed(b, Direction::Outgoing)
-            .find(|e| e.target() == a)
-            .map(|e| e.weight()),
-    }
-}
-
-/// Lowercase word tokens, splitting camelCase / snake_case / kebab-case and
-/// punctuation so "parseExtraction", "parse_extraction" and
-/// "parse-extraction" all tokenize identically.
-fn tokenize(s: &str) -> Vec<String> {
-    let mut tokens: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for ch in s.chars() {
-        if ch.is_alphanumeric() {
-            let prev_upper = current.chars().last().is_some_and(|c| c.is_uppercase());
-            if !current.is_empty() && ch.is_uppercase() && !prev_upper {
-                tokens.push(std::mem::take(&mut current).to_lowercase());
-            }
-            current.push(ch);
-        } else if !current.is_empty() {
-            tokens.push(std::mem::take(&mut current).to_lowercase());
-        }
-    }
-    if !current.is_empty() {
-        tokens.push(current.to_lowercase());
-    }
-    tokens
-}
-
-/// The `k` node labels most similar to `query` — did-you-mean suggestions
-/// so a failed lookup hands the agent something actionable instead of a
-/// dead end. Best Jaro-Winkler score across the query's terms wins.
-fn nearest_labels(loaded: &LoadedGraph, query: &str, k: usize) -> Vec<String> {
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .filter(|t| t.len() > 2)
-        .map(|t| t.to_lowercase())
-        .collect();
-    if terms.is_empty() {
-        return Vec::new();
-    }
-    let mut scored: Vec<(f64, &String)> = Vec::new();
-    for idx in loaded.graph.node_indices() {
-        let label = &loaded.graph[idx].label;
-        let label_lower = label.to_lowercase();
-        let best = terms
-            .iter()
-            .map(|t| strsim::jaro_winkler(&label_lower, t))
-            .fold(0.0_f64, f64::max);
-        if best > 0.6 {
-            scored.push((best, label));
-        }
-    }
-    scored.sort_by(|a, b| {
-        b.0.partial_cmp(&a.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.1.cmp(b.1))
-    });
-    scored.truncate(k);
-    scored.into_iter().map(|(_, l)| l.clone()).collect()
-}
-
-/// Strip a simple English plural suffix so "communities" matches
-/// "community" and "users" matches "user". Cheap morphology for code terms.
-/// Per-query scoring debug (`ASTRIA_QUERY_DEBUG_SCORES=1`): dumps the top
-/// scored nodes with their match components plus the final seed list to
-/// stderr, so a retrieval miss is diagnosable from one query run.
-fn debug_scores_enabled() -> bool {
-    std::env::var("ASTRIA_QUERY_DEBUG_SCORES")
-        .ok()
-        .is_some_and(|v| matches!(v.trim(), "1" | "true" | "on"))
-}
-
-fn truncate_label(s: &str) -> String {
-    s.chars().take(34).collect()
-}
-
-fn stem(token: &str) -> &str {
-    if token.len() > 4 && token.ends_with("ies") {
-        &token[..token.len() - 3] // "communities" -> "communit" (matches "community" prefix-wise)
-    } else if token.len() > 3 && token.ends_with('s') && !token.ends_with("ss") {
-        &token[..token.len() - 1]
-    } else {
-        token
-    }
-}
-
-/// Common filler and question words, filtered before scoring: they carry no
-/// retrieval signal and let prose-heavy nodes win on stopwords alone.
-const STOPWORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "if", "then", "than", "that", "this", "these", "those",
-    "there", "here", "of", "in", "on", "at", "by", "for", "with", "from", "into", "about", "as",
-    "is", "are", "was", "were", "be", "been", "being", "am", "do", "does", "did", "doing", "have",
-    "has", "had", "having", "will", "would", "shall", "should", "can", "could", "may", "might",
-    "must", "to", "too", "it", "its", "itself", "they", "them", "their", "we", "us", "our", "you",
-    "your", "i", "me", "my", "he", "she", "his", "her", "him", "what", "which", "who", "whom",
-    "whose", "when", "where", "why", "how", "not", "no", "also", "just", "very", "some", "any",
-    "each", "other", "more", "most",
-];
-
-/// Import-graph degree per node: how many `imports` edges leave and enter
-/// each node. Entry-point questions ("what is the CLI entry point") ask for
-/// a structural fact — the file execution starts from — that the import DAG
-/// encodes (imports many modules, imported by none) and no file name spells
-/// out; lexical scoring can never see it.
-fn import_degrees(
-    loaded: &LoadedGraph,
-) -> (
-    std::collections::HashMap<NodeIndex, u32>,
-    std::collections::HashMap<NodeIndex, u32>,
-) {
-    let (mut out, mut inc) = (
-        std::collections::HashMap::new(),
-        std::collections::HashMap::new(),
-    );
-    for e in loaded.graph.edge_references() {
-        if loaded.graph[e.id()].relation == "imports" {
-            *out.entry(e.source()).or_insert(0u32) += 1;
-            *inc.entry(e.target()).or_insert(0u32) += 1;
-        }
-    }
-    (out, inc)
-}
-
-/// Test/spec/example files import many modules and are imported by none —
-/// structurally indistinguishable from an entry file — but they are never
-/// the program's front door, so they are excluded from entry candidacy.
-fn is_testish_path(path: &str) -> bool {
-    let p = path.to_lowercase().replace('\\', "/");
-    p.split('/').any(|segment| {
-        let words = tokenize(segment);
-        words.iter().any(|word| {
-            matches!(
-                word.as_str(),
-                "test"
-                    | "tests"
-                    | "spec"
-                    | "specs"
-                    | "example"
-                    | "examples"
-                    | "fixture"
-                    | "fixtures"
-                    | "benchmark"
-                    | "benchmarks"
-            )
-        })
-    })
-}
-
-/// Word sequences whose presence marks a question as asking for the
-/// program's starting file rather than a concept. Matched as intact,
-/// stem-equal token runs — never as substrings: "main file" must not fire
-/// inside "domain files". Bare "bootstrap" is deliberately absent: too
-/// many repos contain the CSS framework of that name, and a false entry
-/// intent re-ranks import roots above every lexical match the question
-/// actually earned.
-const ENTRY_INTENT_PHRASES: &[&[&str]] = &[
-    &["entry", "point"],
-    &["entrypoint"],
-    &["main", "file"],
-    &["starting", "point"],
-];
-
-/// True when `tokens` contains an entry-intent phrase as a contiguous word
-/// run, plural stems included ("entry points", "the entrypoints").
-fn has_entry_intent(tokens: &[String]) -> bool {
-    ENTRY_INTENT_PHRASES.iter().any(|phrase| {
-        !phrase.is_empty()
-            && tokens.windows(phrase.len()).any(|window| {
-                window
-                    .iter()
-                    .zip(phrase.iter())
-                    .all(|(token, word)| token.as_str() == *word || stem(token) == stem(word))
-            })
-    })
-}
-
-/// Minimum outgoing imports for a file to count as an entry candidate —
-/// below this it is a leaf module, not a front door.
-const ENTRY_MIN_IMPORTS: u32 = 3;
-
-/// IDF floor/floor-cap: even a term in every label keeps a quarter of its
-/// label weight, so ubiquitous terms still break ties, just never dominate.
-const IDF_FLOOR: f64 = 0.25;
-
-/// Score complete normalized identifiers above partial component matches.
-fn normalized_identifier(text: &str) -> String {
-    tokenize(text).concat()
-}
-
-/// True when `term` is a qualified name that matches the node id's token
-/// tail or a scope token ("BaseCommand.get_usage" matches
-/// `src_click_core_basecommand::get_usage` via its [basecommand, get,
-/// usage] suffix; "BaseCommand" matches the basecommand scope token).
-/// Same-name symbols share one bare label, so the qualified scope in the
-/// id is the only lexical place the class lives — and the seed reservation
-/// must honor it or the label tie hands the slot to a same-name stranger.
-fn qualified_scope_match(term: &str, id: &str) -> bool {
-    let want = normalized_identifier(term);
-    if want.is_empty() {
-        return false;
-    }
-    let tokens = tokenize(id);
-    if tokens.contains(&want) {
-        return true;
-    }
-    for start in 0..tokens.len() {
-        if tokens[start..].concat() == want {
-            return true;
-        }
-    }
-    false
-}
-
-/// Reservation applies to written identifiers, not ordinary prose terms.
-fn is_explicit_identifier(term: &str) -> bool {
-    let quoted = term.starts_with(['`', '\"', '\'']);
-    let text = term.trim_matches(|c: char| matches!(c, '`' | '\"' | '\'' | ',' | '?' | '!' | ';'));
-    quoted
-        || text.contains(['_', '-', '.', '/', '\\', ':', '('])
-        || text
-            .chars()
-            .zip(text.chars().skip(1))
-            .any(|(a, b)| a.is_lowercase() && b.is_uppercase())
-}
-
-fn component_coverage(needle: &[String], haystack: &[String]) -> f64 {
-    if needle.is_empty() {
-        return 0.0;
-    }
-    needle
-        .iter()
-        .filter(|part| {
-            haystack
-                .iter()
-                .any(|word| word == *part || stem(word) == stem(part))
-        })
-        .count() as f64
-        / needle.len() as f64
-}
-
-/// Prose node types: chunked document bodies share the document lifecycle
-/// (seed quota, priors) with whole-document nodes.
-fn is_doc_type(file_type: &str) -> bool {
-    matches!(file_type, "document" | "reference" | "paper" | "chunk")
-}
-
-/// Node types written only by semantic (LLM) extraction — concepts, entities,
-/// patterns, and modules derived from prose. Structural graphs never contain
-/// them, so priors and quotas keyed on these types leave plain pipelines
-/// untouched.
-fn is_semantic_type(file_type: &str) -> bool {
-    matches!(file_type, "concept" | "entity" | "pattern" | "module")
-}
-
-/// Share of prose-like nodes: documents plus semantic-derived summaries. On
-/// an LLM-enriched docs-only corpus the concept/code nodes the extractor adds
-/// would otherwise push the document share under `DOCS_MAJORITY_PROSE_SHARE`
-/// and strand the corpus with two prose seeds.
-fn prose_share(loaded: &LoadedGraph) -> f64 {
-    let prose = loaded
-        .graph
-        .node_indices()
-        .filter(|&i| {
-            is_doc_type(&loaded.graph[i].file_type) || is_semantic_type(&loaded.graph[i].file_type)
-        })
-        .count();
-    prose as f64 / loaded.graph.node_count().max(1) as f64
-}
-
-/// Which corpus a query runs against — the designed distinction that
-/// decides whether prose nodes (documents, chunks) rank as first-class
-/// content or under code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CorpusMode {
-    /// Code-majority graph: code symbols rank first, doc seeds are capped,
-    /// chunk bodies score under code.
-    CodeMajority,
-    /// Docs-majority graph (transcript corpora, docs-only sites): there is
-    /// no code to protect, so prose nodes ARE the corpus — the doc-seed
-    /// quota opens and chunks rank like documents.
-    DocsMajority,
-}
-
-/// Prose share at and above which auto-detection calls a graph
-/// docs-majority. A designed threshold, not a tuning knob: mixed graphs
-/// (real repos — mostly code plus docs) stay code-majority; corpora that
-/// are effectively all prose cross it. Pin either way with
-/// `ASTRIA_CORPUS_MODE=docs|code` when auto-detection guesses wrong.
-const DOCS_MAJORITY_PROSE_SHARE: f64 = 0.95;
-
-/// Parsed `ASTRIA_CORPUS_MODE=docs|code` pin. Unrecognized values warn and
-/// fall back to auto-detection — a typo must not silently pin a mode.
-fn corpus_mode_pin() -> Option<CorpusMode> {
-    let value = astria_core::env_var("CORPUS_MODE")?;
-    match corpus_mode_pin_value(value.trim()) {
-        Some(mode) => Some(mode),
-        None => {
-            eprintln!(
-                "warning: ASTRIA_CORPUS_MODE={value:?} not recognized (docs|code); using auto-detection"
-            );
-            None
-        }
-    }
-}
-
-fn corpus_mode_pin_value(value: &str) -> Option<CorpusMode> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "docs" | "doc" | "documents" => Some(CorpusMode::DocsMajority),
-        "code" => Some(CorpusMode::CodeMajority),
-        _ => None,
-    }
-}
-
-/// The corpus mode for one loaded graph: the env pin when set, otherwise
-/// auto-detection from the prose share.
-fn corpus_mode(loaded: &LoadedGraph) -> CorpusMode {
-    corpus_mode_from(prose_share(loaded), corpus_mode_pin())
-}
-
-fn corpus_mode_from(share: f64, pin: Option<CorpusMode>) -> CorpusMode {
-    pin.unwrap_or(if share >= DOCS_MAJORITY_PROSE_SHARE {
-        CorpusMode::DocsMajority
-    } else {
-        CorpusMode::CodeMajority
-    })
-}
-
-fn wants_docs(terms: &[String]) -> bool {
-    terms.iter().flat_map(|t| tokenize(t)).any(|t| {
-        matches!(
-            t.as_str(),
-            "docs" | "documentation" | "readme" | "guide" | "tutorial"
-        )
-    })
-}
-
-/// Ranked nodes plus the evidence the ranking was built on.
-///
-/// `salient_terms` are the query's highest-IDF terms — the ones that
-/// identify the answer — and `max_salient_hits` is the best salient-term
-/// coverage any node achieved. `max_matched_terms` of `effective_count`
-/// is the best term coverage any node achieved at all, `entry_intent`
-/// records whether structural entry-point candidates exist (those queries
-/// are lexical-by-design). `missing_terms` are the effective terms that
-/// matched nothing anywhere. Together these let callers tell "the graph
-/// has evidence for what the question is about" from "nothing matched the
-/// question's identifying terms" (the no-confident-match case).
-struct ScoredNodes {
-    ranked: Vec<(f64, NodeIndex)>,
-    salient_terms: Vec<String>,
-    max_salient_hits: usize,
-    max_matched_terms: usize,
-    effective_count: usize,
-    entry_intent: bool,
-    missing_terms: Vec<String>,
-}
-
-fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes {
-    // IDF weights + per-node lowercase labels, one shared pre-pass.
-    let n_nodes = loaded.graph.node_count().max(1) as f64;
-    let ln_nodes = n_nodes.ln().max(1.0);
-    let labels_lower: Vec<String> = loaded
-        .graph
-        .node_indices()
-        .map(|idx| loaded.graph[idx].label.to_lowercase())
-        .collect();
-    let doc_share = prose_share(loaded);
-    let docs_majority = doc_share >= DOCS_MAJORITY_PROSE_SHARE;
-    let label_components: Vec<Vec<String>> = loaded
-        .graph
-        .node_indices()
-        .map(|idx| tokenize(&loaded.graph[idx].label))
-        .collect();
-    // Chunk and document bodies feed the IDF pre-pass too: scoring matches
-    // those terms against docstrings, so a term that is common in bodies
-    // but rare in first lines ("group", "friends" in transcripts) would
-    // otherwise get near-max weight and let any node that merely mentions
-    // it outrank the node whose text actually answers.
-    let doc_components: Vec<Vec<String>> = loaded
-        .graph
-        .node_indices()
-        .map(|idx| {
-            loaded.graph[idx]
-                .docstring
-                .as_deref()
-                .map(|d| tokenize(d).into_iter().take(400).collect())
-                .unwrap_or_default()
-        })
-        .collect();
-    // Qualified ids participate in IDF like labels and bodies: id tokens
-    // repeat across a repo ("src", "core", "tests") and must not act as
-    // rare discriminators.
-    let id_components: Vec<Vec<String>> = loaded
-        .graph
-        .node_indices()
-        .map(|idx| tokenize(&loaded.graph[idx].id))
-        .collect();
-    let mut idf: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
-    let mut effective: Vec<&String> = Vec::new();
-    for term in terms {
-        let t = term.trim();
-        if t.len() <= 2 || STOPWORDS.contains(&t.to_lowercase().as_str()) {
-            continue;
-        }
-        effective.push(term);
-    }
-    // Effective terms with zero coverage hits anywhere — the question's
-    // vocabulary the graph does not share, named in a refusal message.
-    let mut missing_terms: Vec<String> = Vec::new();
-    for term in &effective {
-        let parts = tokenize(term);
-        let hits = label_components
-            .iter()
-            .zip(doc_components.iter().zip(id_components.iter()))
-            .filter(|(label, (doc, id))| {
-                component_coverage(&parts, label) == 1.0
-                    || component_coverage(&parts, doc) == 1.0
-                    || component_coverage(&parts, id) == 1.0
-            })
-            .count();
-        let w = if hits == 0 {
-            missing_terms.push((*term).clone());
-            1.0
-        } else {
-            ((n_nodes / hits as f64).ln() / ln_nodes).clamp(IDF_FLOOR, 1.0)
-        };
-        idf.insert(term.as_str(), w);
-    }
-    let idf_weight = |term: &str| -> f64 { idf.get(term).copied().unwrap_or(1.0) };
-
-    // Salient-term coverage: the query's highest-IDF terms are the ones
-    // that identify the answer. A long natural-language description
-    // (RepoQA-style numbered specifications, issue bodies) otherwise lets
-    // nodes that match many WEAK terms ("line", "code", "output") outrank
-    // the node matching the few strong ones — the unnormalized term sum
-    // buried the true function outside the seed set. Nodes are scaled by
-    // how much of the salient set they touch: full salient coverage keeps
-    // the score, zero salient evidence is damped to 60%.
-    let mut salient_terms: Vec<&String> = effective.clone();
-    salient_terms.sort_by(|a, b| {
-        idf_weight(b)
-            .partial_cmp(&idf_weight(a))
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.cmp(b))
-    });
-    let salient_k = effective.len().div_ceil(4).clamp(1, 3);
-    salient_terms.truncate(salient_k);
-    let salient_set: std::collections::HashSet<&str> =
-        salient_terms.iter().map(|t| t.as_str()).collect();
-    let salient_owned: Vec<String> = salient_terms.iter().map(|t| (*t).clone()).collect();
-
-    // Entry-point intent: detect once, pay for the degree maps only then.
-    // Phrase runs are matched over the token stream, not a joined string.
-    let question_tokens: Vec<String> = terms.iter().flat_map(|t| tokenize(t)).collect();
-    let wants_tests = question_tokens.iter().any(|t| {
-        matches!(
-            t.as_str(),
-            "test"
-                | "tests"
-                | "testing"
-                | "spec"
-                | "specs"
-                | "benchmark"
-                | "benchmarks"
-                | "example"
-                | "examples"
-        )
-    });
-    let wants_docs = wants_docs(terms);
-    let wants_entry = has_entry_intent(&question_tokens);
-    let (imports_out, imports_in) = if wants_entry {
-        import_degrees(loaded)
-    } else {
-        (
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-        )
-    };
-
-    let mut scored: Vec<(f64, NodeIndex)> = Vec::new();
-    let mut entry_candidates = HashSet::new();
-    let debug_scores = debug_scores_enabled();
-    // Per-node (matched_terms, salient_hits) in node-index order, for the dump.
-    let mut debug_rows: Vec<(usize, usize)> = Vec::new();
-    let mut max_salient_hits = 0usize;
-    let mut max_matched_terms = 0usize;
-    let effective_terms_count = terms
-        .iter()
-        .filter(|t| {
-            let t = t.trim();
-            t.len() > 2 && !STOPWORDS.contains(&t.to_lowercase().as_str())
-        })
-        .count();
-    for (i, idx) in loaded.graph.node_indices().enumerate() {
-        let node = &loaded.graph[idx];
-        // Code answers rank above documentation and speculative stubs on
-        // equal term evidence: without the prior, prose-heavy doc nodes and
-        // std-call stubs crowd code symbols out of the seed set.
-        let is_chunk = node.file_type == "chunk";
-        let is_doc = is_chunk || is_doc_type(&node.file_type);
-        let symbol_parts = &label_components[i];
-        let is_test = node.file_type == "test"
-            || is_testish_path(&node.source_file)
-            || symbol_parts
-                .first()
-                .is_some_and(|p| matches!(p.as_str(), "test" | "tests" | "spec" | "bench"))
-            || node.id.contains("::tests::");
-        let prior = if is_test {
-            if wants_tests {
-                1.25
-            } else {
-                0.4
-            }
-        } else if is_chunk {
-            // Chunked prose out-scoring code on body-term luck displaced
-            // exact code answers by a couple of ranks; in code-majority
-            // graphs chunks rank under documents, while on docs-majority
-            // graphs they ARE the corpus and rank like any document.
-            if docs_majority {
-                if wants_docs {
-                    1.25
-                } else {
-                    0.55
-                }
-            } else {
-                0.45
-            }
-        } else if is_doc {
-            if wants_docs {
-                1.25
-            } else {
-                0.55
-            }
-        } else if is_semantic_type(&node.file_type) {
-            // LLM-derived concept/summary nodes keyword-match prose questions
-            // as strongly as the documents they were extracted from, and at
-            // the code prior (1.0) they crowd both code symbols and the
-            // primary document that actually holds the answer. Rank them
-            // just under primary documents on doc-intent questions, under
-            // code otherwise.
-            if wants_docs {
-                1.1
-            } else {
-                0.55
-            }
-        } else if node.file_type == "stub" {
-            0.4
-        } else {
-            1.0
-        };
-        // Consecutive question tokens that appear verbatim in a node's label
-        // or docstring ("blast radius") mark the node as the concept's home;
-        // token-level scoring alone treats the words as unrelated and loses
-        // to weaker-but-lexically-luckier matches.
-        let doc_lower = node.docstring.as_deref().map(|d| d.to_lowercase());
-        let label_lower_full = labels_lower[i].clone();
-        let mut phrase_bonus = 0.0f64;
-        for w in terms.windows(2) {
-            let phrase = format!("{} {}", w[0].to_lowercase(), w[1].to_lowercase());
-            let hit = label_lower_full.contains(&phrase)
-                || doc_lower.as_deref().is_some_and(|d| d.contains(&phrase));
-            if hit {
-                phrase_bonus += 0.5;
-            }
-        }
-        let phrase_bonus = phrase_bonus.min(1.0);
-        let label_tokens = &label_components[i];
-        let file_tokens = tokenize(&node.source_file);
-        // Chunked prose bodies live in the docstring; 400 tokens keeps
-        // whole-chunk scoring affordable while matching deep into the chunk.
-        let doc_tokens: Vec<String> = node
-            .docstring
-            .as_deref()
-            .map(|d| tokenize(d).into_iter().take(400).collect())
-            .unwrap_or_default();
-        let mut score = 0.0;
-        let mut matched_terms = 0usize;
-        let mut salient_hits = 0usize;
-        for term in terms {
-            let term = term.trim();
-            if term.len() <= 2 {
-                continue;
-            }
-            let term_lower = term.to_lowercase();
-            // Question words carry no retrieval signal: "where is the SSRF
-            // validation and what does it check" must score on ssrf/url/
-            // validation/check, not on "where"/"does" matching every doc
-            // heading that contains them.
-            if STOPWORDS.contains(&term_lower.as_str()) {
-                continue;
-            }
-            let term_tokens = tokenize(term);
-            let normalized = normalized_identifier(term);
-            let label_normalized = normalized_identifier(&node.label);
-            let coverage = component_coverage(&term_tokens, label_tokens);
-            // Chunk labels are a truncated first line of the chunk's own
-            // body, which the docstring below scores in full. Amplifying
-            // that prefix at label weight double-counts body text, so a
-            // lucky opening line (a later session re-mentioning a topic)
-            // outranks the chunk whose body actually answers the question.
-            let label_score = if is_chunk {
-                0.0
-            } else if normalized == label_normalized {
-                4.0
-            } else if coverage == 1.0 {
-                2.0
-            } else {
-                0.5 * coverage * coverage
-            };
-            let doc_coverage = component_coverage(&term_tokens, &doc_tokens);
-            let path_coverage = component_coverage(&term_tokens, &file_tokens);
-            // A qualified question term ("BaseCommand.get_usage") matches a
-            // node's scope-qualified id even though every same-name symbol
-            // shares one bare label ("get_usage()"); without id evidence the
-            // tie falls to degree and a same-name symbol from the wrong
-            // class wins the answer slot.
-            let id_coverage = component_coverage(&term_tokens, &id_components[i]);
-            let id_score = id_coverage * id_coverage;
-            // A chunk's body is its content: body evidence there scores at
-            // label parity, so label luck (a speaker name in the first line)
-            // cannot outrank the chunk that actually answers the question.
-            let doc_coeff = if is_chunk { 1.1 } else { 0.35 };
-            let doc_score = doc_coeff * doc_coverage * doc_coverage;
-            let path_score = 0.55 * path_coverage * path_coverage;
-            let fuzzy_score = if label_score + doc_score + path_score == 0.0
-                && term_tokens.len() == 1
-                && label_tokens
-                    .iter()
-                    .any(|lt| strsim::jaro_winkler(lt, &term_tokens[0]) > 0.9)
-            {
-                0.15
-            } else {
-                0.0
-            };
-            if label_score + doc_score + path_score + id_score + fuzzy_score > 0.0 {
-                matched_terms += 1;
-                if salient_set.contains(term) {
-                    salient_hits += 1;
-                }
-            }
-            score += (label_score.max(doc_score) + id_score + path_score + fuzzy_score)
-                * idf_weight(term);
-        }
-        // Questions are multi-term: a node covering most of them outranks a
-        // lexically lucky single-term match ("paint" in a speaker line vs
-        // the chunk holding melanie + painted + sunrise).
-        if effective_terms_count > 0 {
-            score *= 0.8 + 0.2 * (matched_terms as f64 / effective_terms_count as f64);
-        }
-        // Salient-term coverage scaling (see the salient_terms pre-pass):
-        // matches on the query's rarest terms are worth structurally more
-        // than matches on its common ones.
-        if !salient_terms.is_empty() {
-            score *= 0.6 + 0.4 * (salient_hits as f64 / salient_terms.len() as f64);
-        }
-        // Entry-point intent: a file that imports many modules and is
-        // imported by none is the program's front door, whatever it is
-        // named ("index.ts", "main.rs", "cli.py").
-        if wants_entry
-            && label_is_file(&node.label)
-            && node.file_type == "code"
-            && !is_test
-            && imports_in.get(&idx).copied().unwrap_or(0) == 0
-            && imports_out.get(&idx).copied().unwrap_or(0) >= ENTRY_MIN_IMPORTS
-        {
-            entry_candidates.insert(idx);
-        }
-        if score > 0.0 || entry_candidates.contains(&idx) {
-            scored.push(((score + phrase_bonus) * prior, idx));
-        }
-        max_salient_hits = max_salient_hits.max(salient_hits);
-        max_matched_terms = max_matched_terms.max(matched_terms);
-        if debug_scores {
-            debug_rows.push((matched_terms, salient_hits));
-        }
-    }
-    // Explicit entry intent gives import roots precedence over lexical
-    // mentions of "entry point". The tier is derived from this candidate
-    // set, so changing lexical weights cannot drown out structural evidence.
-    if !entry_candidates.is_empty() {
-        let lexical_ceiling = scored
-            .iter()
-            .map(|(score, _)| *score)
-            .fold(0.0_f64, f64::max);
-        for (score, idx) in &mut scored {
-            if entry_candidates.contains(idx) {
-                *score += lexical_ceiling + 1.0;
-            }
-        }
-    }
-    // Deterministic order: score desc, then label, then id.
-    scored.sort_by(|a, b| {
-        b.0.partial_cmp(&a.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| loaded.graph[a.1].label.cmp(&loaded.graph[b.1].label))
-            .then_with(|| loaded.graph[a.1].id.cmp(&loaded.graph[b.1].id))
-    });
-    if debug_scores {
-        eprintln!(
-            "-- score dump: top {} of {} scored (matched/effective, salient/k) --",
-            scored.len().min(15),
-            scored.len()
-        );
-        for (rank, (score, idx)) in scored.iter().take(15).enumerate() {
-            let n = &loaded.graph[*idx];
-            let (matched, salient) = debug_rows.get(idx.index()).copied().unwrap_or((0, 0));
-            eprintln!(
-                "  #{:<2} score={:<9.3} matched={:<3}/{} salient={:<2}/{} {} [{}]",
-                rank + 1,
-                score,
-                matched,
-                effective_terms_count,
-                salient,
-                salient_terms.len(),
-                truncate_label(&n.label),
-                truncate_label(&n.id),
-            );
-        }
-    }
-    ScoredNodes {
-        ranked: scored,
-        salient_terms: salient_owned,
-        max_salient_hits,
-        max_matched_terms,
-        effective_count: effective_terms_count,
-        entry_intent: !entry_candidates.is_empty(),
-        missing_terms,
-    }
-}
-
-/// `(visited nodes, observed edges, hop distance from the seeds)`.
-type TraversalResult = (HashSet<NodeIndex>, Vec<EdgeIndex>, HashMap<NodeIndex, u32>);
-
-fn bfs_subgraph(
-    loaded: &LoadedGraph,
-    start_nodes: &[NodeIndex],
-    max_depth: usize,
-    directed: bool,
-    min_strength: f64,
-    semantic_floor: f64,
-) -> TraversalResult {
-    let mut visited: HashSet<NodeIndex> = start_nodes.iter().copied().collect();
-    let mut frontier: Vec<NodeIndex> = start_nodes.to_vec();
-    let mut edges_seen: Vec<EdgeIndex> = Vec::new();
-    let mut distance: HashMap<NodeIndex, u32> = start_nodes.iter().map(|&n| (n, 0)).collect();
-
-    for depth in 0..max_depth {
-        let mut next_frontier = Vec::new();
-        for &node in &frontier {
-            for (neighbor, edge_id) in
-                iter_neighbors_filtered(&loaded.graph, node, directed, min_strength, semantic_floor)
-            {
-                if !visited.contains(&neighbor) {
-                    visited.insert(neighbor);
-                    distance.insert(neighbor, depth as u32 + 1);
-                    next_frontier.push(neighbor);
-                    edges_seen.push(edge_id);
-                }
-            }
-        }
-        if next_frontier.is_empty() {
-            break;
-        }
-        frontier = next_frontier;
-    }
-    (visited, edges_seen, distance)
-}
-
-fn dfs_subgraph(
-    loaded: &LoadedGraph,
-    start_nodes: &[NodeIndex],
-    max_depth: usize,
-    directed: bool,
-    min_strength: f64,
-    semantic_floor: f64,
-) -> TraversalResult {
-    let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut edges_seen: Vec<EdgeIndex> = Vec::new();
-    let mut stack: Vec<(NodeIndex, usize)> = start_nodes.iter().rev().map(|&n| (n, 0)).collect();
-
-    while let Some((node, depth)) = stack.pop() {
-        if visited.contains(&node) || depth > max_depth {
-            continue;
-        }
-        visited.insert(node);
-        if depth == max_depth {
-            continue;
-        }
-        for (neighbor, edge_id) in
-            iter_neighbors_filtered(&loaded.graph, node, directed, min_strength, semantic_floor)
-        {
-            if !visited.contains(&neighbor) {
-                stack.push((neighbor, depth + 1));
-                edges_seen.push(edge_id);
-            }
-        }
-    }
-    (visited, edges_seen, HashMap::new())
-}
-
-/// A label that names a file ("lib.rs", "benchmark.md") rather than a symbol.
-fn label_is_file(label: &str) -> bool {
-    match label.rfind('.') {
-        Some(dot) if dot > 0 => {
-            let ext = &label[dot + 1..];
-            !ext.is_empty() && ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric())
-        }
-        _ => false,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn subgraph_to_text(
-    loaded: &LoadedGraph,
-    visited: &HashSet<NodeIndex>,
-    edges_seen: &[EdgeIndex],
-    relevance: &HashMap<NodeIndex, f64>,
-    distance: &HashMap<NodeIndex, u32>,
-    reach_strength: &HashMap<NodeIndex, f64>,
-    prefer_files: bool,
-    token_budget: i64,
-    skip_records: usize,
-    header: &str,
-) -> astria_core::Result<(String, Option<usize>)> {
-    // Relevance-ranked, not hub-ranked: question-matched seeds surface
-    // first, then nodes by traversal distance to those seeds, and only
-    // then by degree. Pure degree ordering buried the files the question
-    // was actually about beneath graph-wide hubs.
-    let mut node_list: Vec<NodeIndex> = visited.iter().copied().collect();
-    node_list.sort_by(|&a, &b| {
-        let na = &loaded.graph[a];
-        let nb = &loaded.graph[b];
-        let sa = relevance.get(&a).copied().unwrap_or(0.0);
-        let sb = relevance.get(&b).copied().unwrap_or(0.0);
-        sb.partial_cmp(&sa)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            // Weakly-reached nodes (best touching edge below the semantic
-            // floor) come after strongly-reached ones at equal relevance.
-            // Plain graphs hold no such nodes: their edges sit at 0.7+.
-            .then_with(|| {
-                let wa = reach_strength.get(&a).copied().unwrap_or(1.0);
-                let wb = reach_strength.get(&b).copied().unwrap_or(1.0);
-                (wa < SEMANTIC_WEAK_FLOOR).cmp(&(wb < SEMANTIC_WEAK_FLOOR))
-            })
-            .then_with(|| {
-                distance
-                    .get(&a)
-                    .copied()
-                    .unwrap_or(u32::MAX)
-                    .cmp(&distance.get(&b).copied().unwrap_or(u32::MAX))
-            })
-            .then_with(|| {
-                loaded
-                    .graph
-                    .neighbors(b)
-                    .count()
-                    .cmp(&loaded.graph.neighbors(a).count())
-            })
-            .then_with(|| {
-                if prefer_files {
-                    let fa = label_is_file(&na.label);
-                    let fb = label_is_file(&nb.label);
-                    fb.cmp(&fa) // file nodes before symbols at equal relevance
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            })
-            .then_with(|| na.label.cmp(&nb.label))
-            .then_with(|| na.id.cmp(&nb.id))
-    });
-
-    let mut records = Vec::new();
-    for idx in &node_list {
-        let idx = *idx;
-        let node = &loaded.graph[idx];
-        let comm = node.community.map_or("?".to_string(), |c| c.to_string());
-        let loc = match node.source_line {
-            Some(line) => format!("{}:{}", loaded.display_path(&node.source_file), line),
-            None => loaded.display_path(&node.source_file),
-        };
-        let mut line = format!(
-            "NODE {} [id={} src={} community={}]\n",
-            node.label, node.id, loc, comm
-        );
-        // Chunked bodies cite their covered line range so agents can quote
-        // exact spans; harness parsers only read the src= token, so the
-        // range rides on its own line.
-        if node.file_type == "chunk" {
-            if let (Some(start), Some(doc)) = (node.source_line, &node.docstring) {
-                let end = start + doc.lines().count() as i64 - 1;
-                line.push_str(&format!("  span: L{start}-L{end}\n"));
-            }
-        }
-        if let Some(sig) = &node.signature {
-            let short: String = sig.chars().take(140).collect();
-            line.push_str(&format!("  sig: {}\n", short));
-        } else if let Some(ref doc) = node.docstring {
-            if !doc.is_empty() {
-                let summary: String = doc.chars().take(200).collect();
-                line.push_str(&format!("  summary: {}\n", summary));
-            }
-        }
-        records.push(line);
-    }
-    let mut edge_records = Vec::new();
-    let mut edge_list = edges_seen.to_vec();
-    edge_list.sort_by(|&a, &b| {
-        let key = |edge| {
-            let (source, target) = loaded.graph.edge_endpoints(edge).unwrap();
-            let score = relevance
-                .get(&source)
-                .copied()
-                .unwrap_or(0.0)
-                .max(relevance.get(&target).copied().unwrap_or(0.0));
-            (
-                score,
-                &loaded.graph[source].id,
-                &loaded.graph[target].id,
-                &loaded.graph[edge].relation,
-            )
-        };
-        let ka = key(a);
-        let kb = key(b);
-        kb.0.total_cmp(&ka.0)
-            .then_with(|| ka.1.cmp(kb.1))
-            .then_with(|| ka.2.cmp(kb.2))
-            .then_with(|| ka.3.cmp(kb.3))
-            .then_with(|| a.index().cmp(&b.index()))
-    });
-    for &edge_id in &edge_list {
-        if let Some((src_idx, tgt_idx)) = loaded.graph.edge_endpoints(edge_id) {
-            let src = &loaded.graph[src_idx];
-            let tgt = &loaded.graph[tgt_idx];
-            let edge = &loaded.graph[edge_id];
-            let loc = match edge.source_line {
-                Some(l) => format!(" @{}:{}", loaded.display_path(&edge.source_file), l),
-                None => String::new(),
-            };
-            let score = edge
-                .confidence_score
-                .map(|s| format!(":{s:.2}"))
-                .unwrap_or_default();
-            let line = format!(
-                "EDGE {} --{} [{}{}]--> {}{}\n",
-                src.label, edge.relation, edge.confidence, score, tgt.label, loc
-            );
-            edge_records.push(line);
-        }
-    }
-    // Fixed interleaving keeps relationships on the first page while the
-    // cursor still addresses every complete node and edge exactly once.
-    let mut interleaved = Vec::with_capacity(records.len() + edge_records.len());
-    let mut nodes = records.into_iter();
-    let mut edges = edge_records.into_iter();
-    loop {
-        let before = interleaved.len();
-        interleaved.extend(nodes.by_ref().take(2));
-        interleaved.extend(edges.by_ref().take(1));
-        if interleaved.len() == before {
-            break;
-        }
-    }
-    render_page(header, &interleaved, skip_records, token_budget)
-}
-
-/// Public output contract: o200k_base, ordinary text (special-looking strings
-/// are encoded literally). All headers, timestamps and pagination count.
-pub fn count_response_tokens(text: &str) -> usize {
-    tiktoken_rs::o200k_base_singleton()
-        .encode_ordinary(text)
-        .len()
-}
-
-/// Count manifest files modified after the graph was published (with a
-/// small skew so same-second writes do not cry stale). Stat-only: this runs
-/// on every query. `None` when the manifest is unreadable — disclosure is
-/// best-effort and must never fail a query.
-fn files_changed_since(db: &Connection, built_at_secs: u64) -> Option<usize> {
-    let cutoff = std::time::UNIX_EPOCH + std::time::Duration::from_secs(built_at_secs + 2);
-    let mut stmt = db.prepare("SELECT file_path FROM file_manifest").ok()?;
-    let paths: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .ok()?
-        .flatten()
-        .collect();
-    let mut changed = 0usize;
-    for path in &paths {
-        if let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) {
-            if modified > cutoff {
-                changed += 1;
-            }
-        }
-    }
-    Some(changed)
-}
-
-fn render_page(
-    header: &str,
-    records: &[String],
-    cursor: usize,
-    budget: i64,
-) -> astria_core::Result<(String, Option<usize>)> {
-    let limit = usize::try_from(budget)
-        .ok()
-        .filter(|n| *n > 0)
-        .ok_or_else(|| {
-            astria_core::AstriaError::Graph(
-                "budget must be a positive o200k_base token count".into(),
-            )
-        })?;
-    if cursor > records.len() {
-        return Err(astria_core::AstriaError::Graph(format!(
-            "cursor {cursor} exceeds {} records",
-            records.len()
-        )));
-    }
-    let mut body = String::new();
-    let mut best = None;
-    for end in cursor..=records.len() {
-        let next = (end < records.len()).then_some(end);
-        let footer = next
-            .map(|n| format!("\n(continuation: re-run with cursor {n} for the next records)\n"))
-            .unwrap_or_default();
-        let text = format!("{header}{body}{footer}");
-        if count_response_tokens(&text) > limit {
-            break;
-        }
-        if end > cursor || end == records.len() {
-            best = Some((text, next));
-        }
-        if let Some(record) = records.get(end) {
-            body.push_str(record);
-        }
-    }
-    // A final page has no continuation footer. Even if the footer alone
-    // does not fit, the remaining complete response may still fit.
-    if best.is_none() {
-        let final_page = format!("{header}{}", records[cursor..].concat());
-        if count_response_tokens(&final_page) <= limit {
-            return Ok((final_page, None));
-        }
-    }
-    best.ok_or_else(|| {
-        astria_core::AstriaError::Graph(
-            "budget too small for the response metadata and next complete record; increase budget"
-                .into(),
-        )
-    })
-}
-
-fn shortest_path_bfs(
-    loaded: &LoadedGraph,
-    start: NodeIndex,
-    end: NodeIndex,
-    directed: bool,
-    min_strength: f64,
-    semantic_floor: f64,
-) -> Option<Vec<EdgeIndex>> {
-    if start == end {
-        return Some(Vec::new());
-    }
-    let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut parent: HashMap<NodeIndex, (NodeIndex, EdgeIndex)> = HashMap::new();
-    let mut queue = std::collections::VecDeque::new();
-    queue.push_back(start);
-    visited.insert(start);
-
-    while let Some(current) = queue.pop_front() {
-        for (neighbor, edge_id) in iter_neighbors_filtered(
-            &loaded.graph,
-            current,
-            directed,
-            min_strength,
-            semantic_floor,
-        ) {
-            if visited.contains(&neighbor) {
-                continue;
-            }
-            parent.insert(neighbor, (current, edge_id));
-            if neighbor == end {
-                let mut path = Vec::new();
-                let mut cur = end;
-                while let Some(&(p, edge_id)) = parent.get(&cur) {
-                    path.push(edge_id);
-                    cur = p;
-                }
-                path.reverse();
-                return Some(path);
-            }
-            visited.insert(neighbor);
-            queue.push_back(neighbor);
-        }
-    }
-    None
-}
 
 /// Rendered text, node count, edge count, and pagination cursor.
 pub type QueryOutput = (String, usize, usize, Option<usize>);
@@ -1589,7 +255,7 @@ pub fn query_graph_with_semantic(
 #[allow(clippy::too_many_arguments)]
 fn query_graph_loaded(
     db: &Connection,
-    loaded: LoadedGraph,
+    loaded: std::sync::Arc<LoadedGraph>,
     question: &str,
     mode: &str,
     depth: usize,
@@ -1877,16 +543,32 @@ fn query_graph_loaded(
     );
     if let Some(timestamp) = graph_built_at {
         header.push_str(&format!("# graph built at {timestamp}\n"));
-        // Staleness disclosure: hooked editors and the git hook keep the
-        // graph fresh, but edits through other paths (print-mode sessions,
-        // editors without hooks, plain typing) do not — and an agent that
-        // does not notice the timestamp answers from the past. Stat-only
-        // (no re-hashing), so this costs milliseconds even on large repos.
+        // Source-freshness disclosure (distinct from the graph AGE above):
+        // the manifest is the graph's source snapshot, and editors without
+        // hooks let the working tree drift from it — an agent that does not
+        // notice answers from the past. Stat-only (no re-hashing), so this
+        // costs milliseconds even on large repos; deletions and
+        // timestamp-preserving edits are included, added files are the
+        // merge gate's job.
         if let Ok(built) = timestamp.parse::<u64>() {
-            if let Some(changed) = files_changed_since(db, built) {
-                if changed > 0 {
+            if let Some(drift) = source_drift_since(db, built, loaded.root.as_deref()) {
+                if drift.total() > 0 {
+                    let mut parts = Vec::new();
+                    if drift.modified > 0 {
+                        parts.push(format!("{} modified", drift.modified));
+                    }
+                    if drift.deleted > 0 {
+                        parts.push(format!("{} deleted", drift.deleted));
+                    }
+                    if drift.size_changed > 0 {
+                        parts.push(format!(
+                            "{} size-changed (timestamp preserved)",
+                            drift.size_changed
+                        ));
+                    }
                     header.push_str(&format!(
-                        "# {changed} file(s) changed since this build — run `astria update` before trusting answers\n"
+                        "# source drift since this build: {} — run `astria update` before trusting answers\n",
+                        parts.join(", ")
                     ));
                 }
             }
@@ -3404,7 +2086,7 @@ at the lake house');",
         "test".to_string()
     }
 
-    fn loaded(db: &Connection, key: &str) -> LoadedGraph {
+    fn loaded(db: &Connection, key: &str) -> std::sync::Arc<LoadedGraph> {
         load_graph_snapshot(db, key).unwrap()
     }
 
@@ -3422,6 +2104,34 @@ at the lake house');",
             tokenize("Parse-Extraction.Text"),
             vec!["parse", "extraction", "text"]
         );
+    }
+
+    #[test]
+    fn tokenize_segments_cjk_queries_with_jieba() {
+        // Without segmentation the whole run is one token that matches
+        // nothing; jieba splits it into the words the graph's labels use.
+        let tokens = tokenize("用户登录处理");
+        assert!(tokens.contains(&"用户".to_string()), "got {tokens:?}");
+        assert!(tokens.contains(&"登录".to_string()), "got {tokens:?}");
+        assert!(
+            !tokens.contains(&"用户登录处理".to_string()),
+            "the unsegmented run must not survive, got {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn tokenize_mixed_cjk_and_latin() {
+        let tokens = tokenize("parse用户输入");
+        assert_eq!(tokens.first().map(|s| s.as_str()), Some("parse"));
+        assert!(tokens.contains(&"用户".to_string()), "got {tokens:?}");
+        assert!(tokens.contains(&"输入".to_string()), "got {tokens:?}");
+    }
+
+    #[test]
+    fn tokenize_cjk_is_not_applied_to_latin_words() {
+        // English text must tokenize exactly as before — the jieba pass only
+        // touches tokens that actually contain CJK characters.
+        assert_eq!(tokenize("authenticate user"), vec!["authenticate", "user"]);
     }
 
     #[test]
@@ -3767,7 +2477,7 @@ at the lake house');",
         )
         .unwrap();
         assert!(
-            text.contains("changed since this build"),
+            text.contains("source drift since this build") && text.contains("1 modified"),
             "stale graph must disclose: {text}"
         );
 
@@ -4276,6 +2986,77 @@ at the lake house');",
         assert!(small_shown < shown1, "tiny budget shows fewer files");
         assert!(small.contains("truncated"), "truncation is declared");
         assert!(small.contains("Hub"), "the top-ranked file always fits");
+    }
+
+    #[test]
+    fn source_drift_counts_modified_deleted_and_size_changed() {
+        let db = open_db_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().replace('\\', "/");
+        let modified_f = dir.path().join("modified.py");
+        let deleted_f = dir.path().join("deleted.py");
+        let forged_f = dir.path().join("forged.py");
+        std::fs::write(
+            &modified_f,
+            "x = 1
+",
+        )
+        .unwrap();
+        std::fs::write(
+            &deleted_f, "x = 2
+",
+        )
+        .unwrap();
+        std::fs::write(&forged_f, "short").unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Manifest rows carry RELATIVE paths, as the pipeline writes them;
+        // the probe must resolve them against the supplied root.
+        for (name, size) in [("modified.py", 6), ("deleted.py", 6), ("forged.py", 5)] {
+            db.execute(
+                "INSERT INTO file_manifest (file_path, content_hash, file_type, language, last_seen_at, size_bytes)
+                 VALUES (?1, 'h', 'code', NULL, ?2, ?3)",
+                rusqlite::params![name, now.to_string(), size],
+            )
+            .unwrap();
+        }
+        // built_at far in the past: the two freshly written files that still
+        // exist count as modified; deleted.py exists for the stat, so
+        // remove it first.
+        std::fs::remove_file(&deleted_f).unwrap();
+        let drift = source_drift_since(&db, now - 3600, Some(&root)).unwrap();
+        assert_eq!(
+            drift.modified, 2,
+            "fresh mtimes after an old build (modified.py and forged.py)"
+        );
+        assert_eq!(drift.deleted, 1, "missing file is a deletion");
+        assert_eq!(drift.size_changed, 0);
+        assert_eq!(drift.total(), 3);
+        // Without the root, relative rows cannot be resolved: nothing is
+        // provably deleted (the old behavior from a foreign cwd — no
+        // disclosure, never a false one).
+        let unresolved = source_drift_since(&db, now - 3600, None).unwrap();
+        assert_eq!(
+            unresolved.deleted, 3,
+            "relative rows do not resolve without a root"
+        );
+        // Same-second build (cutoff in the future): mtimes look fresh, so
+        // only a size mismatch can reveal the edit — the manifest claims a
+        // size the file does not have.
+        db.execute(
+            "UPDATE file_manifest SET size_bytes = 999 WHERE file_path = 'forged.py'",
+            [],
+        )
+        .unwrap();
+        let drift = source_drift_since(&db, now + 60, Some(&root)).unwrap();
+        assert_eq!(drift.modified, 0);
+        assert_eq!(
+            drift.size_changed, 1,
+            "size mismatch exposes a preserved-timestamp edit"
+        );
+        assert_eq!(drift.deleted, 1);
     }
 }
 

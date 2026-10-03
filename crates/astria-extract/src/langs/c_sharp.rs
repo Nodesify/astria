@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::CSharp
             .registration()
             .extensions,
+        #[cfg(feature = "lang-csharp")]
         language_fn: || tree_sitter_c_sharp::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-csharp"))]
+        language_fn: || crate::langs::config::missing_language("csharp"),
+        compiled_in: cfg!(feature = "lang-csharp"),
         class_types: &[
             "class_declaration",
             "struct_declaration",

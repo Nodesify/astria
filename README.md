@@ -42,11 +42,15 @@ npm install -g @nodesify/astria
 
 Requires no Rust toolchain — ships prebuilt native binaries via napi-rs.
 
+> Known platform gaps: the Intel Mac (`darwin-x64`), musl-Linux, and `windows-arm64` binaries are built without the local embedding runtime, because ONNX Runtime ships no prebuilt binaries there. `run --embed` reports "semantic embeddings are not supported in this build" on those platforms; every other platform embeds normally. Check any install with `astria stats --json` (`embeddingsSupported`).
+
 Just want the agent skill, no CLI? `npx skills add Nodesify/astria` installs the graph-first skill from [skills.sh](https://skills.sh) - it answers from an existing `.astria/` graph as plain files and, when graph commands are needed, offers the install above (never without asking).
 
 On Claude Code? One plugin bundles the MCP server, the skill, `/astria` + `/astria-risk` commands, and the `astria-architect` subagent: `/plugin marketplace add Nodesify/astria` then `/plugin install astria@nodesify`.
 
 macOS/Linux without npm? `brew install nodesify/tap/astria` ([tap](https://github.com/Nodesify/homebrew-tap)).
+
+In a container? `docker build -t astria .` from the repo root produces the same CLI — analyze a mounted repo (`docker run --rm -v "$PWD":/workspace astria run /workspace`) or serve the MCP over HTTP on port 8620.
 
 ```bash
 astria run .                                  # build the graph (creates .astria/)
@@ -57,14 +61,13 @@ astria affected <node>                        # what breaks if you change this
 
 Exclude files with a `.astriaignore` file in the project root (gitignore syntax). Everything astria writes lives in plain files under `.astria/` — [the full layout](https://nodesify.github.io/astria/docs/reference/directory-layout).
 
-> **Migrating from `@nodesify/graphify`?** 1.0 is a rebrand: the binary is `astria`, the npm package is `@nodesify/astria`, and graphs live in `.astria/` instead of `.graphify/`. Run once after installing:
+> **Migrating from `@nodesify/graphify`?** 1.0 is a rebrand: the binary is `astria`, the npm package is `@nodesify/astria`, and graphs live in `.astria/` instead of `.graphify/`. Rename `.graphify/` → `.astria/` and `.graphifyignore` → `.astriaignore` yourself, then run:
 >
 > ```bash
-> astria migrate          # renames .graphify/ -> .astria/ and the global store
 > astria install          # refreshes AI-tool skills/hooks (also cleans the old graphify entries)
 > ```
 >
-> Legacy configuration variables remain supported where documented. LLM activation requires `--backend` or `ASTRIA_LLM_BACKEND`; `GRAPHIFY_LLM_BACKEND` does not opt in.
+> All configuration is `ASTRIA_*`; there is no legacy spelling support. LLM activation requires `--backend` or `ASTRIA_LLM_BACKEND`.
 
 ## Documentation
 
@@ -81,7 +84,11 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 
 - **Query it three ways** — CLI (`query`, `explain`, `path`, `affected`, `map`), an MCP server for AI agents, or an exported [markdown wiki](https://nodesify.github.io/astria/docs/guides/wiki-and-exports) any agent (or human) can crawl
 - **Local embeddings, no API key** — `run --embed` adds `similar_to` edges and semantic query recall ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
-- **Optional LLM enrichment, measured and cached** — Claude, any OpenAI-compatible endpoint, or Gemini, with an optional Jev judge layer on top of any of them (`--judge jev`): the judge re-judges relations and node types from the schema allowlists, gives every semantic edge a calibrated confidence score, and can batch-gate trivial files and re-rank suggested questions before they cost engine calls. Vision included for images; per-run with `--backend`/`--model`/`--judge` or env vars. Thematic community naming (`run --label-communities`, one call per *changed* community) and a `--deep` concept-linking tier (one call per changed file) are content-hash cached, so unchanged inputs and effective configuration can reuse cached output. Backend selection is explicit; credentials alone never activate enrichment. Every response's usage block is counted — the run summary prints API calls and input/output tokens, and `ASTRIA_LLM_BUDGET` caps the spend ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
+- **Optional LLM enrichment, measured and cached** — Claude, any OpenAI-compatible endpoint, Azure OpenAI, AWS Bedrock (real SigV4 signing), Kimi/Moonshot, or Gemini, with an optional Jev judge layer on top of any of them (`--judge jev`): the judge re-judges relations and node types from the schema allowlists, gives every semantic edge a calibrated confidence score, and can batch-gate trivial files and re-rank suggested questions before they cost engine calls. Vision included for images; per-run with `--backend`/`--model`/`--judge` or env vars. Thematic community naming (`run --label-communities`, one call per *changed* community) and a `--deep` concept-linking tier (one call per changed file) are content-hash cached, so unchanged inputs and effective configuration can reuse cached output. Backend selection is explicit; credentials alone never activate enrichment. Every response's usage block is counted — the run summary prints API calls and input/output tokens, and `ASTRIA_LLM_BUDGET` caps the spend ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
+- **Teams & CI built in** — `astria mcp --http` serves many project graphs over MCP Streamable HTTP with bearer auth; `astria merge-driver install` union-merges `.astria/graph.json` on parallel-branch commits instead of conflicting; `astria merge-gate` is a CI check that fails on stale/unhealthy graphs or risky diffs; `astria digest` renders a weekly engineering brief; `astria prs` maps open PRs onto the graph with CI state, review status, worktree mapping, and a ranked review queue. A Dockerfile ships in the repo root ([Team serving & CI](https://nodesify.github.io/astria/docs/reference/cli#team-serving))
+- **Every run writes cost.json** — per-run and lifetime LLM token spend surfaced as a machine-readable artifact, with a dollar estimate when you set per-million-token rates
+- **Queries and code speak CJK** — Chinese/Japanese/Korean queries (and labels) segment via jieba instead of arriving as unmatchable character runs; `NOTE:`/`WHY:`/`HACK:` comments become `rationale_for` nodes linked to the code they explain
+- **Clustering controls** — `cluster-only --resolution <0-1>` dials community granularity, `--exclude-hubs` stops hub nodes from gluing every community together
 - **Cross-repo global graph** — merge many repos into one queryable store at `~/.astria/global.db` ([global graph guide](https://nodesify.github.io/astria/docs/guides/global-graph))
 - **The graph compounds with use** — repeated queries become `learned` edges; curated Q/A memory via `save-result`/`reflect` ([memory and learning](https://nodesify.github.io/astria/docs/guides/memory-and-learning))
 - **Interactive HTML viewer, SVG, and live Neo4j** — physics-free large-graph HTML mode, deterministic community-arc SVG for Notion/GitHub embedding, an idempotent Cypher script, or a direct Bolt push into a running Neo4j — hand-rolled protocol client, zero driver dependencies ([wiki and exports](https://nodesify.github.io/astria/docs/guides/wiki-and-exports))
@@ -96,7 +103,7 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 
 ## Architecture
 
-Rust workspace with 16 crates + Node.js CLI:
+Rust workspace with 20 crates + Node.js CLI:
 
 ```
 crates/
@@ -104,16 +111,19 @@ crates/
   astria-core/      Types, error, SQLite schema + migrations, path validation, sensitive-path denylist
   astria-paths/     Path normalization, .astria directory management
   astria-detect/    File discovery, classification, incremental change detection
-  astria-extract/   Tree-sitter AST extraction (25 languages)
+  astria-extract/   AST + document extraction (42 languages incl. SQL, Vue/Svelte/Astro, VB.NET, Pascal)
   astria-embed/     Local embeddings (fastembed/ONNX) — similar_to edges, semantic query recall
   astria-build/     Merge extractions into SQLite graph, entity dedup (MinHash + Jaro-Winkler)
   astria-cluster/   Deterministic label propagation community detection
   astria-analyze/   God nodes, surprising connections, blast radius
   astria-query/     Query engine: BFS/DFS (optionally directed), shortest path, explain
-  astria-mcp/       MCP stdio server exposing the graph to AI agents
+  astria-mcp/       MCP server exposing the graph to AI agents (stdio + HTTP, multi-project)
   astria-report/    Markdown report generation
-  astria-semantic/  LLM semantic extraction (Claude / OpenAI-compatible / Gemini), with vision
+  astria-semantic/  LLM semantic extraction (Claude / OpenAI-compatible / Azure / Bedrock / Kimi / Gemini), with vision
   astria-ingest/    URL ingestion (arXiv/tweet/webpage/image), SCIP + Postgres intake, SSRF protection
+  astria-audio/     Audio/video transcription via whisper.cpp (external whisper-cli + ffmpeg)
+  astria-office/    Office document extraction (.docx/.xlsx -> markdown)
+  astria-gws/       Google Workspace shortcut ingestion (.gdoc/.gsheet/.gslides via Drive API)
   astria-pdf/       PDF text extraction
   astria-napi/      napi-rs bindings, pipeline orchestration, merge/diff, JSON/HTML/GraphML/tree export
 packages/
@@ -156,6 +166,8 @@ Rust crates have unit tests using in-memory SQLite (`open_db_in_memory()`) and `
 Python, JavaScript, TypeScript, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Bash, Dart, Zig, CSS, Terraform/HCL, PowerShell, Verilog/SystemVerilog, Metal — via tree-sitter grammars.
 
 Each language has its own config module in `crates/astria-extract/src/langs/`. Adding a new language means adding a new file there and registering it in `langs/mod.rs` — [language support docs](https://nodesify.github.io/astria/docs/reference/language-support).
+
+Languages are also compile-time optional: each has a `lang-*` cargo feature (e.g. `lang-python`), and `lang-all` is on by default. Building with `--no-default-features --features "lang-python,lang-javascript"` slims the binary; the engine then skips other languages' files with a one-time warning instead of failing.
 
 ## License
 

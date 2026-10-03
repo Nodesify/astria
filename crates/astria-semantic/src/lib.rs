@@ -10,8 +10,18 @@ use std::time::Duration;
 
 use astria_core::AstriaError;
 use astria_core::Result;
-use base64::Engine as _;
 
+// NoopBackend
+// ---------------------------------------------------------------------------
+
+/// A no-op backend that always returns empty extractions.
+pub struct NoopBackend;
+
+impl SemanticBackend for NoopBackend {
+    fn extract_semantic(&self, _content: &str, _file_type: &str) -> Result<SemanticExtraction> {
+        Ok(SemanticExtraction::empty())
+    }
+}
 pub mod enrichment;
 pub mod jev;
 
@@ -27,8 +37,20 @@ const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 /// tokens) instead of one oversized request that would blow the context
 /// window or silently truncate.
 const MAX_CHUNK_CHARS: usize = 24_000;
-/// API-call budget for one file: at most this many chunks are extracted.
+/// Default API-call budget for one file: at most this many chunks are
+/// extracted. Overridable via `ASTRIA_LLM_MAX_CHUNKS` (1..=64) for
+/// oversized generated files; content beyond the cap is a hard error.
 const MAX_CHUNKS: usize = 8;
+/// Ceiling for a user-configured chunk cap.
+const MAX_CHUNKS_CEILING: usize = 64;
+
+/// Effective per-file chunk cap (`ASTRIA_LLM_MAX_CHUNKS`, clamped).
+pub fn max_chunks() -> usize {
+    astria_core::env_var("LLM_MAX_CHUNKS")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|v| v.clamp(1, MAX_CHUNKS_CEILING))
+        .unwrap_or(MAX_CHUNKS)
+}
 /// Ceiling for a server-supplied Retry-After (seconds) before falling back
 /// to the default backoff schedule.
 const MAX_RETRY_AFTER_SECS: u64 = 30;
@@ -37,955 +59,30 @@ const MAX_RETRY_AFTER_SECS: u64 = 30;
 // Types
 // ---------------------------------------------------------------------------
 
-/// A semantically extracted node (topic, concept, entity).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SemanticNode {
-    pub id: String,
-    pub label: String,
-    pub summary: String,
-    pub node_type: String,
-}
-
-/// A semantically extracted edge (relationship between two nodes).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SemanticEdge {
-    pub source: String,
-    pub target: String,
-    pub relation: String,
-    /// Calibrated existence confidence (0..=1) from the Jev verification
-    /// pass. Absent for engine-only extractions; persisted through the
-    /// merge path into `edges.confidence_score`.
-    #[serde(default)]
-    pub confidence_score: Option<f64>,
-}
-
-/// The result of semantic extraction on a single piece of content.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SemanticExtraction {
-    pub nodes: Vec<SemanticNode>,
-    pub edges: Vec<SemanticEdge>,
-}
-
-impl SemanticExtraction {
-    pub fn empty() -> Self {
-        Self {
-            nodes: Vec::new(),
-            edges: Vec::new(),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Backend trait
-// ---------------------------------------------------------------------------
-
-/// Trait for semantic extraction backends.
-pub trait SemanticBackend {
-    /// Non-secret effective configuration used to invalidate cached output.
-    fn cache_identity(&self) -> String {
-        std::any::type_name::<Self>().to_string()
-    }
-
-    fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction>;
-
-    /// Vision extraction: describe concepts from image bytes (PNG/JPEG/
-    /// WEBP/GIF). Backends without multimodal support return an error.
-    fn extract_semantic_from_image(
-        &self,
-        _image_bytes: &[u8],
-        _media_type: &str,
-    ) -> Result<SemanticExtraction> {
-        Err(AstriaError::Graph(
-            "this backend does not support image extraction".into(),
-        ))
-    }
-
-    /// Single-shot completion for the auxiliary passes (community naming,
-    /// deep concept linking). One request, no chunking; the model's raw
-    /// text comes back for the caller to parse. Every response is counted
-    /// in the usage tracker.
-    fn complete(&self, _system: &str, _user: &str) -> Result<String> {
-        Err(AstriaError::Graph(
-            "this backend does not support auxiliary completions".into(),
-        ))
-    }
-
-    /// Optional batch gate: return the subset of `files` worth enriching.
-    /// The default keeps everything; decision backends (Jev) may drop files
-    /// they judge trivial so no engine call is ever spent on them.
-    fn gate_files(&self, files: &[PathBuf]) -> Vec<PathBuf> {
-        files.to_vec()
-    }
-
-    /// Optional suggested-question ranking: a permutation of
-    /// `0..questions.len()` in preferred (most useful first) order. The
-    /// default keeps the generated order.
-    fn rank_questions(&self, questions: &[String]) -> Vec<usize> {
-        (0..questions.len()).collect()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Shared prompt + parsing
-// ---------------------------------------------------------------------------
-
-fn system_prompt(file_type: &str) -> String {
-    format!(
-        "You are a knowledge graph extraction engine. Given the following {file_type} content, \
-         extract semantic topics, concepts, and entities as nodes, and the relationships \
-         between them as edges. Respond ONLY with valid JSON in this exact format:\n\
-         {{\"nodes\": [{{\"id\": \"...\", \"label\": \"...\", \"summary\": \"...\", \"node_type\": \"...\"}}], \
-         \"edges\": [{{\"source\": \"node_id\", \"target\": \"node_id\", \"relation\": \"...\"}}]}}\n\
-         Use concise lowercase IDs (e.g. \"error_handling\"). \
-         node_type should be one of: concept, entity, pattern, module, function.\n\
-         relation should be one of: depends_on, implements, relates_to, contains, uses.\n\
-         Return an empty JSON object if the content is too short or uninformative."
-    )
-}
-
-fn vision_prompt() -> String {
-    "You are a knowledge graph extraction engine. The user message contains an image \
-     (a screenshot, diagram, whiteboard photo, chart, or slide). Extract the visible \
-     concepts, entities, and their relationships as a knowledge graph. Respond ONLY \
-     with valid JSON in the same format used for text extraction: \
-     {\"nodes\": [...], \"edges\": [...]}. If the image has no meaningful content, \
-     return an empty JSON object."
-        .to_string()
-}
-
-/// Parse the model's text reply into an extraction, tolerating surrounding
-/// prose by falling back to the outermost {...} span. The result is always
-/// sanitized (see `sanitize_extraction`).
-fn parse_extraction_text(text: &str) -> SemanticExtraction {
-    if text.trim().is_empty() {
-        return SemanticExtraction::empty();
-    }
-    if let Ok(parsed) = serde_json::from_str::<SemanticExtraction>(text.trim()) {
-        return sanitize_extraction(parsed);
-    }
-    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) {
-        if let Ok(parsed) = serde_json::from_str::<SemanticExtraction>(&text[start..=end]) {
-            return sanitize_extraction(parsed);
-        }
-    }
-    SemanticExtraction::empty()
-}
-
-/// node_type values the schema allows; anything else is clamped.
-pub(crate) const ALLOWED_NODE_TYPES: &[&str] =
-    &["concept", "entity", "pattern", "module", "function"];
-/// relation values the schema allows; anything else is clamped.
-pub(crate) const ALLOWED_RELATIONS: &[&str] =
-    &["depends_on", "implements", "relates_to", "contains", "uses"];
-
-/// Enforce output discipline on model responses: drop empty/duplicate
-/// nodes, clamp node_type/relation to the schema enums, and drop edges
-/// whose endpoints were not returned as nodes (they would become dangling
-/// stubs in the graph).
-fn sanitize_extraction(mut ext: SemanticExtraction) -> SemanticExtraction {
-    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    ext.nodes.retain(|node| {
-        !node.id.trim().is_empty()
-            && !node.label.trim().is_empty()
-            && seen_ids.insert(node.id.trim().to_string())
-    });
-    for node in &mut ext.nodes {
-        node.id = node.id.trim().to_string();
-        if !ALLOWED_NODE_TYPES.contains(&node.node_type.as_str()) {
-            node.node_type = "concept".to_string();
-        }
-    }
-    let valid_ids: std::collections::HashSet<&str> =
-        ext.nodes.iter().map(|n| n.id.as_str()).collect();
-
-    let mut seen_edges: std::collections::HashSet<(String, String, String)> =
-        std::collections::HashSet::new();
-    ext.edges.retain(|edge| {
-        edge.source != edge.target
-            && valid_ids.contains(edge.source.as_str())
-            && valid_ids.contains(edge.target.as_str())
-            && seen_edges.insert((
-                edge.source.clone(),
-                edge.target.clone(),
-                edge.relation.clone(),
-            ))
-    });
-    for edge in &mut ext.edges {
-        if !ALLOWED_RELATIONS.contains(&edge.relation.as_str()) {
-            edge.relation = "relates_to".to_string();
-        }
-    }
-    ext
-}
-
-/// Split `content` into chunks of at most MAX_CHUNK_CHARS characters,
-/// preferring line boundaries so extractions see coherent code blocks.
-fn split_chunks(content: &str) -> Vec<String> {
-    if content.chars().count() <= MAX_CHUNK_CHARS {
-        return vec![content.to_string()];
-    }
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut current_len = 0usize;
-    for line in content.split_inclusive('\n') {
-        let line_len = line.chars().count();
-        if current_len > 0 && current_len + line_len > MAX_CHUNK_CHARS {
-            chunks.push(std::mem::take(&mut current));
-            current_len = 0;
-        }
-        current_len += line_len;
-        current.push_str(line);
-    }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
-}
-
-/// Merge per-chunk extractions: nodes deduplicated by id (first wins),
-/// edges concatenated. Sanitization happens afterwards against the merged
-/// node set so cross-chunk references survive.
-fn merge_extractions(parts: Vec<SemanticExtraction>) -> SemanticExtraction {
-    let mut merged = SemanticExtraction::empty();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for part in parts {
-        for node in part.nodes {
-            if seen.insert(node.id.clone()) {
-                merged.nodes.push(node);
-            }
-        }
-        merged.edges.extend(part.edges);
-    }
-    merged
-}
-
-/// Extract from possibly-long content: chunk it, extract each chunk, merge,
-/// then sanitize the combined result. Bounded to MAX_CHUNKS API calls.
-fn extract_content_chunked<F>(content: &str, file_type: &str, raw: F) -> Result<SemanticExtraction>
-where
-    F: Fn(&str, &str) -> Result<SemanticExtraction>,
-{
-    let chunks = split_chunks(content);
-    let mut parts = Vec::new();
-    for chunk in chunks.iter().take(MAX_CHUNKS) {
-        parts.push(raw(chunk, file_type)?);
-    }
-    Ok(sanitize_extraction(merge_extractions(parts)))
-}
-
-/// POST with exponential backoff on 429/5xx (honoring Retry-After when the
-/// server sends one), shared by all backends.
-pub(crate) fn post_json(
-    agent: &ureq::Agent,
-    url: &str,
-    headers: &[(&str, &str)],
-    body: &str,
-    backend_name: &str,
-) -> Result<String> {
-    let max_retries = 3;
-    let mut last_err = None;
-    for attempt in 0..=max_retries {
-        let mut request = agent.post(url);
-        for &(k, v) in headers {
-            request = request.header(k, v);
-        }
-        match request.send(body) {
-            Ok(resp) => {
-                let status = resp.status();
-                let retry_after = resp
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.trim().parse::<u64>().ok())
-                    .map(|s| s.min(MAX_RETRY_AFTER_SECS));
-                let response_body = resp.into_body().read_to_string().unwrap_or_default();
-                if status.is_client_error() && status.as_u16() != 429 {
-                    return Err(AstriaError::Graph(format!(
-                        "{backend_name} API returned {status}: {response_body}"
-                    )));
-                }
-                if status.is_server_error() || status.as_u16() == 429 {
-                    last_err = Some(format!("{backend_name} API returned {status}"));
-                    if attempt < max_retries {
-                        let delay = retry_after.unwrap_or_else(|| 500 * 2u64.pow(attempt as u32));
-                        std::thread::sleep(Duration::from_millis(delay * 1000));
-                        continue;
-                    }
-                    return Err(AstriaError::Graph(last_err.unwrap()));
-                }
-                return Ok(response_body);
-            }
-            Err(e) => {
-                last_err = Some(format!("{backend_name} API request failed: {e}"));
-                if attempt < max_retries {
-                    std::thread::sleep(Duration::from_millis(500 * 2u64.pow(attempt as u32)));
-                    continue;
-                }
-            }
-        }
-    }
-    Err(AstriaError::Graph(last_err.unwrap()))
-}
-
-pub(crate) fn build_agent() -> ureq::Agent {
-    ureq::config::Config::builder()
-        .timeout_global(Some(Duration::from_secs(60)))
-        .build()
-        .new_agent()
-}
-
-/// True when a base URL targets the local machine, where plain http is the
-/// normal, safe configuration (Ollama, LM Studio, vLLM) and there is no
-/// network to eavesdrop on.
-fn is_local_base_url(base_url: &str) -> bool {
-    let after_scheme = base_url
-        .strip_prefix("http://")
-        .or_else(|| base_url.strip_prefix("https://"))
-        .unwrap_or(base_url);
-    let authority = after_scheme.split(['/', '?']).next().unwrap_or("");
-    let authority = authority.rsplit('@').next().unwrap_or("");
-    let host = if let Some(rest) = authority.strip_prefix('[') {
-        // Bracketed IPv6 literal; strip the port after the closing bracket.
-        rest.split(']').next().unwrap_or("")
-    } else {
-        authority.split(':').next().unwrap_or("")
-    };
-    let host = host.to_lowercase();
-    matches!(host.as_str(), "localhost" | "0.0.0.0" | "::1") || host.starts_with("127.")
-}
-
-// ---------------------------------------------------------------------------
-// NoopBackend
-// ---------------------------------------------------------------------------
-
-/// A no-op backend that always returns empty extractions.
-pub struct NoopBackend;
-
-impl SemanticBackend for NoopBackend {
-    fn extract_semantic(&self, _content: &str, _file_type: &str) -> Result<SemanticExtraction> {
-        Ok(SemanticExtraction::empty())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ClaudeBackend (Anthropic Messages API)
-// ---------------------------------------------------------------------------
-
-pub struct ClaudeBackend {
-    agent: ureq::Agent,
-    api_key: String,
-    model: String,
-}
-
-impl ClaudeBackend {
-    /// - `ASTRIA_LLM_API_KEY` (or legacy `GRAPHIFY_LLM_API_KEY`) — required, the Anthropic API key.
-    /// - `ASTRIA_LLM_MODEL` — optional, defaults to `claude-sonnet-4-20250514`.
-    pub fn from_env() -> Result<Self> {
-        let api_key = astria_core::env_var("LLM_API_KEY").ok_or_else(|| {
-            AstriaError::Graph("ASTRIA_LLM_API_KEY environment variable is not set".into())
-        })?;
-        let model =
-            astria_core::env_var("LLM_MODEL").unwrap_or_else(|| "claude-sonnet-4-20250514".into());
-        Ok(Self::new(api_key, model))
-    }
-
-    pub fn new(api_key: String, model: String) -> Self {
-        Self {
-            agent: build_agent(),
-            api_key,
-            model,
-        }
-    }
-
-    pub fn build_request_body(&self, content: &str, file_type: &str) -> serde_json::Value {
-        serde_json::json!({
-            "model": self.model,
-            "max_tokens": 4096,
-            "system": system_prompt(file_type),
-            "messages": [
-                {"role": "user", "content": content}
-            ]
-        })
-    }
-
-    pub fn build_image_request_body(&self, image_b64: &str, media_type: &str) -> serde_json::Value {
-        serde_json::json!({
-            "model": self.model,
-            "max_tokens": 4096,
-            "system": vision_prompt(),
-            "messages": [
-                {"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
-                    {"type": "text", "text": "Extract the knowledge graph from this image."}
-                ]}
-            ]
-        })
-    }
-
-    fn headers(&self) -> Vec<(&'static str, String)> {
-        vec![
-            ("Content-Type", "application/json".into()),
-            ("x-api-key", self.api_key.clone()),
-            ("anthropic-version", "2023-06-01".into()),
-        ]
-    }
-
-    /// Single-shot API call for one piece of content.
-    fn extract_raw(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
-        let body = serde_json::to_string(&self.build_request_body(content, file_type))?;
-        let headers = self.headers();
-        let hdr: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let response = post_json(
-            &self.agent,
-            "https://api.anthropic.com/v1/messages",
-            &hdr,
-            &body,
-            "Claude",
-        )?;
-        self.parse_messages_response(&response)
-    }
-
-    fn parse_messages_response(&self, response: &str) -> Result<SemanticExtraction> {
-        let json: serde_json::Value = serde_json::from_str(response)
-            .map_err(|e| AstriaError::Graph(format!("Failed to parse Claude API response: {e}")))?;
-        enrichment::record_usage(&json);
-        let text = json
-            .get("content")
-            .and_then(|c| c.get(0))
-            .and_then(|block| block.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-        Ok(parse_extraction_text(text))
-    }
-
-    /// Single-turn Messages-API body for the auxiliary passes.
-    fn claude_chat_body(&self, system: &str, user: &str) -> serde_json::Value {
-        serde_json::json!({
-            "model": self.model,
-            "max_tokens": 1024,
-            "system": system,
-            "messages": [
-                {"role": "user", "content": user}
-            ]
-        })
-    }
-
-    fn claude_complete_text(&self, body: serde_json::Value) -> Result<String> {
-        let body_str = serde_json::to_string(&body)?;
-        let headers = self.headers();
-        let hdr: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let response = post_json(
-            &self.agent,
-            "https://api.anthropic.com/v1/messages",
-            &hdr,
-            &body_str,
-            "Claude",
-        )?;
-        let json: serde_json::Value = serde_json::from_str(&response)
-            .map_err(|e| AstriaError::Graph(format!("Failed to parse Claude API response: {e}")))?;
-        enrichment::record_usage(&json);
-        Ok(json
-            .get("content")
-            .and_then(|c| c.get(0))
-            .and_then(|block| block.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string())
-    }
-
-    fn extract_image_raw(
-        &self,
-        image_bytes: &[u8],
-        media_type: &str,
-    ) -> Result<SemanticExtraction> {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(image_bytes);
-        let body = serde_json::to_string(&self.build_image_request_body(&encoded, media_type))?;
-        let headers = self.headers();
-        let hdr: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let response = post_json(
-            &self.agent,
-            "https://api.anthropic.com/v1/messages",
-            &hdr,
-            &body,
-            "Claude",
-        )?;
-        self.parse_messages_response(&response)
-    }
-}
-
-impl SemanticBackend for ClaudeBackend {
-    fn cache_identity(&self) -> String {
-        format!("claude:https://api.anthropic.com:{}", self.model)
-    }
-    fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
-        extract_content_chunked(content, file_type, |c, ft| self.extract_raw(c, ft))
-    }
-
-    fn extract_semantic_from_image(
-        &self,
-        image_bytes: &[u8],
-        media_type: &str,
-    ) -> Result<SemanticExtraction> {
-        self.extract_image_raw(image_bytes, media_type)
-    }
-
-    fn complete(&self, system: &str, user: &str) -> Result<String> {
-        self.claude_complete_text(self.claude_chat_body(system, user))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// OpenAiBackend (any OpenAI-compatible endpoint)
-// ---------------------------------------------------------------------------
-
-/// Works with OpenAI, DeepSeek, Ollama (/v1), LM Studio, and custom
-/// OpenAI-compatible providers via a configurable base URL.
-pub struct OpenAiBackend {
-    agent: ureq::Agent,
-    api_key: Option<String>,
-    base_url: String,
-    model: String,
-}
-
-impl OpenAiBackend {
-    /// - `ASTRIA_LLM_BASE_URL` (or `OPENAI_BASE_URL`) — defaults to OpenAI.
-    /// - `ASTRIA_LLM_API_KEY` (or `OPENAI_API_KEY`) — optional for local
-    ///   servers like Ollama.
-    /// - `ASTRIA_LLM_MODEL` — defaults to `gpt-4o-mini`.
-    pub fn from_env() -> Result<Self> {
-        let base_url = astria_core::env_var("LLM_BASE_URL")
-            .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
-            .unwrap_or_else(|| "https://api.openai.com/v1".into());
-        let api_key =
-            astria_core::env_var("LLM_API_KEY").or_else(|| std::env::var("OPENAI_API_KEY").ok());
-        let model = astria_core::env_var("LLM_MODEL").unwrap_or_else(|| "gpt-4o-mini".into());
-        if api_key.is_none() && base_url.contains("api.openai.com") {
-            return Err(AstriaError::Graph(
-                "no API key: set ASTRIA_LLM_API_KEY or OPENAI_API_KEY".into(),
-            ));
-        }
-        if api_key.is_some() && base_url.starts_with("http://") && !is_local_base_url(&base_url) {
-            eprintln!(
-                "warning: ASTRIA_LLM_BASE_URL uses plain http ({base_url}); \
-                 the API key is sent unencrypted"
-            );
-        }
-        Ok(Self {
-            agent: build_agent(),
-            api_key,
-            base_url: base_url.trim_end_matches('/').to_string(),
-            model,
-        })
-    }
-
-    pub fn new(api_key: Option<String>, base_url: String, model: String) -> Self {
-        Self {
-            agent: build_agent(),
-            api_key,
-            base_url: base_url.trim_end_matches('/').to_string(),
-            model,
-        }
-    }
-
-    pub fn build_request_body(&self, content: &str, file_type: &str) -> serde_json::Value {
-        serde_json::json!({
-            "model": self.model,
-            "max_tokens": 4096,
-            "messages": [
-                {"role": "system", "content": system_prompt(file_type)},
-                {"role": "user", "content": content}
-            ]
-        })
-    }
-
-    pub fn build_image_request_body(&self, image_b64: &str, media_type: &str) -> serde_json::Value {
-        serde_json::json!({
-            "model": self.model,
-            "max_tokens": 4096,
-            "messages": [
-                {"role": "system", "content": vision_prompt()},
-                {"role": "user", "content": [
-                    {"type": "text", "text": "Extract the knowledge graph from this image."},
-                    {"type": "image_url", "image_url": {"url": format!("data:{media_type};base64,{image_b64}")}}
-                ]}
-            ]
-        })
-    }
-
-    fn headers(&self) -> Vec<(&'static str, String)> {
-        let mut headers = vec![("Content-Type", "application/json".to_string())];
-        if let Some(key) = &self.api_key {
-            headers.push(("Authorization", format!("Bearer {key}")));
-        }
-        headers
-    }
-
-    fn extract_raw(&self, body: serde_json::Value) -> Result<SemanticExtraction> {
-        let body_str = serde_json::to_string(&body)?;
-        let url = format!("{}/chat/completions", self.base_url);
-        let headers = self.headers();
-        let hdr: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let response = post_json(&self.agent, &url, &hdr, &body_str, "OpenAI-compatible")?;
-        let json: serde_json::Value = serde_json::from_str(&response)
-            .map_err(|e| AstriaError::Graph(format!("Failed to parse OpenAI response: {e}")))?;
-        enrichment::record_usage(&json);
-        let text = json
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("message"))
-            .and_then(|m| m.get("content"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-        Ok(parse_extraction_text(text))
-    }
-
-    /// Chat-completions body for the auxiliary passes (smaller output cap).
-    fn chat_body(&self, system: &str, user: &str, max_tokens: u32) -> serde_json::Value {
-        serde_json::json!({
-            "model": self.model,
-            "max_tokens": max_tokens,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user}
-            ]
-        })
-    }
-
-    fn complete_text(&self, body: serde_json::Value) -> Result<String> {
-        let body_str = serde_json::to_string(&body)?;
-        let url = format!("{}/chat/completions", self.base_url);
-        let headers = self.headers();
-        let hdr: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let response = post_json(&self.agent, &url, &hdr, &body_str, "OpenAI-compatible")?;
-        let json: serde_json::Value = serde_json::from_str(&response)
-            .map_err(|e| AstriaError::Graph(format!("Failed to parse OpenAI response: {e}")))?;
-        enrichment::record_usage(&json);
-        Ok(json
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("message"))
-            .and_then(|m| m.get("content"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string())
-    }
-}
-
-impl SemanticBackend for OpenAiBackend {
-    fn cache_identity(&self) -> String {
-        format!("openai:{}:{}", self.base_url, self.model)
-    }
-    fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
-        extract_content_chunked(content, file_type, |c, ft| {
-            self.extract_raw(self.build_request_body(c, ft))
-        })
-    }
-
-    fn extract_semantic_from_image(
-        &self,
-        image_bytes: &[u8],
-        media_type: &str,
-    ) -> Result<SemanticExtraction> {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(image_bytes);
-        self.extract_raw(self.build_image_request_body(&encoded, media_type))
-    }
-
-    fn complete(&self, system: &str, user: &str) -> Result<String> {
-        self.complete_text(self.chat_body(system, user, 1024))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// GeminiBackend (Google Generative Language API)
-// ---------------------------------------------------------------------------
-
-pub struct GeminiBackend {
-    agent: ureq::Agent,
-    api_key: String,
-    model: String,
-}
-
-impl GeminiBackend {
-    /// - `ASTRIA_LLM_API_KEY` (or `GEMINI_API_KEY`/`GOOGLE_API_KEY`).
-    /// - `ASTRIA_LLM_MODEL` — defaults to `gemini-2.0-flash`.
-    pub fn from_env() -> Result<Self> {
-        let api_key = astria_core::env_var("LLM_API_KEY")
-            .or_else(|| std::env::var("GEMINI_API_KEY").ok())
-            .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
-            .ok_or_else(|| {
-                AstriaError::Graph(
-                    "no Gemini API key: set ASTRIA_LLM_API_KEY or GEMINI_API_KEY".into(),
-                )
-            })?;
-        let model = astria_core::env_var("LLM_MODEL").unwrap_or_else(|| "gemini-2.0-flash".into());
-        Ok(Self::new(api_key, model))
-    }
-
-    pub fn new(api_key: String, model: String) -> Self {
-        Self {
-            agent: build_agent(),
-            api_key,
-            model,
-        }
-    }
-
-    /// API URL. The key is sent via the x-goog-api-key header (see
-    /// `headers`), never as a URL query parameter where it would leak into
-    /// logs and history.
-    pub fn url(&self) -> String {
-        format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-            self.model
-        )
-    }
-
-    fn headers(&self) -> Vec<(&'static str, String)> {
-        vec![
-            ("Content-Type", "application/json".into()),
-            ("x-goog-api-key", self.api_key.clone()),
-        ]
-    }
-
-    pub fn build_request_body(&self, content: &str, file_type: &str) -> serde_json::Value {
-        serde_json::json!({
-            "system_instruction": {"parts": [{"text": system_prompt(file_type)}]},
-            "contents": [{"role": "user", "parts": [{"text": content}]}],
-            "generationConfig": {"maxOutputTokens": 4096}
-        })
-    }
-
-    pub fn build_image_request_body(&self, image_b64: &str, media_type: &str) -> serde_json::Value {
-        serde_json::json!({
-            "system_instruction": {"parts": [{"text": vision_prompt()}]},
-            "contents": [{"role": "user", "parts": [
-                {"inline_data": {"mime_type": media_type, "data": image_b64}},
-                {"text": "Extract the knowledge graph from this image."}
-            ]}],
-            "generationConfig": {"maxOutputTokens": 4096}
-        })
-    }
-
-    fn extract_raw(&self, body: serde_json::Value) -> Result<SemanticExtraction> {
-        let body_str = serde_json::to_string(&body)?;
-        let response = post_json(
-            &self.agent,
-            &self.url(),
-            &self
-                .headers()
-                .iter()
-                .map(|(k, v)| (*k, v.as_str()))
-                .collect::<Vec<(&str, &str)>>(),
-            &body_str,
-            "Gemini",
-        )?;
-        let json: serde_json::Value = serde_json::from_str(&response)
-            .map_err(|e| AstriaError::Graph(format!("Failed to parse Gemini response: {e}")))?;
-        enrichment::record_usage(&json);
-        let text = Self::gemini_text(&json);
-        Ok(parse_extraction_text(text))
-    }
-
-    /// The first candidate's text part, shared by extraction and the
-    /// auxiliary passes.
-    fn gemini_text(json: &serde_json::Value) -> &str {
-        json.get("candidates")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("content"))
-            .and_then(|c| c.get("parts"))
-            .and_then(|p| p.get(0))
-            .and_then(|p| p.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-    }
-
-    /// generateContent body for the auxiliary passes (smaller output cap).
-    fn gemini_chat_body(&self, system: &str, user: &str) -> serde_json::Value {
-        serde_json::json!({
-            "system_instruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"maxOutputTokens": 1024}
-        })
-    }
-}
-
-impl SemanticBackend for GeminiBackend {
-    fn cache_identity(&self) -> String {
-        format!(
-            "gemini:https://generativelanguage.googleapis.com:{}",
-            self.model
-        )
-    }
-    fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
-        extract_content_chunked(content, file_type, |c, ft| {
-            self.extract_raw(self.build_request_body(c, ft))
-        })
-    }
-
-    fn extract_semantic_from_image(
-        &self,
-        image_bytes: &[u8],
-        media_type: &str,
-    ) -> Result<SemanticExtraction> {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(image_bytes);
-        self.extract_raw(self.build_image_request_body(&encoded, media_type))
-    }
-
-    fn complete(&self, system: &str, user: &str) -> Result<String> {
-        let body_str = serde_json::to_string(&self.gemini_chat_body(system, user))?;
-        let response = post_json(
-            &self.agent,
-            &self.url(),
-            &self
-                .headers()
-                .iter()
-                .map(|(k, v)| (*k, v.as_str()))
-                .collect::<Vec<(&str, &str)>>(),
-            &body_str,
-            "Gemini",
-        )?;
-        let json: serde_json::Value = serde_json::from_str(&response)
-            .map_err(|e| AstriaError::Graph(format!("Failed to parse Gemini response: {e}")))?;
-        enrichment::record_usage(&json);
-        Ok(Self::gemini_text(&json).to_string())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// JevJudgeBackend (TypeSafe System One judge layer over a completion engine)
-// ---------------------------------------------------------------------------
-
-/// A judge layer that wraps the selected engine backend (Claude /
-/// OpenAI-compatible / Gemini). Jev cannot generate the node/edge JSON
-/// itself — it returns typed judgments with calibrated probabilities — so
-/// this backend first runs the engine, then re-judges the extraction: node
-/// types and relations are re-chosen from the schema allowlists, every edge
-/// gets a keep/drop existence verdict, and the winning probability becomes
-/// the edge's `confidence_score`. The engine also handles the auxiliary
-/// `complete()` passes unchanged, and the Jev batch gate may skip trivial
-/// files before their first extraction.
-///
-/// Selected with `--judge jev` / `ASTRIA_LLM_JUDGE=jev` on top of an
-/// explicit `--backend`; it is never a backend itself.
-pub struct JevJudgeBackend {
-    engine: Box<dyn SemanticBackend>,
-    client: jev::JevClient,
-    config: jev::JevConfig,
-}
-
-impl JevJudgeBackend {
-    /// Wrap an already-resolved engine backend. Judge configuration comes
-    /// from the environment:
-    ///
-    /// - `ASTRIA_LLM_JUDGE_API_KEY` (or `TYPESAFE_API_KEY`) — required.
-    /// - `ASTRIA_LLM_JUDGE_MODEL` — optional, defaults to `jev-latest`.
-    /// - `ASTRIA_LLM_JEV_VERIFY` / `ASTRIA_LLM_JEV_MIN_EDGE_PROBABILITY` —
-    ///   verification pass controls (see `jev::JevConfig`).
-    /// - `ASTRIA_LLM_JEV_GATE` / `ASTRIA_LLM_JEV_GATE_*` — gate controls.
-    pub fn new(engine: Box<dyn SemanticBackend>, config: jev::JevConfig) -> Self {
-        Self {
-            client: jev::JevClient::new(config.clone()),
-            engine,
-            config,
-        }
-    }
-}
-
-impl SemanticBackend for JevJudgeBackend {
-    fn cache_identity(&self) -> String {
-        format!(
-            "jev:{}:{}",
-            self.engine.cache_identity(),
-            self.config.identity()
-        )
-    }
-
-    fn extract_semantic(&self, content: &str, file_type: &str) -> Result<SemanticExtraction> {
-        let extraction = self.engine.extract_semantic(content, file_type)?;
-        if !self.config.verify_enabled
-            || (extraction.nodes.is_empty() && extraction.edges.is_empty())
-        {
-            return Ok(extraction);
-        }
-        // Edge existence is the only judgment that needs the file text;
-        // an edgeless extraction re-chooses node types from labels and
-        // summaries alone, so the (potentially large) content never ships.
-        let content_ref = if extraction.edges.is_empty() {
-            None
-        } else {
-            Some(content)
-        };
-        match self.client.verify(&extraction, content_ref, file_type) {
-            Ok(verified) => Ok(verified),
-            Err(e) => {
-                // The engine already produced an extraction; a failed
-                // verification must not lose it.
-                eprintln!(
-                    "warning: Jev verification unavailable ({e}); keeping the engine extraction unverified"
-                );
-                Ok(extraction)
-            }
-        }
-    }
-
-    fn extract_semantic_from_image(
-        &self,
-        image_bytes: &[u8],
-        media_type: &str,
-    ) -> Result<SemanticExtraction> {
-        let extraction = self
-            .engine
-            .extract_semantic_from_image(image_bytes, media_type)?;
-        if !self.config.verify_enabled
-            || (extraction.nodes.is_empty() && extraction.edges.is_empty())
-        {
-            return Ok(extraction);
-        }
-        match self.client.verify(&extraction, None, media_type) {
-            Ok(verified) => Ok(verified),
-            Err(e) => {
-                eprintln!(
-                    "warning: Jev verification unavailable ({e}); keeping the engine extraction unverified"
-                );
-                Ok(extraction)
-            }
-        }
-    }
-
-    fn complete(&self, system: &str, user: &str) -> Result<String> {
-        self.engine.complete(system, user)
-    }
-
-    fn gate_files(&self, files: &[PathBuf]) -> Vec<PathBuf> {
-        if !self.config.gate_enabled {
-            return files.to_vec();
-        }
-        match self.client.gate_files(files, &self.config) {
-            Ok(kept) => kept,
-            Err(e) => {
-                // The gate may only save calls, never lose facts.
-                eprintln!("warning: Jev gate unavailable ({e}); enriching all candidate files");
-                files.to_vec()
-            }
-        }
-    }
-
-    fn rank_questions(&self, questions: &[String]) -> Vec<usize> {
-        match self.client.rank_questions(questions) {
-            Ok(permutation) => permutation,
-            Err(e) => {
-                eprintln!(
-                    "warning: Jev question ranking unavailable ({e}); keeping the generated order"
-                );
-                (0..questions.len()).collect()
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Backend resolution
-// ---------------------------------------------------------------------------
-
+// Domain modules split out of lib.rs: shared types/protocol helpers, then
+// one file per extraction backend. The public API surface is unchanged.
+mod backend_azure;
+mod backend_bedrock;
+mod backend_claude;
+mod backend_gemini;
+mod backend_jev;
+mod backend_openai;
+mod chunking;
+mod http;
+mod prompt;
+mod sigv4;
+mod types;
+
+pub use backend_azure::*;
+pub use backend_bedrock::*;
+pub use backend_claude::*;
+pub use backend_gemini::*;
+pub use backend_jev::*;
+pub use backend_openai::*;
+pub(crate) use chunking::*;
+pub(crate) use http::*;
+pub(crate) use prompt::*;
+pub use types::*;
 /// The judge layer selected via `--judge` / `ASTRIA_LLM_JUDGE`, if any.
 /// Judges wrap an engine backend (see `backend_from_env`); they are never
 /// backends themselves because Jev cannot generate extractions.
@@ -1010,6 +107,9 @@ pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
         "openai" | "openai-compatible" | "openai_compatible" => {
             Box::new(OpenAiBackend::from_env()?)
         }
+        "kimi" | "moonshot" => Box::new(OpenAiBackend::kimi_from_env()?),
+        "azure" | "azure-openai" | "azure_openai" => Box::new(AzureOpenAiBackend::from_env()?),
+        "bedrock" | "aws" => Box::new(BedrockBackend::from_env()?),
         "gemini" | "google" => Box::new(GeminiBackend::from_env()?),
         "jev" | "typesafe" => {
             return Err(AstriaError::Graph(
@@ -1021,12 +121,12 @@ pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
         }
         "" | "none" => {
             return Err(AstriaError::Graph(
-                "semantic enrichment is disabled; select --backend claude|openai|gemini or ASTRIA_LLM_BACKEND explicitly".into(),
+                "semantic enrichment is disabled; select --backend claude|openai|azure|bedrock|kimi|gemini or ASTRIA_LLM_BACKEND explicitly".into(),
             ))
         }
         other => {
             return Err(AstriaError::Graph(format!(
-                "unknown ASTRIA_LLM_BACKEND '{other}' (expected claude, openai, or gemini)"
+                "unknown ASTRIA_LLM_BACKEND '{other}' (expected claude, openai, azure, bedrock, kimi, or gemini)"
             )))
         }
     };
@@ -1044,10 +144,13 @@ pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
 
 /// Includes effective backend/model/endpoint and prompt/chunking inputs, never
 /// credentials. Callers hash this material with the stage's actual inputs.
+/// The EFFECTIVE chunk cap participates: raising ASTRIA_LLM_MAX_CHUNKS must
+/// invalidate cached results produced under the tighter cap.
 pub fn cache_configuration(backend: &dyn SemanticBackend) -> String {
     format!(
-        "semantic-v2\n{}\n{MAX_CHUNK_CHARS}:{MAX_CHUNKS}\n{}\n{}\n{}",
+        "semantic-v2\n{}\n{MAX_CHUNK_CHARS}:{}\n{}\n{}\n{}",
         backend.cache_identity(),
+        max_chunks(),
         system_prompt("code"),
         system_prompt("document"),
         vision_prompt()
@@ -1090,6 +193,19 @@ pub fn image_media_type(path: &std::path::Path) -> &'static str {
     }
 }
 
+/// Where a file's LLM-facing text comes from.
+#[derive(Debug, Clone)]
+pub enum SourceContent {
+    /// Read the file from disk (text source files; PDFs re-parsed via
+    /// astria-pdf).
+    FromDisk,
+    /// Pre-extracted content from the document layer — binary formats
+    /// (office documents, workspace exports, media transcripts, PDFs)
+    /// converted once; the LLM sees exactly the normalized content
+    /// extraction saw, never raw bytes reinterpreted as UTF-8.
+    Extracted(String),
+}
+
 /// Read the given files and run semantic extraction on each using the
 /// provided backend. Text files go through text extraction; image files go
 /// through the backend's vision path. Unreadable/oversized files are
@@ -1100,16 +216,41 @@ pub fn extract_semantic_for_files(
     files: &[PathBuf],
     backend: &dyn SemanticBackend,
 ) -> Vec<(PathBuf, Result<SemanticExtraction>)> {
+    let sources: Vec<(PathBuf, SourceContent)> = files
+        .iter()
+        .map(|f| (f.clone(), SourceContent::FromDisk))
+        .collect();
+    extract_semantic_with_sources(&sources, backend)
+}
+
+/// The extraction loop with explicit per-file content: binary formats
+/// arrive as their document-layer text instead of being read raw.
+pub fn extract_semantic_with_sources(
+    sources: &[(PathBuf, SourceContent)],
+    backend: &dyn SemanticBackend,
+) -> Vec<(PathBuf, Result<SemanticExtraction>)> {
     let mut results = Vec::new();
-    for (i, path) in files.iter().enumerate() {
+    for (i, (path, source)) in sources.iter().enumerate() {
         if i > 0 {
             // Simple rate-limiting: pause between API calls to avoid hitting limits.
             std::thread::sleep(Duration::from_millis(500));
         }
-        // Honor the run's token budget: remaining files fail explicitly
-        // instead of silently degrading to fewer extractions.
-        if let Err(e) = enrichment::ensure_budget() {
-            results.push((path.clone(), Err(e)));
+        // MCP server configurations carry literal credentials; they are
+        // ingested by the deterministic manifest extractor only. No call
+        // path may read these raw and hand them to a backend — checked
+        // before any reservation or content read.
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(astria_core::is_mcp_config_filename)
+        {
+            results.push((
+                path.clone(),
+                Err(AstriaError::Graph(format!(
+                    "refusing semantic extraction on MCP config {}: credentials never leave the machine",
+                    path.display()
+                ))),
+            ));
             continue;
         }
         if is_image_file(path) {
@@ -1130,20 +271,34 @@ pub fn extract_semantic_for_files(
                 ));
                 continue;
             }
-            results.push((
-                path.clone(),
-                backend.extract_semantic_from_image(&bytes, image_media_type(path)),
-            ));
+            // One billable vision request: claim its reservation (image
+            // bytes as a conservative token estimate plus the full
+            // extraction output allowance) before it flies. The guard
+            // releases on any exit path.
+            match enrichment::reserve_budget(bytes.len() / 4, enrichment::MAX_OUTPUT_TOKENS_EXTRACT)
+            {
+                Err(e) => results.push((path.clone(), Err(e))),
+                Ok(_reservation) => {
+                    let vision =
+                        backend.extract_semantic_from_image(&bytes, image_media_type(path));
+                    results.push((path.clone(), vision));
+                }
+            }
             continue;
         }
-        let content = if path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
-        {
-            astria_pdf::extract_text(path)
-        } else {
-            std::fs::read_to_string(path).map_err(AstriaError::from)
+        let content = match source {
+            SourceContent::Extracted(text) => Ok(text.clone()),
+            SourceContent::FromDisk => {
+                if path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                {
+                    astria_pdf::extract_text(path)
+                } else {
+                    std::fs::read_to_string(path).map_err(AstriaError::from)
+                }
+            }
         };
         let content = match content {
             Ok(c) => c,
@@ -1152,11 +307,16 @@ pub fn extract_semantic_for_files(
                 continue;
             }
         };
+        // No file-level reservation here: the chunked extraction driver
+        // claims one per chunk REQUEST, which is the actual billable unit —
+        // a file-level claim would both under-count multi-chunk files
+        // (several output allowances) and double-count single-chunk ones.
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("unknown");
-        results.push((path.clone(), backend.extract_semantic(&content, ext)));
+        let extraction = backend.extract_semantic(&content, ext);
+        results.push((path.clone(), extraction));
     }
     results
 }
@@ -1181,9 +341,15 @@ pub fn concurrency_from_env() -> usize {
 /// the original file order; unreadable/oversized files are skipped exactly
 /// as in `extract_semantic_for_files`. With `workers <= 1` this is a
 /// single-threaded call and the factory is invoked once.
-pub fn extract_semantic_for_files_parallel<F>(
+/// Run a batch semantic extraction over a bounded worker pool.
+/// `backend_factory` is called once per worker so each thread owns its
+/// backend (`SemanticBackend` is not `Sync`). Results are returned in the
+/// original file order. `sources` maps paths to their LLM-facing content
+/// (see [`SourceContent`]); files absent from the map are read from disk.
+pub fn extract_semantic_for_files_parallel_with_content<F>(
     files: &[PathBuf],
     backend_factory: F,
+    sources: std::sync::Arc<HashMap<PathBuf, SourceContent>>,
     workers: usize,
 ) -> Vec<(PathBuf, Result<SemanticExtraction>)>
 where
@@ -1196,7 +362,16 @@ where
 
     if workers <= 1 {
         return match backend_factory() {
-            Ok(backend) => extract_semantic_for_files(files, backend.as_ref()),
+            Ok(backend) => {
+                let list: Vec<(PathBuf, SourceContent)> = files
+                    .iter()
+                    .map(|f| {
+                        let content = sources.get(f).cloned().unwrap_or(SourceContent::FromDisk);
+                        (f.clone(), content)
+                    })
+                    .collect();
+                extract_semantic_with_sources(&list, backend.as_ref())
+            }
             Err(e) => files
                 .iter()
                 .map(|f| (f.clone(), Err(AstriaError::Graph(e.to_string()))))
@@ -1214,6 +389,7 @@ where
         for chunk in chunks {
             let results = &results;
             let backend_factory = &backend_factory;
+            let sources = &sources;
             scope.spawn(move || {
                 let backend = match backend_factory() {
                     Ok(b) => b,
@@ -1230,7 +406,14 @@ where
                 };
                 // Extract WITHOUT holding the lock — the whole point is
                 // concurrent API calls. Only result collection is locked.
-                let local = extract_semantic_for_files(chunk, backend.as_ref());
+                let list: Vec<(PathBuf, SourceContent)> = chunk
+                    .iter()
+                    .map(|f| {
+                        let content = sources.get(f).cloned().unwrap_or(SourceContent::FromDisk);
+                        (f.clone(), content)
+                    })
+                    .collect();
+                let local = extract_semantic_with_sources(&list, backend.as_ref());
                 let mut guard = results.lock().unwrap();
                 guard.extend(local);
             });
@@ -1247,6 +430,25 @@ where
     results
 }
 
+/// Run a batch semantic extraction over a bounded worker pool, reading all
+/// files from disk. See `extract_semantic_for_files_parallel_with_content`
+/// for the pre-extracted-content variant used by the pipeline.
+pub fn extract_semantic_for_files_parallel<F>(
+    files: &[PathBuf],
+    backend_factory: F,
+    workers: usize,
+) -> Vec<(PathBuf, Result<SemanticExtraction>)>
+where
+    F: Fn() -> Result<Box<dyn SemanticBackend>> + Sync,
+{
+    extract_semantic_for_files_parallel_with_content(
+        files,
+        backend_factory,
+        std::sync::Arc::new(HashMap::new()),
+        workers,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1254,6 +456,30 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_configs_are_never_read_raw() {
+        // MCP configs embed credentials; the batch extractor must refuse
+        // them before any read or backend call, whatever the caller passes.
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".mcp.json");
+        std::fs::write(
+            &config,
+            r#"{"mcpServers":{"x":{"env":{"TOKEN":"hunter2"}}}}"#,
+        )
+        .unwrap();
+        let results = extract_semantic_for_files(&[config.clone()], &NoopBackend);
+        let (path, result) = &results[0];
+        assert_eq!(path, &config);
+        let err = result.as_ref().unwrap_err().to_string();
+        assert!(
+            err.contains("credentials never leave the machine"),
+            "got: {err}"
+        );
+        // The backend must not have received the file's content either: a
+        // NoopBackend "succeeds" on anything it is handed, so an error here
+        // proves the refusal fired first.
+    }
 
     #[test]
     fn noop_backend_returns_empty() {
@@ -1388,6 +614,91 @@ mod tests {
     }
 
     #[test]
+    fn bedrock_request_body_uses_converse_format() {
+        let backend = BedrockBackend::new(
+            "us-east-1".into(),
+            "anthropic.claude-3-5-sonnet-20241022-v2:0".into(),
+            "AK".into(),
+            "SK".into(),
+            None,
+        );
+        let body = backend.build_request_body("hello", "rust");
+        assert!(body["system"][0]["text"].as_str().unwrap().contains("rust"));
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
+        assert_eq!(body["inferenceConfig"]["maxTokens"], 4096);
+        // Colon-bearing model ids must be percent-encoded for the URL path.
+        assert!(backend
+            .url()
+            .contains("/model/anthropic.claude-3-5-sonnet-20241022-v2%3A0/converse"));
+        assert!(
+            !backend.url().contains("AK"),
+            "credentials never appear in the URL"
+        );
+    }
+
+    #[test]
+    fn bedrock_image_body_uses_converse_image_block() {
+        let backend = BedrockBackend::new(
+            "eu-west-1".into(),
+            "m".into(),
+            "AK".into(),
+            "SK".into(),
+            Some("TOKEN".into()),
+        );
+        let body = backend.build_image_request_body("QUJD", "image/webp");
+        let block = &body["messages"][0]["content"][0];
+        assert_eq!(block["image"]["format"], "webp");
+        assert_eq!(block["image"]["source"]["bytes"], "QUJD");
+    }
+
+    #[test]
+    fn kimi_resolution_builds_moonshot_backend() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "kimi");
+        std::env::set_var("MOONSHOT_API_KEY", "sk-test");
+        std::env::remove_var("ASTRIA_LLM_MODEL");
+        assert!(backend_from_env().is_ok());
+        std::env::remove_var("ASTRIA_LLM_BACKEND");
+        std::env::remove_var("MOONSHOT_API_KEY");
+    }
+
+    #[test]
+    fn kimi_resolution_without_key_errors_helpfully() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "kimi");
+        for var in [
+            "MOONSHOT_API_KEY",
+            "KIMI_API_KEY",
+            "ASTRIA_LLM_API_KEY",
+            "OPENAI_API_KEY",
+        ] {
+            std::env::remove_var(var);
+        }
+        let err = backend_from_env().err().expect("missing key must error");
+        assert!(err.to_string().contains("MOONSHOT_API_KEY"));
+        std::env::remove_var("ASTRIA_LLM_BACKEND");
+    }
+
+    #[test]
+    fn azure_resolution_builds_backend() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "azure");
+        std::env::set_var("ASTRIA_AZURE_ENDPOINT", "https://res.openai.azure.com");
+        std::env::set_var("ASTRIA_AZURE_DEPLOYMENT", "gpt4o");
+        std::env::set_var("ASTRIA_AZURE_API_KEY", "key");
+        assert!(backend_from_env().is_ok());
+        for var in [
+            "ASTRIA_LLM_BACKEND",
+            "ASTRIA_AZURE_ENDPOINT",
+            "ASTRIA_AZURE_DEPLOYMENT",
+            "ASTRIA_AZURE_API_KEY",
+        ] {
+            std::env::remove_var(var);
+        }
+    }
+
+    #[test]
     fn backend_resolution_explicit_openai() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("ASTRIA_LLM_BACKEND", "openai");
@@ -1399,29 +710,26 @@ mod tests {
     }
 
     #[test]
-    fn legacy_backend_does_not_enable_network_enrichment() {
+    fn no_backend_selection_leaves_enrichment_disabled() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("ASTRIA_LLM_BACKEND");
-        std::env::set_var("GRAPHIFY_LLM_BACKEND", "openai");
         std::env::set_var("OPENAI_API_KEY", "test");
         let err = backend_from_env()
             .err()
             .expect("explicit backend selection required");
         assert!(err.to_string().contains("semantic enrichment is disabled"));
-        std::env::remove_var("GRAPHIFY_LLM_BACKEND");
         std::env::remove_var("OPENAI_API_KEY");
     }
 
     #[test]
-    fn astria_env_wins_over_legacy_graphify() {
-        let _guard = ENV_LOCK.lock().unwrap();
+    fn env_var_reads_only_current_spelling() {
+        // There is no legacy fallback: only ASTRIA_* names are read, and an
+        // empty ASTRIA_ value counts as unset.
         std::env::set_var("ASTRIA_LLM_MODEL", "new");
-        std::env::set_var("GRAPHIFY_LLM_MODEL", "old");
         assert_eq!(astria_core::env_var("LLM_MODEL").as_deref(), Some("new"));
-        std::env::remove_var("ASTRIA_LLM_MODEL");
-        assert_eq!(astria_core::env_var("LLM_MODEL").as_deref(), Some("old"));
-        std::env::remove_var("GRAPHIFY_LLM_MODEL");
+        std::env::set_var("ASTRIA_LLM_MODEL", "");
         assert_eq!(astria_core::env_var("LLM_MODEL"), None);
+        std::env::remove_var("ASTRIA_LLM_MODEL");
     }
 
     // -- Jev judge layer --
@@ -1502,15 +810,21 @@ mod tests {
     #[test]
     fn parse_extraction_tolerates_prose_around_json() {
         let text = "Here you go:\n{\"nodes\":[{\"id\":\"a\",\"label\":\"A\",\"summary\":\"s\",\"node_type\":\"concept\"}],\"edges\":[]}\nDone.";
-        let parsed = parse_extraction_text(text);
+        let parsed = parse_extraction_text(text).unwrap();
         assert_eq!(parsed.nodes.len(), 1);
         assert_eq!(parsed.nodes[0].id, "a");
     }
 
     #[test]
-    fn parse_extraction_empty_text() {
-        assert!(parse_extraction_text("").nodes.is_empty());
-        assert!(parse_extraction_text("no json here").nodes.is_empty());
+    fn intentional_empty_reply_is_ok_but_garbage_is_an_error() {
+        // A schema-valid empty result is a legitimate, cacheable success.
+        let empty = parse_extraction_text("{\"nodes\":[],\"edges\":[]}").unwrap();
+        assert!(empty.nodes.is_empty());
+        // Unusable replies (empty text, no JSON) must be errors so they are
+        // retried instead of cached as successful empty extractions.
+        assert!(parse_extraction_text("").is_err());
+        assert!(parse_extraction_text("no json here").is_err());
+        assert!(parse_extraction_text("{\"nodes\": [trunc").is_err());
     }
 
     // -- Output validation --

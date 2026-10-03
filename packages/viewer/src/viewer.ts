@@ -674,6 +674,12 @@ function updateCursor(): void {
 
 function showInfoForNode(n: DataNode): void {
   info.textContent = '';
+  // A labelled, focusable region: screen-reader users can reach it and
+  // read the selected node's relationships as text, keyboard users can
+  // follow each link with Enter.
+  info.setAttribute('role', 'region');
+  info.setAttribute('aria-label', 'Selected node details');
+  info.tabIndex = 0;
   const label = document.createElement('div');
   label.className = 'info-label';
   label.textContent = n.label;
@@ -695,10 +701,20 @@ function showInfoForNode(n: DataNode): void {
   if (rels.length) {
     const list = document.createElement('div');
     list.className = 'info-links';
+    list.setAttribute('role', 'list');
     for (const r of rels) {
       const row = document.createElement('div');
+      row.setAttribute('role', 'listitem');
       const t = nodeById.get(r.id);
-      row.textContent = r.relation + ' \u2192 ' + (t ? t.label : r.id);
+      const link = document.createElement('button');
+      link.className = 'info-link';
+      link.type = 'button';
+      link.textContent = r.relation + ' \u2192 ' + (t ? t.label : r.id);
+      if (t) {
+        link.title = 'Show ' + t.label;
+        link.addEventListener('click', () => centerOnNode(t));
+      }
+      row.appendChild(link);
       list.appendChild(row);
     }
     info.appendChild(list);
@@ -727,17 +743,41 @@ interface SearchEntry {
 }
 
 let searchEntries: SearchEntry[] = [];
-let firstMatch: SearchEntry | null = null;
+let matches: SearchEntry[] = [];
+let activeMatch = -1;
+
+function optionId(i: number): string {
+  return 'astria-search-option-' + i;
+}
+
+function setActiveMatch(i: number): void {
+  activeMatch = i;
+  const rows = searchResults.querySelectorAll<HTMLElement>('.search-row');
+  rows.forEach((row, idx) => {
+    const selected = idx === activeMatch;
+    row.classList.toggle('active', selected);
+    row.setAttribute('aria-selected', selected ? 'true' : 'false');
+  });
+  const active = rows[activeMatch];
+  if (active) {
+    searchInput.setAttribute('aria-activedescendant', active.id);
+    active.scrollIntoView({ block: 'nearest' });
+  } else {
+    searchInput.removeAttribute('aria-activedescendant');
+  }
+}
 
 function onSearchInput(): void {
   state.query = searchInput.value.trim().toLowerCase();
   searchResults.textContent = '';
-  firstMatch = null;
+  matches = [];
+  activeMatch = -1;
   if (!state.query) {
     searchResults.style.display = 'none';
+    searchInput.setAttribute('aria-expanded', 'false');
+    searchInput.removeAttribute('aria-activedescendant');
     return;
   }
-  const matches: SearchEntry[] = [];
   for (const e of searchEntries) {
     if (e.haystack.indexOf(state.query) !== -1) {
       matches.push(e);
@@ -750,25 +790,34 @@ function onSearchInput(): void {
     empty.textContent = 'No matches';
     searchResults.appendChild(empty);
   }
-  for (const entry of matches) {
+  matches.forEach((entry, i) => {
     const row = document.createElement('div');
     row.className = 'search-row';
+    row.id = optionId(i);
+    // Listbox options with selection semantics: announced, associated
+    // with the combobox, and reachable with the arrow keys — not
+    // pointer-only divs.
+    row.setAttribute('role', 'option');
+    row.tabIndex = -1;
+    row.setAttribute('aria-selected', 'false');
     row.textContent =
       entry.kind === 'community' && entry.bubble
         ? 'Community: ' + entry.bubble.data.label + ' — ' + entry.bubble.members.length + ' nodes'
         : entry.node
           ? entry.node.label + ' — ' + (entry.node.sourceFile || '?')
           : '';
-    if (!firstMatch) firstMatch = entry;
     row.addEventListener('click', () => focusSearchMatch(entry));
     searchResults.appendChild(row);
-  }
+  });
   searchResults.style.display = 'block';
+  searchInput.setAttribute('aria-expanded', 'true');
+  if (matches.length) setActiveMatch(0);
 }
 
 function focusSearchMatch(entry: SearchEntry): void {
   searchInput.blur();
   searchResults.style.display = 'none';
+  searchInput.setAttribute('aria-expanded', 'false');
   if (entry.kind === 'community' && entry.bubble) {
     state.expanded.add(entry.bubble.key);
     centerOnBubble(entry.bubble);
@@ -779,7 +828,20 @@ function focusSearchMatch(entry: SearchEntry): void {
 
 function onSearchKeydown(e: KeyboardEvent): void {
   if (e.key === 'Enter') {
-    if (firstMatch) focusSearchMatch(firstMatch);
+    if (activeMatch >= 0 && matches[activeMatch]) focusSearchMatch(matches[activeMatch]);
+    else if (matches[0]) focusSearchMatch(matches[0]);
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (matches.length) setActiveMatch(Math.min(activeMatch + 1, matches.length - 1));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (matches.length) setActiveMatch(Math.max(activeMatch - 1, 0));
+  } else if (e.key === 'Home') {
+    e.preventDefault();
+    if (matches.length) setActiveMatch(0);
+  } else if (e.key === 'End') {
+    e.preventDefault();
+    if (matches.length) setActiveMatch(matches.length - 1);
   } else if (e.key === 'Escape') {
     searchInput.value = '';
     onSearchInput();
@@ -906,6 +968,13 @@ function buildControls(): void {
     }
     #astria-info .info-links { margin-top: 6px; color: #9aa4b2; }
     #astria-info .info-links div { padding: 1px 0; }
+    #astria-info .info-links .info-link {
+      background: none; border: none; padding: 0; margin: 0;
+      color: #8ab4f8; font: inherit; text-align: left; cursor: pointer;
+      text-decoration: underline;
+    }
+    #astria-info:focus { outline: 2px solid #8ab4f8; outline-offset: 2px; }
+    #astria-results .search-row.active { background: rgba(138,180,248,0.25); }
     .astria-sr-only {
       position: absolute; width: 1px; height: 1px; margin: -1px;
       overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
@@ -918,6 +987,12 @@ function buildControls(): void {
   searchInput.type = 'text';
   searchInput.placeholder = 'Search nodes...  (/)';
   searchInput.setAttribute('aria-label', 'Search graph nodes');
+  // Combobox semantics: the input controls the listbox below it, and the
+  // active option is announced through aria-activedescendant.
+  searchInput.setAttribute('role', 'combobox');
+  searchInput.setAttribute('aria-expanded', 'false');
+  searchInput.setAttribute('aria-controls', 'astria-results');
+  searchInput.setAttribute('aria-autocomplete', 'list');
   searchBox.appendChild(searchInput);
   searchResults.id = 'astria-results';
   searchResults.setAttribute('role', 'listbox');

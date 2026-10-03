@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+import { DEFAULT_QUERY_BUDGET } from './defaults';
 import { runCommand } from './commands/run';
 import { healthCommand } from './commands/health';
 import { riskCommand } from './commands/risk';
@@ -24,7 +25,6 @@ import { diagnoseCommand } from './commands/diagnose';
 import { saveResultCommand, reflectCommand } from './commands/feedback';
 import { globalAddCommand, globalRemoveCommand, globalListCommand, globalPathCommand } from './commands/global';
 import { hookGuard } from './commands/hook-guard';
-import { migrateCommand } from './commands/migrate';
 import { updateCommand } from './commands/update';
 import { watchCommand } from './commands/watch';
 import { clusterCommand } from './commands/cluster';
@@ -34,6 +34,9 @@ import { historyCommand } from './commands/history';
 import { statusCommand } from './commands/status';
 import { registerInstallCommand } from './commands/install';
 import { registerHookCommand } from './commands/hook';
+import { mergeDriverInstall, mergeDriverRun, mergeDriverUninstall } from './commands/merge-driver';
+import { digestCommand } from './commands/digest';
+import { mergeGateCommand } from './commands/merge-gate';
 
 const program = new Command();
 
@@ -47,7 +50,7 @@ program
   .description('Run the full pipeline on a directory')
   .argument('<path>', 'Directory to analyze')
   .option('--no-dedup', 'Skip near-duplicate node merging')
-  .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), or gemini')
+  .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), azure (Azure OpenAI), bedrock (AWS SigV4), kimi (Moonshot), or gemini')
   .option('--judge <name>', 'Decision layer over the backend: jev (TypeSafe System One — gates trivial files, re-judges relations/node types, adds calibrated edge confidence)')
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
   .option('--wiki', 'Also export a markdown wiki to .astria/wiki')
@@ -63,7 +66,7 @@ program
   .description('Run incremental AST-only rebuild')
   .argument('<path>', 'Directory to update')
   .option('--no-dedup', 'Skip near-duplicate node merging')
-  .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), or gemini')
+  .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), azure (Azure OpenAI), bedrock (AWS SigV4), kimi (Moonshot), or gemini')
   .option('--judge <name>', 'Decision layer over the backend: jev (TypeSafe System One — gates trivial files, re-judges relations/node types, adds calibrated edge confidence)')
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
   .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (one-time ~615 MB local model download, then offline)')
@@ -97,7 +100,7 @@ program
   .option('--graph <path>', 'Path to project root', '.')
   .option('--dfs', 'Use depth-first search instead of breadth-first')
   .option('--depth <n>', 'Traversal depth', '2')
-  .option('--budget <n>', 'Token budget for output', '2000')
+  .option('--budget <n>', 'Token budget for output', String(DEFAULT_QUERY_BUDGET))
   .option('--directed', 'Follow edges only in their stored direction (caller -> callee)')
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
   .option('--cursor <n>', 'Continuation token from a previous truncated query', '0')
@@ -120,7 +123,7 @@ program
   .command('map')
   .description('Repo map: PageRank-ranked files with top symbols, within a token budget')
   .option('--graph <path>', 'Path to project root', '.')
-  .option('--budget <n>', 'Token budget for output', '2000')
+  .option('--budget <n>', 'Token budget for output', String(DEFAULT_QUERY_BUDGET))
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
   .option('--json', 'Emit machine-readable JSON')
   .action(mapCommand);
@@ -208,14 +211,17 @@ program
   .command('cluster-only')
   .description('Run cluster + analyze + report only (no extract/build)')
   .argument('<path>', 'Directory with existing graph')
-  .action(clusterCommand);
+  .option('--resolution <r>', 'Community granularity 0.0–1.0: higher values produce more, smaller communities', '0')
+  .option('--exclude-hubs', 'Keep high-degree hub nodes out of propagation so they cannot glue communities together (hubs are attached to their strongest community afterwards)')
+  .action((path: string, opts: { resolution: string; excludeHubs?: boolean }) => clusterCommand(path, { resolution: opts.resolution, excludeHubs: opts.excludeHubs }));
 
 program
   .command('merge')
-  .description('Merge two graphs into a new output graph')
+  .description('Merge two graphs into a new output graph (cross-repo by default: ids namespaced per root; --same-repo shares ids and errors on conflicts)')
   .argument('<pathA>', 'First project root')
   .argument('<pathB>', 'Second project root')
   .argument('<outPath>', 'Output project root')
+  .option('--same-repo', 'Treat both inputs as one repository: no id namespacing; differing definitions under the same id fail the merge')
   .action(mergeCommand);
 
 program
@@ -234,8 +240,14 @@ program
 
 program
   .command('mcp')
-  .description('Run an MCP stdio server exposing the graph to AI agents (Claude, etc.)')
+  .description('Run an MCP server exposing the graph to AI agents — stdio by default, or HTTP with --http')
   .option('--graph <path>', 'Path to project root', '.')
+  .option('--http', 'Serve MCP over HTTP (Streamable HTTP) instead of stdio — one server, many clients')
+  .option('--host <addr>', 'HTTP bind address (default 127.0.0.1; non-loopback requires a token)')
+  .option('--port <n>', 'HTTP port', '8620')
+  .option('--token <token>', 'Bearer token for HTTP serving (default: ASTRIA_MCP_TOKEN; required off-loopback)')
+  .option('--allow-origin <origin...>', 'Browser origins allowed to send HTTP requests, e.g. "http://localhost:5173" (requests with an Origin header are refused unless listed; native clients send none)')
+  .option('--projects <paths...>', 'Additional projects to serve: "name=path" or "path" (project name defaults to the directory name)')
   .action(mcpCommand);
 
 program
@@ -257,10 +269,13 @@ program
 
 program
   .command('prs')
-  .description('Map open pull requests onto the knowledge graph (impact + merge-order risk)')
+  .description('Map open pull requests onto the knowledge graph: CI state, review status, worktree mapping, ranked review queue, merge-order risk')
   .argument('[count]', 'Number of PRs to analyze', '20')
   .option('--graph <path>', 'Path to project root', '.')
   .option('--conflicts', 'Flag PRs sharing communities (merge-order risk)')
+  .option('--triage', 'Compact per-PR triage lines instead of the full dashboard')
+  .option('--queue', 'Print only the ranked review queue')
+  .option('--json', 'Emit machine-readable JSON (ranked queue with all signals)')
   .action(prsCommand);
 
 program
@@ -282,14 +297,73 @@ program
   .option('--json', 'Emit machine-readable JSON')
   .action(statusCommand);
 
-program
-  .command('migrate')
-  .description('Migrate a pre-1.0 .graphify layout to .astria (renames the data folder, ignore file, and global store)')
-  .option('--graph <path>', 'Path to project root', '.')
-  .action(migrateCommand);
 
 registerInstallCommand(program);
 registerHookCommand(program);
+
+const mergeDriverCmd = program
+  .command('merge-driver')
+  .description('Git merge driver for .astria/graph.json — union-merges parallel-branch graph commits instead of conflicting');
+
+mergeDriverCmd
+  .command('install')
+  .description('Wire the driver into .gitattributes + git config (idempotent)')
+  .action(() => {
+    try {
+      for (const msg of mergeDriverInstall(process.cwd())) {
+        console.log(msg);
+      }
+    } catch (err: any) {
+      console.error(err.message || err);
+      process.exitCode = 1;
+    }
+  });
+
+mergeDriverCmd
+  .command('uninstall')
+  .description('Remove the .gitattributes entries and git config the install step added')
+  .action(() => {
+    try {
+      for (const msg of mergeDriverUninstall(process.cwd())) {
+        console.log(msg);
+      }
+    } catch (err: any) {
+      console.error(err.message || err);
+      process.exitCode = 1;
+    }
+  });
+
+mergeDriverCmd
+  .command('run')
+  .description('Invoked by git during a merge — do not call by hand')
+  .argument('<base>', 'Base version path (%O)')
+  .argument('<ours>', 'Ours version path, merged in place (%A)')
+  .argument('<theirs>', 'Theirs version path (%B)')
+  .allowUnknownOption(true)
+  .action((base: string, ours: string, theirs: string) => {
+    process.exitCode = mergeDriverRun(base, ours, theirs);
+  });
+
+program
+  .command('digest')
+  .description('Engineering digest from the graph: overview, health, hubs, communities, LLM spend — cron/CI friendly (hosted tier: app.graphify.com)')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--out <file>', 'Write the markdown digest to a file instead of stdout')
+  .option('--json', 'Emit machine-readable JSON')
+  .action(digestCommand);
+
+program
+  .command('merge-gate')
+  .description('CI merge gate: fails when the graph is missing, stale, unhealthy, or the pending diff is too risky (hosted tier: app.graphify.com)')
+  .option('--graph <path>', 'Path to project root', '.')
+  .option('--max-age-hours <h>', 'Fail when the graph is older than this', '24')
+  .option('--min-health <n>', 'Fail when the health score is below this', '60')
+  .option('--max-risk <n>', 'Fail when the diff risk score exceeds this', '70')
+  .option('--staged', 'Assess the staged diff only (git diff --cached)')
+  .option('--base <ref>', 'Score the committed diff base...head (CI/PR mode — a clean checkout has no working-tree diff; e.g. --base origin/main)')
+  .option('--head <ref>', 'Head ref of the range (default HEAD; requires --base)')
+  .option('--json', 'Emit machine-readable JSON')
+  .action(mergeGateCommand);
 
 
 program

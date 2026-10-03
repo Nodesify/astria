@@ -8,7 +8,11 @@ pub fn config() -> &'static LanguageConfig {
         extensions: astria_core::languages::LanguageId::Powershell
             .registration()
             .extensions,
+        #[cfg(feature = "lang-powershell")]
         language_fn: || tree_sitter_powershell::LANGUAGE.into(),
+        #[cfg(not(feature = "lang-powershell"))]
+        language_fn: || crate::langs::config::missing_language("powershell"),
+        compiled_in: cfg!(feature = "lang-powershell"),
         class_types: &["class_statement"],
         function_types: &["function_statement", "filter_statement"],
         import_types: &["using_statement"],

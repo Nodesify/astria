@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { writeTextAtomic } from './atomic';
+import { DEFAULT_QUERY_BUDGET } from '../defaults';
 
 /// Strip JSONC comments (// and /* */) outside string literals, then the
 /// trailing commas JSONC allows before `}` / `]`. Conservative: anything it
@@ -860,18 +861,18 @@ const ASTRIA_TOOLS = [
   {
     name: "astria_query",
     cli: "query",
-    args: (p) => "query " + JSON.stringify(p.question) + " --budget " + (p.budget || 3000) + " --graph .",
+    args: (p) => "query " + JSON.stringify(p.question) + " --budget " + (p.budget || DEFAULT_QUERY_BUDGET) + " --graph .",
     description: 'Query the repo knowledge graph with a natural-language question. Ranked nodes carry file:line anchors and edge provenance. Prefer over grep for architecture/cross-module questions. "No confident match" means the vocabulary is absent — rephrase toward symbol names.',
     props: {
       question: { type: "string", description: "Natural-language question about the codebase" },
-      budget: { type: "integer", description: "Max output tokens (default 3000)" },
+      budget: { type: "integer", description: "Max output tokens (default " + DEFAULT_QUERY_BUDGET + ")" },
     },
     required: ["question"],
   },
   {
     name: "astria_map",
     cli: "map",
-    args: () => "map --budget 2000 --graph .",
+    args: () => "map --budget " + DEFAULT_QUERY_BUDGET + " --graph .",
     description: "PageRank-ranked repo map with top symbols per file — orient before diving in.",
     props: {},
     required: [],

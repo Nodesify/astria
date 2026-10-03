@@ -73,11 +73,24 @@ pub(super) fn publish(
     db: &Connection,
     detected: &DetectResult,
     extractions: &[astria_extract::Extraction],
+    deferred: &[PathBuf],
     build_configuration: &str,
     cli_version: Option<&str>,
 ) -> Result<astria_build::BuildResult> {
     let tx = db.unchecked_transaction()?;
-    let mut replacements = extractions.to_vec();
+    // Deferred files keep their previously published facts: their new
+    // extraction did not run (missing tooling/credentials), so publishing
+    // an empty replacement would delete valid content until the retry.
+    let deferred_keys: std::collections::HashSet<String> = deferred
+        .iter()
+        .map(|p| astria_paths::normalize(p))
+        .collect();
+    let mut replacements: Vec<astria_extract::Extraction> = extractions
+        .iter()
+        .filter(|e| !deferred_keys.contains(&astria_paths::normalize(&e.file_path)))
+        .cloned()
+        .collect();
+    let _ = root;
     for entry in &detected.removed {
         let path = astria_paths::normalize(&root.join(&entry.path));
         tx.execute("DELETE FROM edges WHERE source_file = ?1", [&path])?;
@@ -94,12 +107,25 @@ pub(super) fn publish(
         ] {
             tx.execute("DELETE FROM extraction_cache WHERE file_path = ?1", [key])?;
         }
+        tx.execute("DELETE FROM derived_text WHERE file_path = ?1", [&path])?;
     }
     let result = astria_build::build_in_transaction(&replacements, &tx)?;
     // Deep links depend on the corpus, not just surviving symbol IDs. They
     // are restored from their validated cache only when --deep is requested.
     tx.execute("DELETE FROM edges WHERE context = 'deep'", [])?;
-    astria_detect::update_manifest(detected, &tx)?;
+    astria_detect::update_manifest(detected, deferred, &tx)?;
+    // Record pending retries so the next run rebuilds even when nothing
+    // else changed (F21: installing the dependency must trigger the retry).
+    tx.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('pending_retry', ?1)",
+        [serde_json::to_string(
+            &deferred
+                .iter()
+                .map(|p| astria_paths::normalize(p))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".into())],
+    )?;
     tx.execute(
         "INSERT OR REPLACE INTO _meta (key, value) VALUES ('build_configuration', ?1)",
         [build_configuration],
@@ -127,6 +153,45 @@ pub(super) fn publish(
         "INSERT OR REPLACE INTO _meta (key, value) VALUES ('extraction_hash_version', ?1)",
         [astria_core::EXTRACTION_HASH_VERSION],
     )?;
+    // Commit provenance: the HEAD the corpus was extracted from. The merge
+    // gate compares this with the repo's current HEAD to prove the graph
+    // represents that commit's content — a publish timestamp alone only
+    // proves the build happened LATER, not that it saw the commit.
+    if let Some(head) = git_head_commit(root) {
+        tx.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('git_head', ?1)",
+            [&head],
+        )?;
+    }
+    // The generation advances INSIDE this transaction: the moment the core
+    // graph changes commit, snapshot caches must key on the new state — even
+    // if a later pipeline stage (clustering, report, export) fails before
+    // the terminal stamp lands.
+    tx.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', ?1)",
+        [&super::generation_stamp(&tx)],
+    )?;
     tx.commit()?;
     Ok(result)
+}
+
+/// Current HEAD commit of the project repository, when the project is a git
+/// work tree and git is available. Best-effort provenance: `None` means
+/// "unknown commit" and never fails the publish.
+fn git_head_commit(root: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let head = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let plausible =
+        (head.len() == 40 || head.len() == 64) && head.chars().all(|c| c.is_ascii_hexdigit());
+    plausible.then_some(head)
 }
