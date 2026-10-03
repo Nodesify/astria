@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 
 const PLATFORM_SUFFIX: Record<string, string> = {
   'win32-x64': 'win32-x64-msvc',
+  'win32-arm64': 'win32-arm64-msvc',
   'darwin-x64': 'darwin-x64',
   'darwin-arm64': 'darwin-arm64',
   'linux-x64': 'linux-x64-gnu',
@@ -46,6 +47,8 @@ function requirePlatformPackage(suffix: string): any {
   switch (suffix) {
     case 'win32-x64-msvc':
       return attempt('@nodesify/astria-win32-x64-msvc');
+    case 'win32-arm64-msvc':
+      return attempt('@nodesify/astria-win32-arm64-msvc');
     case 'darwin-x64':
       return attempt('@nodesify/astria-darwin-x64');
     case 'darwin-arm64':
@@ -109,7 +112,8 @@ function loadNativeBinding(): any {
     `Tried: local astria.node and the platform fallback package.\n` +
     `If the platform package is missing, reinstall without --omit=optional ` +
     `(npm install @nodesify/astria --force). ` +
-    `musl-based Linux is not published yet — use a glibc-based image or build from source.`
+    `Note: musl and windows-arm64 builds ship without the local embedding ` +
+    `runtime (no prebuilt ONNX there) — everything else works.`
   );
 }
 
