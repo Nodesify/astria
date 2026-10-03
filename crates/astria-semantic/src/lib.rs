@@ -37,8 +37,20 @@ const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 /// tokens) instead of one oversized request that would blow the context
 /// window or silently truncate.
 const MAX_CHUNK_CHARS: usize = 24_000;
-/// API-call budget for one file: at most this many chunks are extracted.
+/// Default API-call budget for one file: at most this many chunks are
+/// extracted. Overridable via `ASTRIA_LLM_MAX_CHUNKS` (1..=64) for
+/// oversized generated files; content beyond the cap is a hard error.
 const MAX_CHUNKS: usize = 8;
+/// Ceiling for a user-configured chunk cap.
+const MAX_CHUNKS_CEILING: usize = 64;
+
+/// Effective per-file chunk cap (`ASTRIA_LLM_MAX_CHUNKS`, clamped).
+pub fn max_chunks() -> usize {
+    astria_core::env_var("LLM_MAX_CHUNKS")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|v| v.clamp(1, MAX_CHUNKS_CEILING))
+        .unwrap_or(MAX_CHUNKS)
+}
 /// Ceiling for a server-supplied Retry-After (seconds) before falling back
 /// to the default backoff schedule.
 const MAX_RETRY_AFTER_SECS: u64 = 30;
@@ -132,10 +144,13 @@ pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
 
 /// Includes effective backend/model/endpoint and prompt/chunking inputs, never
 /// credentials. Callers hash this material with the stage's actual inputs.
+/// The EFFECTIVE chunk cap participates: raising ASTRIA_LLM_MAX_CHUNKS must
+/// invalidate cached results produced under the tighter cap.
 pub fn cache_configuration(backend: &dyn SemanticBackend) -> String {
     format!(
-        "semantic-v2\n{}\n{MAX_CHUNK_CHARS}:{MAX_CHUNKS}\n{}\n{}\n{}",
+        "semantic-v2\n{}\n{MAX_CHUNK_CHARS}:{}\n{}\n{}\n{}",
         backend.cache_identity(),
+        max_chunks(),
         system_prompt("code"),
         system_prompt("document"),
         vision_prompt()
@@ -178,6 +193,19 @@ pub fn image_media_type(path: &std::path::Path) -> &'static str {
     }
 }
 
+/// Where a file's LLM-facing text comes from.
+#[derive(Debug, Clone)]
+pub enum SourceContent {
+    /// Read the file from disk (text source files; PDFs re-parsed via
+    /// astria-pdf).
+    FromDisk,
+    /// Pre-extracted content from the document layer — binary formats
+    /// (office documents, workspace exports, media transcripts, PDFs)
+    /// converted once; the LLM sees exactly the normalized content
+    /// extraction saw, never raw bytes reinterpreted as UTF-8.
+    Extracted(String),
+}
+
 /// Read the given files and run semantic extraction on each using the
 /// provided backend. Text files go through text extraction; image files go
 /// through the backend's vision path. Unreadable/oversized files are
@@ -188,16 +216,41 @@ pub fn extract_semantic_for_files(
     files: &[PathBuf],
     backend: &dyn SemanticBackend,
 ) -> Vec<(PathBuf, Result<SemanticExtraction>)> {
+    let sources: Vec<(PathBuf, SourceContent)> = files
+        .iter()
+        .map(|f| (f.clone(), SourceContent::FromDisk))
+        .collect();
+    extract_semantic_with_sources(&sources, backend)
+}
+
+/// The extraction loop with explicit per-file content: binary formats
+/// arrive as their document-layer text instead of being read raw.
+pub fn extract_semantic_with_sources(
+    sources: &[(PathBuf, SourceContent)],
+    backend: &dyn SemanticBackend,
+) -> Vec<(PathBuf, Result<SemanticExtraction>)> {
     let mut results = Vec::new();
-    for (i, path) in files.iter().enumerate() {
+    for (i, (path, source)) in sources.iter().enumerate() {
         if i > 0 {
             // Simple rate-limiting: pause between API calls to avoid hitting limits.
             std::thread::sleep(Duration::from_millis(500));
         }
-        // Honor the run's token budget: remaining files fail explicitly
-        // instead of silently degrading to fewer extractions.
-        if let Err(e) = enrichment::ensure_budget() {
-            results.push((path.clone(), Err(e)));
+        // MCP server configurations carry literal credentials; they are
+        // ingested by the deterministic manifest extractor only. No call
+        // path may read these raw and hand them to a backend — checked
+        // before any reservation or content read.
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(astria_core::is_mcp_config_filename)
+        {
+            results.push((
+                path.clone(),
+                Err(AstriaError::Graph(format!(
+                    "refusing semantic extraction on MCP config {}: credentials never leave the machine",
+                    path.display()
+                ))),
+            ));
             continue;
         }
         if is_image_file(path) {
@@ -218,20 +271,34 @@ pub fn extract_semantic_for_files(
                 ));
                 continue;
             }
-            results.push((
-                path.clone(),
-                backend.extract_semantic_from_image(&bytes, image_media_type(path)),
-            ));
+            // One billable vision request: claim its reservation (image
+            // bytes as a conservative token estimate plus the full
+            // extraction output allowance) before it flies. The guard
+            // releases on any exit path.
+            match enrichment::reserve_budget(bytes.len() / 4, enrichment::MAX_OUTPUT_TOKENS_EXTRACT)
+            {
+                Err(e) => results.push((path.clone(), Err(e))),
+                Ok(_reservation) => {
+                    let vision =
+                        backend.extract_semantic_from_image(&bytes, image_media_type(path));
+                    results.push((path.clone(), vision));
+                }
+            }
             continue;
         }
-        let content = if path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
-        {
-            astria_pdf::extract_text(path)
-        } else {
-            std::fs::read_to_string(path).map_err(AstriaError::from)
+        let content = match source {
+            SourceContent::Extracted(text) => Ok(text.clone()),
+            SourceContent::FromDisk => {
+                if path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                {
+                    astria_pdf::extract_text(path)
+                } else {
+                    std::fs::read_to_string(path).map_err(AstriaError::from)
+                }
+            }
         };
         let content = match content {
             Ok(c) => c,
@@ -240,11 +307,16 @@ pub fn extract_semantic_for_files(
                 continue;
             }
         };
+        // No file-level reservation here: the chunked extraction driver
+        // claims one per chunk REQUEST, which is the actual billable unit —
+        // a file-level claim would both under-count multi-chunk files
+        // (several output allowances) and double-count single-chunk ones.
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("unknown");
-        results.push((path.clone(), backend.extract_semantic(&content, ext)));
+        let extraction = backend.extract_semantic(&content, ext);
+        results.push((path.clone(), extraction));
     }
     results
 }
@@ -269,9 +341,15 @@ pub fn concurrency_from_env() -> usize {
 /// the original file order; unreadable/oversized files are skipped exactly
 /// as in `extract_semantic_for_files`. With `workers <= 1` this is a
 /// single-threaded call and the factory is invoked once.
-pub fn extract_semantic_for_files_parallel<F>(
+/// Run a batch semantic extraction over a bounded worker pool.
+/// `backend_factory` is called once per worker so each thread owns its
+/// backend (`SemanticBackend` is not `Sync`). Results are returned in the
+/// original file order. `sources` maps paths to their LLM-facing content
+/// (see [`SourceContent`]); files absent from the map are read from disk.
+pub fn extract_semantic_for_files_parallel_with_content<F>(
     files: &[PathBuf],
     backend_factory: F,
+    sources: std::sync::Arc<HashMap<PathBuf, SourceContent>>,
     workers: usize,
 ) -> Vec<(PathBuf, Result<SemanticExtraction>)>
 where
@@ -284,7 +362,16 @@ where
 
     if workers <= 1 {
         return match backend_factory() {
-            Ok(backend) => extract_semantic_for_files(files, backend.as_ref()),
+            Ok(backend) => {
+                let list: Vec<(PathBuf, SourceContent)> = files
+                    .iter()
+                    .map(|f| {
+                        let content = sources.get(f).cloned().unwrap_or(SourceContent::FromDisk);
+                        (f.clone(), content)
+                    })
+                    .collect();
+                extract_semantic_with_sources(&list, backend.as_ref())
+            }
             Err(e) => files
                 .iter()
                 .map(|f| (f.clone(), Err(AstriaError::Graph(e.to_string()))))
@@ -302,6 +389,7 @@ where
         for chunk in chunks {
             let results = &results;
             let backend_factory = &backend_factory;
+            let sources = &sources;
             scope.spawn(move || {
                 let backend = match backend_factory() {
                     Ok(b) => b,
@@ -318,7 +406,14 @@ where
                 };
                 // Extract WITHOUT holding the lock — the whole point is
                 // concurrent API calls. Only result collection is locked.
-                let local = extract_semantic_for_files(chunk, backend.as_ref());
+                let list: Vec<(PathBuf, SourceContent)> = chunk
+                    .iter()
+                    .map(|f| {
+                        let content = sources.get(f).cloned().unwrap_or(SourceContent::FromDisk);
+                        (f.clone(), content)
+                    })
+                    .collect();
+                let local = extract_semantic_with_sources(&list, backend.as_ref());
                 let mut guard = results.lock().unwrap();
                 guard.extend(local);
             });
@@ -335,6 +430,25 @@ where
     results
 }
 
+/// Run a batch semantic extraction over a bounded worker pool, reading all
+/// files from disk. See `extract_semantic_for_files_parallel_with_content`
+/// for the pre-extracted-content variant used by the pipeline.
+pub fn extract_semantic_for_files_parallel<F>(
+    files: &[PathBuf],
+    backend_factory: F,
+    workers: usize,
+) -> Vec<(PathBuf, Result<SemanticExtraction>)>
+where
+    F: Fn() -> Result<Box<dyn SemanticBackend>> + Sync,
+{
+    extract_semantic_for_files_parallel_with_content(
+        files,
+        backend_factory,
+        std::sync::Arc::new(HashMap::new()),
+        workers,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -342,6 +456,30 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_configs_are_never_read_raw() {
+        // MCP configs embed credentials; the batch extractor must refuse
+        // them before any read or backend call, whatever the caller passes.
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".mcp.json");
+        std::fs::write(
+            &config,
+            r#"{"mcpServers":{"x":{"env":{"TOKEN":"hunter2"}}}}"#,
+        )
+        .unwrap();
+        let results = extract_semantic_for_files(&[config.clone()], &NoopBackend);
+        let (path, result) = &results[0];
+        assert_eq!(path, &config);
+        let err = result.as_ref().unwrap_err().to_string();
+        assert!(
+            err.contains("credentials never leave the machine"),
+            "got: {err}"
+        );
+        // The backend must not have received the file's content either: a
+        // NoopBackend "succeeds" on anything it is handed, so an error here
+        // proves the refusal fired first.
+    }
 
     #[test]
     fn noop_backend_returns_empty() {
@@ -490,8 +628,13 @@ mod tests {
         assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
         assert_eq!(body["inferenceConfig"]["maxTokens"], 4096);
         // Colon-bearing model ids must be percent-encoded for the URL path.
-        assert!(backend.url().contains("/model/anthropic.claude-3-5-sonnet-20241022-v2%3A0/converse"));
-        assert!(!backend.url().contains("AK"), "credentials never appear in the URL");
+        assert!(backend
+            .url()
+            .contains("/model/anthropic.claude-3-5-sonnet-20241022-v2%3A0/converse"));
+        assert!(
+            !backend.url().contains("AK"),
+            "credentials never appear in the URL"
+        );
     }
 
     #[test]
@@ -524,7 +667,12 @@ mod tests {
     fn kimi_resolution_without_key_errors_helpfully() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("ASTRIA_LLM_BACKEND", "kimi");
-        for var in ["MOONSHOT_API_KEY", "KIMI_API_KEY", "ASTRIA_LLM_API_KEY", "OPENAI_API_KEY"] {
+        for var in [
+            "MOONSHOT_API_KEY",
+            "KIMI_API_KEY",
+            "ASTRIA_LLM_API_KEY",
+            "OPENAI_API_KEY",
+        ] {
             std::env::remove_var(var);
         }
         let err = backend_from_env().err().expect("missing key must error");
@@ -540,7 +688,12 @@ mod tests {
         std::env::set_var("ASTRIA_AZURE_DEPLOYMENT", "gpt4o");
         std::env::set_var("ASTRIA_AZURE_API_KEY", "key");
         assert!(backend_from_env().is_ok());
-        for var in ["ASTRIA_LLM_BACKEND", "ASTRIA_AZURE_ENDPOINT", "ASTRIA_AZURE_DEPLOYMENT", "ASTRIA_AZURE_API_KEY"] {
+        for var in [
+            "ASTRIA_LLM_BACKEND",
+            "ASTRIA_AZURE_ENDPOINT",
+            "ASTRIA_AZURE_DEPLOYMENT",
+            "ASTRIA_AZURE_API_KEY",
+        ] {
             std::env::remove_var(var);
         }
     }
@@ -557,29 +710,26 @@ mod tests {
     }
 
     #[test]
-    fn legacy_backend_does_not_enable_network_enrichment() {
+    fn no_backend_selection_leaves_enrichment_disabled() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("ASTRIA_LLM_BACKEND");
-        std::env::set_var("GRAPHIFY_LLM_BACKEND", "openai");
         std::env::set_var("OPENAI_API_KEY", "test");
         let err = backend_from_env()
             .err()
             .expect("explicit backend selection required");
         assert!(err.to_string().contains("semantic enrichment is disabled"));
-        std::env::remove_var("GRAPHIFY_LLM_BACKEND");
         std::env::remove_var("OPENAI_API_KEY");
     }
 
     #[test]
-    fn astria_env_wins_over_legacy_graphify() {
-        let _guard = ENV_LOCK.lock().unwrap();
+    fn env_var_reads_only_current_spelling() {
+        // There is no legacy fallback: only ASTRIA_* names are read, and an
+        // empty ASTRIA_ value counts as unset.
         std::env::set_var("ASTRIA_LLM_MODEL", "new");
-        std::env::set_var("GRAPHIFY_LLM_MODEL", "old");
         assert_eq!(astria_core::env_var("LLM_MODEL").as_deref(), Some("new"));
-        std::env::remove_var("ASTRIA_LLM_MODEL");
-        assert_eq!(astria_core::env_var("LLM_MODEL").as_deref(), Some("old"));
-        std::env::remove_var("GRAPHIFY_LLM_MODEL");
+        std::env::set_var("ASTRIA_LLM_MODEL", "");
         assert_eq!(astria_core::env_var("LLM_MODEL"), None);
+        std::env::remove_var("ASTRIA_LLM_MODEL");
     }
 
     // -- Jev judge layer --
@@ -660,15 +810,21 @@ mod tests {
     #[test]
     fn parse_extraction_tolerates_prose_around_json() {
         let text = "Here you go:\n{\"nodes\":[{\"id\":\"a\",\"label\":\"A\",\"summary\":\"s\",\"node_type\":\"concept\"}],\"edges\":[]}\nDone.";
-        let parsed = parse_extraction_text(text);
+        let parsed = parse_extraction_text(text).unwrap();
         assert_eq!(parsed.nodes.len(), 1);
         assert_eq!(parsed.nodes[0].id, "a");
     }
 
     #[test]
-    fn parse_extraction_empty_text() {
-        assert!(parse_extraction_text("").nodes.is_empty());
-        assert!(parse_extraction_text("no json here").nodes.is_empty());
+    fn intentional_empty_reply_is_ok_but_garbage_is_an_error() {
+        // A schema-valid empty result is a legitimate, cacheable success.
+        let empty = parse_extraction_text("{\"nodes\":[],\"edges\":[]}").unwrap();
+        assert!(empty.nodes.is_empty());
+        // Unusable replies (empty text, no JSON) must be errors so they are
+        // retried instead of cached as successful empty extractions.
+        assert!(parse_extraction_text("").is_err());
+        assert!(parse_extraction_text("no json here").is_err());
+        assert!(parse_extraction_text("{\"nodes\": [trunc").is_err());
     }
 
     // -- Output validation --

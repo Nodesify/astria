@@ -44,16 +44,55 @@ fn risk_level(score: u32) -> &'static str {
     }
 }
 
-/// `git diff --name-only` over the working tree (HEAD) or the index
-/// (`--cached`). Untracked files are invisible to `git diff` — documented
+/// Which diff a risk run scores.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffScope {
+    /// Working tree vs HEAD (local edits).
+    WorkingTree,
+    /// Index vs HEAD (`--cached`).
+    Staged,
+    /// Commit range `base...head` (merge-base diff). This is the CI/PR
+    /// mode: a clean checkout of a PR has no working-tree or index
+    /// changes, so the committed diff is only visible through an explicit
+    /// range.
+    Range { base: String, head: String },
+}
+
+/// Refuse ref-looking arguments that could parse as git flags.
+fn valid_ref(name: &str) -> astria_core::Result<()> {
+    if name.is_empty() || name.starts_with('-') || name.contains("..:") {
+        return Err(astria_core::AstriaError::Graph(format!(
+            "invalid git ref: {name:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// `git diff --name-only` in NUL-separated form (so quoted
+/// Unicode/space-containing filenames are not misinterpreted by Git's
+/// default C-quoting) over the working tree, the index, or an explicit
+/// commit range. Untracked files are invisible to `git diff` — documented
 /// in the rendered report.
-pub fn git_changed_files(root: &Path, staged: bool) -> astria_core::Result<Vec<String>> {
+pub fn git_changed_files(root: &Path, scope: &DiffScope) -> astria_core::Result<Vec<String>> {
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C")
         .arg(root)
         .arg("diff")
         .arg("--name-only")
-        .arg(if staged { "--cached" } else { "HEAD" });
+        .arg("-z");
+    match scope {
+        DiffScope::WorkingTree => {
+            cmd.arg("HEAD");
+        }
+        DiffScope::Staged => {
+            cmd.arg("--cached");
+        }
+        DiffScope::Range { base, head } => {
+            valid_ref(base)?;
+            valid_ref(head)?;
+            cmd.arg(format!("{base}...{head}"));
+        }
+    }
     let out = cmd.output().map_err(astria_core::AstriaError::Io)?;
     if !out.status.success() {
         return Err(astria_core::AstriaError::Graph(format!(
@@ -62,15 +101,40 @@ pub fn git_changed_files(root: &Path, staged: bool) -> astria_core::Result<Vec<S
         )));
     }
     Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
+        .split('\0')
         .map(|l| l.trim().replace('\\', "/"))
         .filter(|l| !l.is_empty())
         .collect())
 }
 
+/// Represent a changed path exactly as persistence stores `source_file`:
+/// normalized absolute forward-slash paths. Git reports repository-relative
+/// paths, so relative inputs are joined onto the canonical project root;
+/// absolute inputs are normalized directly.
+fn stored_path(file: &str, root: Option<&Path>) -> String {
+    match root {
+        Some(root) => {
+            let p = Path::new(file);
+            if p.is_absolute() {
+                astria_paths::normalize(p)
+            } else {
+                astria_paths::normalize(&root.join(p))
+            }
+        }
+        None => file.to_string(),
+    }
+}
+
 /// Union the reverse reachability of every node defined in the changed
 /// files. Duplicate hits keep their minimum depth (closest cause wins).
-pub fn compute_risk(db: &Connection, changed_files: &[String]) -> astria_core::Result<RiskOutcome> {
+/// `root` is the canonical project root; when present, Git's
+/// repository-relative paths are normalized to the absolute representation
+/// the graph stores.
+pub fn compute_risk(
+    db: &Connection,
+    changed_files: &[String],
+    root: Option<&Path>,
+) -> astria_core::Result<RiskOutcome> {
     let mut impacted_ids: std::collections::HashMap<String, (u32, String, String)> =
         std::collections::HashMap::new();
     let mut seed_ids: Vec<String> = Vec::new();
@@ -78,14 +142,15 @@ pub fn compute_risk(db: &Connection, changed_files: &[String]) -> astria_core::R
     let communities: Vec<String>;
 
     for file in changed_files {
+        let stored = stored_path(file, root);
         let seeds: Vec<(String, String)> = {
             let mut stmt = db.prepare(
                 "SELECT id, label FROM nodes WHERE source_file = ?1 AND file_type = 'code'",
             )?;
-            let rows = stmt.query_map(rusqlite::params![file], |r| {
+            let rows = stmt.query_map(rusqlite::params![stored], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })?;
-            rows.filter_map(|r| r.ok()).collect()
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
         };
         if seeds.is_empty() {
             continue;
@@ -93,12 +158,11 @@ pub fn compute_risk(db: &Connection, changed_files: &[String]) -> astria_core::R
         files_with_symbols += 1;
         for (seed_id, _label) in &seeds {
             seed_ids.push(seed_id.clone());
-            let result = match crate::affected::affected(db, seed_id, 2, None) {
-                Ok(r) => r,
-                // A seed that no longer resolves (mid-refactor working
-                // tree) must not sink the whole report.
-                Err(_) => continue,
-            };
+            // Traversal failures are real errors (the seeds were just read
+            // from this database — "no longer resolves" is not a legitimate
+            // case here) and must surface, not silently shrink the blast
+            // radius a merge decision relies on.
+            let result = crate::affected::affected(db, seed_id, 2, None)?;
             for hit in &result.hits {
                 impacted_ids.entry(hit.id.clone()).or_insert((
                     hit.depth,
@@ -128,8 +192,8 @@ pub fn compute_risk(db: &Connection, changed_files: &[String]) -> astria_core::R
             let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |r| {
                 Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
             })?;
-            for row in rows.filter_map(|r| r.ok()) {
-                let (community, label) = row;
+            for row in rows {
+                let (community, label) = row?;
                 touched
                     .entry(community)
                     .or_insert_with(|| label.unwrap_or_else(|| format!("community {community}")));
@@ -266,12 +330,86 @@ mod tests {
     fn diff_on_one_file_union_reachability() {
         let db = open_db_in_memory().unwrap();
         seed(&db);
-        let outcome = compute_risk(&db, &["src/auth.rs".to_string()]).unwrap();
+        let outcome = compute_risk(&db, &["src/auth.rs".to_string()], None).unwrap();
         // auth.rs defines a; a reaches b at depth 1. c calls a, but reverse
         // reachability from a does not include its callers.
         assert_eq!(outcome.files_with_symbols, 1);
         assert_eq!(outcome.impacted, 1);
         assert_eq!(outcome.by_depth.get(&1), Some(&1));
+    }
+
+    #[test]
+    fn git_relative_paths_match_absolute_source_files() {
+        // Persistence stores normalized absolute paths; Git reports
+        // repository-relative ones. With the canonical root supplied, a
+        // relative diff path must find the symbols (previously the
+        // exact-equality lookup always missed and scored the diff zero).
+        let db = open_db_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let stored = astria_paths::normalize(&root.join("src/auth.rs"));
+        db.execute(
+            "INSERT INTO nodes (id, label, file_type, source_file, community) VALUES
+                ('a', 'auth_login()', 'code', ?1, 0)",
+            [&stored],
+        )
+        .unwrap();
+
+        let outcome = compute_risk(&db, &["src/auth.rs".to_string()], Some(&root)).unwrap();
+        assert_eq!(
+            outcome.files_with_symbols, 1,
+            "relative git path must resolve to the absolute stored path"
+        );
+
+        // Absolute changed paths normalize to the same representation.
+        let outcome = compute_risk(&db, &[stored], Some(&root)).unwrap();
+        assert_eq!(outcome.files_with_symbols, 1);
+    }
+
+    #[test]
+    fn nul_separated_filenames_with_spaces_and_unicode() {
+        // Git's -z output never C-quotes; paths with spaces/Unicode arrive
+        // verbatim between NULs.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(repo.join("src/a b.rs"), "fn a() {}").unwrap();
+        std::fs::write(repo.join("src/中文.rs"), "fn c() {}").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "first"]);
+        std::fs::write(repo.join("src/a b.rs"), "fn a() { let _ = 1; }").unwrap();
+        std::fs::write(repo.join("src/中文.rs"), "fn c() { let _ = 1; }").unwrap();
+
+        let changed = git_changed_files(&repo, &DiffScope::WorkingTree).unwrap();
+        assert_eq!(
+            changed,
+            vec!["src/a b.rs".to_string(), "src/中文.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn range_refs_are_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = git_changed_files(
+            dir.path(),
+            &DiffScope::Range {
+                base: "--upload-pack=evil".into(),
+                head: "HEAD".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid git ref"), "got: {err}");
     }
 
     #[test]
@@ -281,6 +419,7 @@ mod tests {
         let outcome = compute_risk(
             &db,
             &["src/auth.rs".to_string(), "docs/notes.md".to_string()],
+            None,
         )
         .unwrap();
         assert_eq!(outcome.changed_files.len(), 2);
@@ -298,11 +437,15 @@ mod tests {
             [],
         )
         .unwrap();
-        let narrow = compute_risk(&db, &["src/leaf.rs".to_string()]).unwrap();
+        let narrow = compute_risk(&db, &["src/leaf.rs".to_string()], None).unwrap();
         assert_eq!(narrow.impacted, 0, "leaf has no dependents");
         // auth.rs (a) + api.rs (c): their dependents span two communities.
-        let wide =
-            compute_risk(&db, &["src/auth.rs".to_string(), "src/api.rs".to_string()]).unwrap();
+        let wide = compute_risk(
+            &db,
+            &["src/auth.rs".to_string(), "src/api.rs".to_string()],
+            None,
+        )
+        .unwrap();
         assert!(
             wide.score > narrow.score,
             "wide cross-community change must outrank a leaf file (wide {} vs narrow {})",
@@ -324,7 +467,7 @@ mod tests {
     fn render_lists_sections() {
         let db = open_db_in_memory().unwrap();
         seed(&db);
-        let outcome = compute_risk(&db, &["src/auth.rs".to_string()]).unwrap();
+        let outcome = compute_risk(&db, &["src/auth.rs".to_string()], None).unwrap();
         assert!(outcome.impacted > 0, "auth.rs has a caller chain");
         let text = render(&outcome, None);
         assert!(text.contains("Change Risk Report"));

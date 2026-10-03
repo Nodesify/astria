@@ -38,7 +38,13 @@ pub(crate) fn tokenize(s: &str) -> Vec<String> {
     if tokens.iter().any(|t| contains_cjk(t)) {
         tokens = tokens
             .into_iter()
-            .flat_map(|t| if contains_cjk(&t) { segment_cjk(&t) } else { vec![t] })
+            .flat_map(|t| {
+                if contains_cjk(&t) {
+                    segment_cjk(&t)
+                } else {
+                    vec![t]
+                }
+            })
             .collect();
     }
     tokens
@@ -54,7 +60,7 @@ pub(crate) fn contains_cjk(s: &str) -> bool {
             | 0x4E00..=0x9FFF     // CJK Unified Ideographs
             | 0xAC00..=0xD7AF     // Hangul syllables
             | 0xF900..=0xFAFF     // CJK Compatibility Ideographs
-            | 0x20000..=0x2FA1F)  // CJK Extensions B–F
+            | 0x20000..=0x2FA1F) // CJK Extensions B–F
     })
 }
 

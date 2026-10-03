@@ -43,52 +43,141 @@ pub fn open_global_store_at(path: &Path) -> Result<GlobalStore> {
     })
 }
 
-/// Default repo tag: the repo directory name; widened with the parent dir
-/// when it collides with an existing tag (upstream `distinct_repo_tags`).
-fn pick_tag(db: &Connection, repo_root: &Path, explicit: Option<&str>) -> String {
-    if let Some(tag) = explicit {
-        return normalize_tag(tag);
+/// Canonical registration key for a repo root: forward-slash absolute path
+/// (the same normalization the node rows use).
+fn root_key(repo_root: &Path) -> String {
+    repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf())
+        .display()
+        .to_string()
+        .replace("\\\\?\\", "")
+        .replace('\\', "/")
+}
+
+/// Persisted root→tag registrations: repeat additions of the same root
+/// update its own tag instead of allocating a duplicate, and an explicit
+/// tag owned by a different root is an error, never a silent replacement.
+/// Created lazily so existing stores adopt it on next open.
+fn ensure_roots_table(db: &Connection) -> Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS global_roots (
+            root TEXT PRIMARY KEY,
+            tag TEXT NOT NULL,
+            registered_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )?;
+    Ok(())
+}
+
+fn registered_tag(db: &Connection, root: &str) -> Result<Option<String>> {
+    Ok(db
+        .query_row(
+            "SELECT tag FROM global_roots WHERE root = ?1",
+            rusqlite::params![root],
+            |r| r.get(0),
+        )
+        .ok())
+}
+
+/// Who owns a tag: the registered root, `Some("")` when the tag has nodes
+/// but no registration (stores predating the registry), or `None` when free.
+fn tag_owner(db: &Connection, tag: &str) -> Result<Option<String>> {
+    if let Ok(root) = db.query_row(
+        "SELECT root FROM global_roots WHERE tag = ?1",
+        rusqlite::params![tag],
+        |r| r.get::<_, String>(0),
+    ) {
+        return Ok(Some(root));
     }
+    let used: i64 = db.query_row(
+        "SELECT COUNT(*) FROM nodes WHERE repo = ?1",
+        rusqlite::params![tag],
+        |r| r.get(0),
+    )?;
+    Ok(if used > 0 { Some(String::new()) } else { None })
+}
+
+/// Resolve which tag this addition writes:
+/// - A registered root reuses its own tag (explicit `--as` must agree).
+/// - A new root with an explicit tag claims it, erroring when another root
+///   owns that tag — never pruning a foreign graph.
+/// - A new root without `--as` picks the first free candidate; every
+///   candidate is normalized BEFORE the collision check, so `Foo-Bar` and
+///   `foo_bar` cannot converge onto an existing tag.
+fn resolve_tag(db: &Connection, repo_root: &Path, explicit: Option<&str>) -> Result<String> {
+    ensure_roots_table(db)?;
+    let root = root_key(repo_root);
+    if let Some(existing) = registered_tag(db, &root)? {
+        match explicit {
+            Some(want) => {
+                let want = normalize_tag(want);
+                if want == existing {
+                    return Ok(existing);
+                }
+                return Err(AstriaError::Graph(format!(
+                    "root {} is already registered as tag '{existing}'; remove it first (`global remove {existing}`) to re-register as '{want}'",
+                    repo_root.display()
+                )));
+            }
+            None => return Ok(existing),
+        }
+    }
+
+    if let Some(want) = explicit {
+        let want = normalize_tag(want);
+        return match tag_owner(db, &want)? {
+            // Registered to someone else, or in use by an unknown owner:
+            // replacing either silently would delete another root's graph.
+            Some(other) => Err(AstriaError::Graph(format!(
+                "tag '{want}' is already in use{}; choose another with --as",
+                if other.is_empty() {
+                    String::new()
+                } else {
+                    format!(" by {other}")
+                }
+            ))),
+            None => Ok(want),
+        };
+    }
+
     let name = repo_root
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("repo")
-        .to_string();
-    let taken: Vec<String> = {
-        let mut stmt = db
-            .prepare("SELECT DISTINCT repo FROM nodes WHERE repo IS NOT NULL")
-            .unwrap();
-        stmt.query_map([], |r| r.get::<_, String>(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
-    };
-    if !taken.contains(&name) {
-        return normalize_tag(&name);
-    }
+        .unwrap_or("repo");
     let parent = repo_root
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("dir");
-    let widened = format!("{parent}_{name}");
-    if !taken.contains(&widened) {
-        return normalize_tag(&widened);
-    }
-    let mut n = 2;
-    loop {
-        let candidate = format!("{}-{n}", name);
-        if !taken.contains(&candidate) {
-            return normalize_tag(&candidate);
+    // Check each candidate AS IT IS BUILT: the previous shape pushed a
+    // thousand candidates and returned an error before ever testing them,
+    // so every registration without --as failed.
+    for candidate in [
+        normalize_tag(name),
+        normalize_tag(&format!("{parent}_{name}")),
+    ] {
+        if tag_owner(db, &candidate)?.is_none() {
+            return Ok(candidate);
         }
-        n += 1;
     }
+    for n in 2..=1000 {
+        let candidate = normalize_tag(&format!("{name}-{n}"));
+        if tag_owner(db, &candidate)?.is_none() {
+            return Ok(candidate);
+        }
+    }
+    Err(AstriaError::Graph(format!(
+        "no free tag for {} after 1000 attempts",
+        repo_root.display()
+    )))
 }
 
 fn normalize_tag(tag: &str) -> String {
     astria_core::ids::normalize_id(tag)
 }
 
+#[derive(Debug)]
 pub struct GlobalAddResult {
     pub tag: String,
     pub nodes_added: usize,
@@ -97,8 +186,10 @@ pub struct GlobalAddResult {
     pub cross_repo_call_edges: usize,
 }
 
-/// Merge one repo's graph into the global store. Re-adding a tag prunes the
-/// old version first, so the operation is idempotent.
+/// Merge one repo's graph into the global store. Re-adding a registered
+/// root updates its own tag; the prune of the previous version happens
+/// inside the same transaction as the replacement, so a failed re-add
+/// rolls back to the prior complete graph instead of losing it.
 pub fn global_add(
     repo_root: &Path,
     explicit_tag: Option<&str>,
@@ -112,7 +203,8 @@ pub fn global_add(
         )));
     }
     let repo_db = astria_core::db::open_db(&repo_db_path)?;
-    let tag = pick_tag(&store.db, repo_root, explicit_tag);
+    let tag = resolve_tag(&store.db, repo_root, explicit_tag)?;
+    let root = root_key(repo_root);
     // Forward-slash form to match the normalized paths stored in node rows;
     // strip Windows' extended-length `\\?\` prefix that canonicalize adds.
     let repo_root_prefix = repo_root
@@ -123,10 +215,12 @@ pub fn global_add(
         .replace("\\\\?\\", "")
         .replace('\\', "/");
 
-    // Idempotency: replace this tag wholesale.
-    prune_tag(&store.db, &tag)?;
-
+    // One transaction covers prune, replacement, registration, AND the
+    // cross-repo relation passes: commit the new graph or keep the old one
+    // — never a half-written store, and never derived relations that
+    // reference a store state that no longer exists.
     let tx = store.db.unchecked_transaction()?;
+    prune_tag(&tx, &tag)?;
 
     // Sourced nodes get `<tag>::` prefixes; stubs/externals keep their ids
     // (and unify by label across repos via the label-dedup below).
@@ -161,8 +255,7 @@ pub fn global_add(
                     r.get(7)?,
                 ))
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         for (id, label, file_type, source_file, source_line, docstring, signature, community) in
             rows
@@ -238,8 +331,7 @@ pub fn global_add(
                     r.get(6)?,
                 ))
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         for (source, target, relation, confidence, score, source_file, source_line) in rows {
             let gs = local_to_global.get(&source).cloned();
@@ -270,14 +362,28 @@ pub fn global_add(
         }
     }
 
+    // Registration is part of the same transaction: a root only claims its
+    // tag when the graph actually landed.
+    tx.execute(
+        "INSERT OR REPLACE INTO global_roots (root, tag) VALUES (?1, ?2)",
+        rusqlite::params![root, tag],
+    )?;
+
+    // Relation reconciliation inside the same transaction (a store snapshot
+    // must never be observable with the new nodes but stale same_type_as /
+    // cross-repo-call edges), and the publication generation advances with
+    // the store so snapshot caches invalidate.
+    let same_type_edges = add_same_type_edges(&tx)?;
+    let cross_repo_call_edges = resolve_cross_repo_calls(&tx)?;
+    bump_generation(&tx)?;
     tx.commit()?;
 
     let mut result = GlobalAddResult {
         tag,
         nodes_added: 0,
         edges_added,
-        same_type_edges: 0,
-        cross_repo_call_edges: 0,
+        same_type_edges,
+        cross_repo_call_edges,
     };
     {
         let count: i64 = store
@@ -290,10 +396,6 @@ pub fn global_add(
             .unwrap_or(0);
         result.nodes_added = count as usize;
     }
-
-    // Cross-repo passes.
-    result.same_type_edges = add_same_type_edges(store)?;
-    result.cross_repo_call_edges = resolve_cross_repo_calls(store)?;
     Ok(result)
 }
 
@@ -335,15 +437,15 @@ pub fn global_list(store: &GlobalStore) -> Result<Vec<GlobalListEntry>> {
 
 /// `same_type_as` edges: same-label type declarations (non-function shapes)
 /// across different repos. Pairwise; skips existing edges.
-fn add_same_type_edges(store: &GlobalStore) -> Result<usize> {
+fn add_same_type_edges(db: &Connection) -> Result<usize> {
     // Re-derive: retract the pass's own prior edges first.
-    store.db.execute(
+    db.execute(
         "DELETE FROM edges WHERE context = 'global' AND relation = 'same_type_as'",
         [],
     )?;
     let mut groups: HashMap<String, Vec<String>> = HashMap::new();
     {
-        let mut stmt = store.db.prepare(
+        let mut stmt = db.prepare(
             "SELECT id, label FROM nodes
              WHERE repo IS NOT NULL AND file_type = 'code' AND label NOT LIKE '%()'",
         )?;
@@ -359,7 +461,7 @@ fn add_same_type_edges(store: &GlobalStore) -> Result<usize> {
         let repos: HashMap<String, String> = {
             let mut m: HashMap<String, String> = HashMap::new();
             for id in &ids {
-                if let Some(repo) = repo_of(&store.db, id)? {
+                if let Some(repo) = repo_of(db, id)? {
                     m.entry(id.clone()).or_insert(repo);
                 }
             }
@@ -371,15 +473,13 @@ fn add_same_type_edges(store: &GlobalStore) -> Result<usize> {
         }
         for i in 0..ids.len() {
             for j in (i + 1)..ids.len() {
-                let (Some(ra), Some(rb)) =
-                    (repo_of(&store.db, &ids[i])?, repo_of(&store.db, &ids[j])?)
-                else {
+                let (Some(ra), Some(rb)) = (repo_of(db, &ids[i])?, repo_of(db, &ids[j])?) else {
                     continue;
                 };
                 if ra == rb {
                     continue;
                 }
-                let done = store.db.execute(
+                let done = db.execute(
                     "INSERT OR IGNORE INTO edges (source, target, relation, confidence, confidence_score, source_file, context)
                      VALUES (?1, ?2, 'same_type_as', 'INFERRED', 0.9, '', 'global')",
                     rusqlite::params![ids[i], ids[j]],
@@ -407,15 +507,15 @@ fn repo_of(db: &Connection, id: &str) -> Result<Option<String>> {
 /// Fail closed on ambiguity. The pass deletes and re-derives its own prior
 /// output, so a call resolved while unambiguous is retracted if a second
 /// same-named definition appears later.
-fn resolve_cross_repo_calls(store: &GlobalStore) -> Result<usize> {
-    store.db.execute(
+fn resolve_cross_repo_calls(db: &Connection) -> Result<usize> {
+    db.execute(
         "DELETE FROM edges WHERE context = 'global' AND relation = 'calls'",
         [],
     )?;
     // Candidates: function-shaped, sourced (repo-tagged) nodes.
     let mut candidates: HashMap<String, Vec<(String, String)>> = HashMap::new(); // bare name -> [(id, repo)]
     {
-        let mut stmt = store.db.prepare(
+        let mut stmt = db.prepare(
             "SELECT id, label, repo FROM nodes
              WHERE repo IS NOT NULL AND file_type = 'code' AND label LIKE '%()'",
         )?;
@@ -434,7 +534,7 @@ fn resolve_cross_repo_calls(store: &GlobalStore) -> Result<usize> {
 
     let mut added = 0usize;
     {
-        let mut stmt = store.db.prepare(
+        let mut stmt = db.prepare(
             "SELECT e.source, e.target, tgt.label, e.source_file FROM edges e
              JOIN nodes tgt ON tgt.id = e.target
              WHERE e.relation = 'calls' AND e.confidence = 'INFERRED'
@@ -450,7 +550,7 @@ fn resolve_cross_repo_calls(store: &GlobalStore) -> Result<usize> {
             .collect();
 
         for (source, _stub_target, stub_label, source_file) in rows {
-            let caller_repo = match repo_of(&store.db, &source)? {
+            let caller_repo = match repo_of(db, &source)? {
                 Some(r) => r,
                 None => continue,
             };
@@ -466,7 +566,7 @@ fn resolve_cross_repo_calls(store: &GlobalStore) -> Result<usize> {
                 continue;
             }
             let (target, _) = matches[0];
-            let done = store.db.execute(
+            let done = db.execute(
                 "INSERT OR IGNORE INTO edges (source, target, relation, confidence, confidence_score, source_file, context)
                  VALUES (?1, ?2, 'calls', 'INFERRED', 0.8, ?3, 'global')",
                 rusqlite::params![source, target, source_file],
@@ -478,7 +578,44 @@ fn resolve_cross_repo_calls(store: &GlobalStore) -> Result<usize> {
 }
 
 pub fn global_remove(store: &GlobalStore, tag: &str) -> Result<usize> {
-    prune_tag(&store.db, &normalize_tag(tag))
+    let tag = normalize_tag(tag);
+    // Removal is one transaction: prune, registry delete, relation
+    // re-derivation (a call that just became unambiguous may resolve now),
+    // and the generation bump — the store never shows a half-removed state.
+    ensure_roots_table(&store.db)?;
+    let tx = store.db.unchecked_transaction()?;
+    let removed = prune_tag(&tx, &tag)?;
+    tx.execute(
+        "DELETE FROM global_roots WHERE tag = ?1",
+        rusqlite::params![tag],
+    )?;
+    add_same_type_edges(&tx)?;
+    resolve_cross_repo_calls(&tx)?;
+    bump_generation(&tx)?;
+    tx.commit()?;
+    Ok(removed)
+}
+
+/// Advance the store's publication generation. Snapshot caches key on this
+/// stamp, so every writer must move it or readers keep serving the previous
+/// graph.
+pub fn bump_generation(db: &Connection) -> Result<()> {
+    let stamp = crate::pipeline::generation_stamp(db);
+    db.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', ?1)",
+        [&stamp],
+    )?;
+    Ok(())
+}
+
+/// The store's publication generation, when any writer has stamped one.
+pub fn generation_of_meta(db: &Connection) -> Option<String> {
+    db.query_row(
+        "SELECT value FROM _meta WHERE key = 'graph_generation'",
+        [],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
 }
 
 /// Shortest path over the global store (BFS, undirected) — the `global path`
@@ -651,6 +788,165 @@ mod tests {
             })
             .unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn re_adding_a_registered_root_updates_its_own_tag() {
+        // Re-adding the same root WITHOUT --as must update the existing tag,
+        // not allocate `alpha-2` alongside it.
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = dir.path().join("alpha");
+        seed_repo(&repo_a, "alpha");
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = open_global_store_at(&store_dir.path().join("global.db")).unwrap();
+        global_add(&repo_a, Some("alpha"), &store).unwrap();
+        let res = global_add(&repo_a, None, &store).unwrap();
+        assert_eq!(res.tag, "alpha", "registered roots reuse their tag");
+        let repos: i64 = store
+            .db
+            .query_row(
+                "SELECT COUNT(DISTINCT repo) FROM nodes WHERE repo IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(repos, 1, "no duplicate tag for the same root");
+    }
+
+    #[test]
+    fn explicit_tag_owned_by_another_root_is_rejected() {
+        // Adding root B with --as alpha when alpha belongs to root A must
+        // error; previously it pruned A's graph and replaced it.
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = dir.path().join("alpha");
+        let repo_b = dir.path().join("beta");
+        seed_repo(&repo_a, "alpha");
+        seed_repo(&repo_b, "beta");
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = open_global_store_at(&store_dir.path().join("global.db")).unwrap();
+        global_add(&repo_a, Some("alpha"), &store).unwrap();
+        let err = global_add(&repo_b, Some("alpha"), &store).unwrap_err();
+        assert!(err.to_string().contains("already in use"), "got: {err}");
+        // alpha's graph survived.
+        let alpha_nodes: i64 = store
+            .db
+            .query_row("SELECT COUNT(*) FROM nodes WHERE repo = 'alpha'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(alpha_nodes > 0, "rejected add must not prune the owner");
+    }
+
+    #[test]
+    fn registered_root_cannot_be_retagged_without_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = dir.path().join("alpha");
+        seed_repo(&repo_a, "alpha");
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = open_global_store_at(&store_dir.path().join("global.db")).unwrap();
+        global_add(&repo_a, Some("alpha"), &store).unwrap();
+        let err = global_add(&repo_a, Some("renamed"), &store).unwrap_err();
+        assert!(err.to_string().contains("already registered"), "got: {err}");
+    }
+
+    #[test]
+    fn tag_collision_check_uses_normalized_names() {
+        // `--as Foo-Bar` normalizes to `foo_bar`; if `foo_bar` is taken the
+        // add must fail, not pass the raw-name check and prune the owner.
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = dir.path().join("alpha");
+        let repo_b = dir.path().join("beta");
+        seed_repo(&repo_a, "alpha");
+        seed_repo(&repo_b, "beta");
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = open_global_store_at(&store_dir.path().join("global.db")).unwrap();
+        global_add(&repo_a, Some("foo_bar"), &store).unwrap();
+        let err = global_add(&repo_b, Some("Foo-Bar"), &store).unwrap_err();
+        assert!(err.to_string().contains("already in use"), "got: {err}");
+        let foo_bar_nodes: i64 = store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM nodes WHERE repo = 'foo_bar'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            foo_bar_nodes > 0,
+            "converging name must not prune the owner"
+        );
+    }
+
+    #[test]
+    fn new_root_without_as_allocates_a_free_tag() {
+        // F13 regression: the candidate loop used to return an error before
+        // ever checking the candidates it built.
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = dir.path().join("alpha");
+        seed_repo(&repo_a, "alpha");
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = open_global_store_at(&store_dir.path().join("global.db")).unwrap();
+        let res = global_add(&repo_a, None, &store).unwrap();
+        assert_eq!(res.tag, "alpha");
+    }
+
+    #[test]
+    fn untagged_collisions_walk_the_candidate_ladder() {
+        // Two different roots named "alpha": the second must get
+        // <parent>_<name> or alpha-2, not an error.
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = dir.path().join("one").join("alpha");
+        let repo_b = dir.path().join("two").join("alpha");
+        std::fs::create_dir_all(&repo_a).unwrap();
+        std::fs::create_dir_all(&repo_b).unwrap();
+        seed_repo(&repo_a, "alpha");
+        seed_repo(&repo_b, "alpha");
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = open_global_store_at(&store_dir.path().join("global.db")).unwrap();
+        let first = global_add(&repo_a, None, &store).unwrap();
+        assert_eq!(first.tag, "alpha");
+        let second = global_add(&repo_b, None, &store).unwrap();
+        assert!(
+            second.tag == "two_alpha" || second.tag.starts_with("alpha-"),
+            "unexpected tag {}",
+            second.tag
+        );
+    }
+
+    #[test]
+    fn global_add_stamps_a_publication_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = dir.path().join("alpha");
+        seed_repo(&repo_a, "alpha");
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = open_global_store_at(&store_dir.path().join("global.db")).unwrap();
+        assert_eq!(super::generation_of_meta(&store.db), None);
+        global_add(&repo_a, Some("alpha"), &store).unwrap();
+        assert!(super::generation_of_meta(&store.db).is_some());
+    }
+
+    #[test]
+    fn remove_frees_the_tag_for_a_new_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = dir.path().join("alpha");
+        let repo_b = dir.path().join("beta");
+        seed_repo(&repo_a, "alpha");
+        seed_repo(&repo_b, "beta");
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = open_global_store_at(&store_dir.path().join("global.db")).unwrap();
+        global_add(&repo_a, Some("alpha"), &store).unwrap();
+        global_remove(&store, "alpha").unwrap();
+        // The tag is claimable again after removal.
+        global_add(&repo_b, Some("alpha"), &store).unwrap();
+        let repos: Vec<String> = store
+            .db
+            .prepare("SELECT DISTINCT repo FROM nodes WHERE repo IS NOT NULL")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(repos, vec!["alpha".to_string()]);
     }
 
     #[test]

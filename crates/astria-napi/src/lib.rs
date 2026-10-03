@@ -67,17 +67,43 @@ pub struct RiskReportJs {
 }
 
 #[napi]
-pub fn risk_report(root: String, staged: Option<bool>) -> napi::Result<RiskReportJs> {
+pub fn risk_report(
+    root: String,
+    staged: Option<bool>,
+    base: Option<String>,
+    head: Option<String>,
+) -> napi::Result<RiskReportJs> {
     let root_pb = PathBuf::from(&root);
     let root_canon = root_pb
         .canonicalize()
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let (db, _) = pipeline::load_graph_db_flexible(&root_pb)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let changed = risk::git_changed_files(&root_canon, staged.unwrap_or(false))
+    // Range mode scores a committed diff (base...head) — the CI/PR shape,
+    // where a clean checkout has no working-tree changes to diff. Without
+    // both refs, the working tree or index is scored for local use.
+    let scope = match (&base, &head) {
+        (Some(base), Some(head)) => risk::DiffScope::Range {
+            base: base.clone(),
+            head: head.clone(),
+        },
+        (None, None) => {
+            if staged.unwrap_or(false) {
+                risk::DiffScope::Staged
+            } else {
+                risk::DiffScope::WorkingTree
+            }
+        }
+        _ => {
+            return Err(napi::Error::from_reason(
+                "risk report range mode requires both --base and --head",
+            ))
+        }
+    };
+    let changed = risk::git_changed_files(&root_canon, &scope)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let outcome =
-        risk::compute_risk(&db, &changed).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let outcome = risk::compute_risk(&db, &changed, Some(&root_canon))
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let project_root = Some(
         root_canon
             .to_string_lossy()
@@ -1394,6 +1420,10 @@ pub struct McpHttpOptions {
     /// Extra projects: "name=path" entries, or bare "path" entries whose
     /// project name defaults to the directory's file name.
     pub projects: Option<Vec<String>>,
+    /// Browser origins allowed to send requests (exact match, e.g.
+    /// "http://localhost:5173"). Requests carrying an Origin header are
+    /// refused unless listed; native clients send none and always pass.
+    pub allowed_origins: Option<Vec<String>>,
 }
 
 /// MCP over HTTP with multi-project serving: one process, many graphs.
@@ -1411,11 +1441,9 @@ pub fn run_mcp_http_server(opts: McpHttpOptions) -> napi::Result<()> {
     let root_pb = root_pb
         .canonicalize()
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let mut config = astria_mcp::HttpServerConfig::from_roots(
-        &root_pb,
-        &opts.projects.unwrap_or_default(),
-    )
-    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let mut config =
+        astria_mcp::HttpServerConfig::from_roots(&root_pb, &opts.projects.unwrap_or_default())
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     if let Some(host) = opts.host {
         config.host = host;
     }
@@ -1429,6 +1457,7 @@ pub fn run_mcp_http_server(opts: McpHttpOptions) -> napi::Result<()> {
         .or_else(|| std::env::var("ASTRIA_MCP_TOKEN").ok())
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
+    config.allowed_origins = opts.allowed_origins.unwrap_or_default();
     astria_mcp::serve_http(config).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
@@ -1484,11 +1513,13 @@ pub fn merge_graphs(
     root_a: String,
     root_b: String,
     out_root: String,
+    same_repo: Option<bool>,
 ) -> napi::Result<PipelineResultJs> {
-    let result = merge::merge_graphs(
+    let result = merge::merge_graphs_with_policy(
         &PathBuf::from(&root_a),
         &PathBuf::from(&root_b),
         &PathBuf::from(&out_root),
+        same_repo.unwrap_or(false),
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     Ok(PipelineResultJs {

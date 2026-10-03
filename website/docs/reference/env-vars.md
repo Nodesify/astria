@@ -23,6 +23,7 @@ Activates the `enrich_with_semantics()` pipeline stage (docs, papers, images →
 | `ASTRIA_LLM_MODEL` | Overrides the default model for the selected backend (for Bedrock: the full model id, e.g. `anthropic.claude-3-5-sonnet-20241022-v2:0`) |
 | `ASTRIA_LLM_CONCURRENCY` | Size of the parallel LLM worker pool (default `4`, clamped to 1–8) |
 | `ASTRIA_LLM_BUDGET` | Total LLM token budget (input + output) per run; `0` or unset = unlimited. When the budget is exhausted, extraction stops loudly before publishing; engine calls, judge calls, and usage-less responses all count toward it |
+| `ASTRIA_LLM_MAX_CHUNKS` | Per-file semantic extraction chunk cap (default `8`, clamped to 1–64). Content needing more chunks fails loudly instead of being truncated and cached as complete — raise this for oversized generated files |
 | `ASTRIA_LLM_COMMUNITY_MAX` | Cap on community-naming LLM calls per run for `--label-communities` (default `48`) |
 | `OPENAI_API_KEY` | Fallback key for the OpenAI-compatible backend |
 | `OPENAI_BASE_URL` | Fallback base URL for the OpenAI-compatible backend when `ASTRIA_LLM_BASE_URL` is unset |

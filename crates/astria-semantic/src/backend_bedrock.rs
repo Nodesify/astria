@@ -60,7 +60,9 @@ impl BedrockBackend {
             .or_else(|| std::env::var("AWS_SECRET_ACCESS_KEY").ok())
             .filter(|k| !k.trim().is_empty())
             .ok_or_else(|| {
-                AstriaError::Graph("no AWS secret access key: set ASTRIA_AWS_SECRET_ACCESS_KEY".into())
+                AstriaError::Graph(
+                    "no AWS secret access key: set ASTRIA_AWS_SECRET_ACCESS_KEY".into(),
+                )
             })?;
         let session_token = astria_core::env_var("AWS_SESSION_TOKEN")
             .or_else(|| std::env::var("AWS_SESSION_TOKEN").ok())
@@ -81,10 +83,7 @@ impl BedrockBackend {
             access_key: access_key.trim().to_string(),
             secret_key: secret_key.trim().to_string(),
             session_token,
-            encoded_path: format!(
-                "/model/{}/converse",
-                sigv4::encode_model_id(model.trim())
-            ),
+            encoded_path: format!("/model/{}/converse", sigv4::encode_model_id(model.trim())),
         })
     }
 
@@ -145,7 +144,7 @@ impl BedrockBackend {
         serde_json::json!({
             "system": [{"text": system_prompt(file_type)}],
             "messages": [{"role": "user", "content": [{"text": content}]}],
-            "inferenceConfig": {"maxTokens": 4096}
+            "inferenceConfig": {"maxTokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT}
         })
     }
 
@@ -157,25 +156,42 @@ impl BedrockBackend {
                 {"image": {"format": format, "source": {"bytes": image_b64}}},
                 {"text": "Extract the knowledge graph from this image."}
             ]}],
-            "inferenceConfig": {"maxTokens": 4096}
+            "inferenceConfig": {"maxTokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT}
         })
     }
 
     pub(crate) fn extract_raw(&self, body: serde_json::Value) -> Result<SemanticExtraction> {
-        self.converse_text(&body).map(|text| parse_extraction_text(&text))
+        let text = self.converse_text(&body)?;
+        parse_extraction_text(&text)
     }
 
     /// One Converse call: sign, send with the shared retry/backoff POST, and
-    /// return the assistant text (all text content parts joined).
+    /// return the assistant text (all text content parts joined). The
+    /// termination status is checked BEFORE the text is accepted: a
+    /// `max_tokens`/refusal/content-filter stop means the output is partial
+    /// or refused, and a valid-looking prefix must not become a cached
+    /// "successful" extraction.
     fn converse_text(&self, body: &serde_json::Value) -> Result<String> {
         let body_str = serde_json::to_string(body)?;
         let headers = self.sign_headers(body_str.as_bytes())?;
-        let hdr: Vec<(&str, &str)> =
-            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let hdr: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let response = post_json(&self.agent, &self.url(), &hdr, &body_str, "AWS Bedrock")?;
         let json: serde_json::Value = serde_json::from_str(&response)
             .map_err(|e| AstriaError::Graph(format!("Failed to parse Bedrock response: {e}")))?;
         enrichment::record_usage(&json);
+        if let Some(stop) = json.get("stopReason").and_then(|s| s.as_str()) {
+            // Complete terminations; every other stop reason (max_tokens,
+            // refusal, content_filter_failed, ...) is a failed response.
+            if !matches!(stop, "end_turn" | "stop_sequence" | "tool_use") {
+                return Err(AstriaError::Graph(format!(
+                    "Bedrock stopped with '{stop}' (model {}): the reply is not complete output",
+                    self.model
+                )));
+            }
+        }
         let text = json
             .pointer("/output/message/content")
             .and_then(|c| c.as_array())
@@ -229,6 +245,10 @@ impl SemanticBackend for BedrockBackend {
     }
 
     fn complete(&self, system: &str, user: &str) -> Result<String> {
-        self.converse_text(&self.chat_body(system, user, 1024))
+        self.converse_text(&self.chat_body(
+            system,
+            user,
+            enrichment::MAX_OUTPUT_TOKENS_COMPLETE as u32,
+        ))
     }
 }

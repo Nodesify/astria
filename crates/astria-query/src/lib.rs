@@ -255,7 +255,7 @@ pub fn query_graph_with_semantic(
 #[allow(clippy::too_many_arguments)]
 fn query_graph_loaded(
     db: &Connection,
-    loaded: LoadedGraph,
+    loaded: std::sync::Arc<LoadedGraph>,
     question: &str,
     mode: &str,
     depth: usize,
@@ -2070,7 +2070,7 @@ at the lake house');",
         "test".to_string()
     }
 
-    fn loaded(db: &Connection, key: &str) -> LoadedGraph {
+    fn loaded(db: &Connection, key: &str) -> std::sync::Arc<LoadedGraph> {
         load_graph_snapshot(db, key).unwrap()
     }
 

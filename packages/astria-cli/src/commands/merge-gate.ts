@@ -25,6 +25,10 @@ export interface MergeGateOptions {
   minHealth?: string;
   maxRisk?: string;
   staged?: boolean;
+  /** Score the committed diff `base...head` instead of the working tree (CI/PR mode). */
+  base?: string;
+  /** Head ref of the range; defaults to HEAD when --base is given. */
+  head?: string;
   json?: boolean;
 }
 
@@ -38,13 +42,41 @@ function lastCommitTime(projectRoot: string): number | null {
   try {
     const out = execFileSync('git', ['log', '-1', '--format=%ct'], {
       cwd: projectRoot,
-      encoding: 'utf-8',
+      encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const t = Number(out.trim());
     return Number.isFinite(t) && t > 0 ? t : null;
   } catch {
     return null;
+  }
+}
+
+// Git work-tree detection that distinguishes the three outcomes: inside a
+// work tree, genuinely outside one (exit 128 + "not a git repository"), or
+// the git invocation FAILED (git missing, broken index, ...). A failure is
+// an error string — never a silent "not a repository" skip, which would
+// let the gate pass without the diff-risk check it promised.
+function gitWorkTreeStatus(projectRoot: string): { inside: boolean; error: string | null } {
+  try {
+    const out = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { inside: out.trim() === 'true', error: null };
+  } catch (e: any) {
+    const stderr = String(e?.stderr ?? '');
+    if (e?.status === 128 && /not a git repository/i.test(stderr)) {
+      return { inside: false, error: null };
+    }
+    if (e?.code === 'ENOENT') {
+      return { inside: false, error: 'git executable not found on PATH' };
+    }
+    return {
+      inside: false,
+      error: (stderr || e?.message || String(e)).trim().split('\n').pop() || 'git failed',
+    };
   }
 }
 
@@ -78,6 +110,8 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
     //    than the configured ceiling. Both signals matter — a graph built
     //    after a commit can still be ancient, and a recent build can
     //    predate the commit it is supposed to describe.
+    // One probe for both freshness (covers-head) and diff-risk.
+    const gitStatus = gitWorkTreeStatus(opts.graph);
     if (exists) {
       const publishedAt = Number(build?.graphPublishedAt);
       const ageHours = Number.isFinite(publishedAt) && publishedAt > 0
@@ -91,15 +125,34 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
           : `graph is ${ageHours.toFixed(1)} h old (limit ${maxAgeHours} h)`,
       });
 
-      const commitTime = lastCommitTime(opts.graph);
-      if (commitTime !== null && Number.isFinite(publishedAt) && publishedAt > 0) {
-        checks.push({
-          name: 'graph-covers-head',
-          passed: publishedAt >= commitTime,
-          detail: publishedAt >= commitTime
-            ? 'graph was built after the last commit'
-            : 'graph predates the last commit — run `astria update` before merging',
-        });
+      // Freshness also verifies the graph covers the current HEAD. Inside a
+      // repository, an unreadable commit time is a failed check, not a
+      // silently skipped one.
+      if (Number.isFinite(publishedAt) && publishedAt > 0) {
+        if (gitStatus.error !== null) {
+          checks.push({
+            name: 'graph-covers-head',
+            passed: false,
+            detail: `git detection failed: ${gitStatus.error} — cannot verify the graph covers HEAD`,
+          });
+        } else if (gitStatus.inside) {
+          const commitTime = lastCommitTime(opts.graph);
+          if (commitTime === null) {
+            checks.push({
+              name: 'graph-covers-head',
+              passed: false,
+              detail: 'could not determine the last commit time — cannot verify the graph covers HEAD',
+            });
+          } else {
+            checks.push({
+              name: 'graph-covers-head',
+              passed: publishedAt >= commitTime,
+              detail: publishedAt >= commitTime
+                ? 'graph was built after the last commit'
+                : 'graph predates the last commit — run `astria update` before merging',
+            });
+          }
+        }
       }
     }
 
@@ -112,17 +165,46 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
         detail: `health score ${health.score}/100 (floor ${minHealth}), grade ${health.grade}`,
       });
 
-      // 4. Blast radius of the pending diff (skipped cleanly outside git).
-      try {
-        const risk = riskReport(opts.graph, opts.staged === true);
-        const riskPassed = risk.score <= maxRisk;
+      // 4. Blast radius of the pending diff. Outside a git repository is an
+      //    explicit, visible skip; a FAILED git detection is a FAILED check
+      //    — never a silent "not a repository" skip that lets the gate pass
+      //    without the diff-risk it promised.
+      if (gitStatus.error !== null) {
         checks.push({
           name: 'diff-risk',
-          passed: riskPassed,
-          detail: `diff risk ${risk.score}/100 (ceiling ${maxRisk}), ${risk.impacted} symbols impacted across ${risk.changedFiles.length} changed file(s)`,
+          passed: false,
+          detail: `git detection failed: ${gitStatus.error} — cannot score the diff`,
         });
-      } catch {
-        // Not a git repo or no diff — the risk check is informational only.
+      } else if (!gitStatus.inside) {
+        checks.push({
+          name: 'diff-risk',
+          passed: true,
+          detail: 'skipped — not a git repository (risk requires a diff to score)',
+        });
+      } else {
+        try {
+          const useRange = opts.base !== undefined;
+          const risk = riskReport(
+            opts.graph,
+            opts.staged === true && !useRange,
+            useRange ? (opts.base as string) : undefined,
+            useRange ? (opts.head ?? 'HEAD') : undefined,
+          );
+          const riskPassed = risk.score <= maxRisk;
+          checks.push({
+            name: 'diff-risk',
+            passed: riskPassed,
+            detail: useRange
+              ? `diff risk ${risk.score}/100 for ${opts.base}...${opts.head ?? 'HEAD'} (ceiling ${maxRisk}), ${risk.impacted} symbols impacted across ${risk.changedFiles.length} changed file(s)`
+              : `diff risk ${risk.score}/100 (ceiling ${maxRisk}), ${risk.impacted} symbols impacted across ${risk.changedFiles.length} changed file(s)`,
+          });
+        } catch (e: any) {
+          checks.push({
+            name: 'diff-risk',
+            passed: false,
+            detail: `risk calculation failed: ${e?.message || e}`,
+          });
+        }
       }
     }
 

@@ -26,16 +26,18 @@ pub mod types;
 /// docstrings; uniquely-resolved call edges carry `RESOLVED` provenance.
 /// v13: video/audio files route through whisper transcription instead of
 /// empty `media` extractions; invalidates the empty cached results.
-pub const EXTRACTION_HASH_VERSION: &str = "v13";
+/// v14: case-preserving structural node ids (path-digest file stems,
+/// declaration disambiguators, disambiguation-aware edge rewiring); all
+/// previously cached extractions carry the old folded ids and must be
+/// re-extracted.
+pub const EXTRACTION_HASH_VERSION: &str = "v14";
 
-/// Reads `ASTRIA_<name>`, falling back to the deprecated `GRAPHIFY_<name>`
-/// spelling so pre-1.0 env configs keep working. The new name wins; an empty
-/// `ASTRIA_` value falls through to the legacy name.
+/// Reads `ASTRIA_<name>`. Empty values count as unset. There is no legacy
+/// spelling fallback: pre-1.0 configurations rebuild with current names.
 pub fn env_var(name: &str) -> Option<String> {
     std::env::var(format!("ASTRIA_{name}"))
         .ok()
         .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var(format!("GRAPHIFY_{name}")).ok())
 }
 
 pub use db::{open_db, open_db_in_memory};

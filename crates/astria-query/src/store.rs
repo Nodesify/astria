@@ -63,7 +63,60 @@ impl LoadedGraph {
     }
 }
 
-pub(crate) fn load_graph(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph> {
+/// Process-wide snapshot cache, keyed by database path. Each request used
+/// to reload every node and edge (O(V+E) allocations); the HTTP transport
+/// multiplies that per request. A cached snapshot is reused only while the
+/// publication generation (`_meta.graph_generation`) is unchanged — one
+/// cheap scalar query per load replaces the full reload, and read
+/// consistency is preserved because each snapshot was loaded atomically
+/// and never mutates after construction.
+static SNAPSHOT_CACHE: std::sync::Mutex<Option<(String, String, std::sync::Arc<LoadedGraph>)>> =
+    std::sync::Mutex::new(None);
+
+/// The database's publication generation, when a writer has stamped one.
+/// A MISSING stamp is never treated as a shared empty value: two un-stamped
+/// databases (or one database before and after an unstamped write) would
+/// compare equal and serve a stale snapshot. Un-stamped databases bypass
+/// the cache entirely.
+fn generation_of(db: &Connection) -> Option<String> {
+    db.query_row(
+        "SELECT value FROM _meta WHERE key = 'graph_generation'",
+        [],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+pub(crate) fn load_graph(
+    db: &Connection,
+    db_path: &str,
+) -> astria_core::Result<std::sync::Arc<LoadedGraph>> {
+    // Cheap freshness probe first: when the generation stamp matches the
+    // cached snapshot, share it instead of rebuilding the graph. Databases
+    // without a stamp (never written by this pipeline lineage) always load
+    // uncached and are never cached.
+    let normalized_path = std::path::Path::new(db_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let generation = generation_of(db);
+    if let Some(generation) = generation.as_ref() {
+        let cache = SNAPSHOT_CACHE.lock().unwrap();
+        if let Some((cached_path, cached_gen, snapshot)) = cache.as_ref() {
+            if *cached_path == normalized_path && cached_gen == generation {
+                return Ok(std::sync::Arc::clone(snapshot));
+            }
+        }
+    }
+
+    let loaded = std::sync::Arc::new(load_graph_uncached(db, db_path)?);
+    if let Some(generation) = generation {
+        *SNAPSHOT_CACHE.lock().unwrap() =
+            Some((normalized_path, generation, std::sync::Arc::clone(&loaded)));
+    }
+    Ok(loaded)
+}
+
+fn load_graph_uncached(db: &Connection, db_path: &str) -> astria_core::Result<LoadedGraph> {
     // Project root: two levels above the DB file (root/.astria/db.sqlite).
     let root = std::path::Path::new(db_path)
         .parent()
@@ -98,8 +151,7 @@ pub(crate) fn load_graph(db: &Connection, db_path: &str) -> astria_core::Result<
                     row.get(7)?,
                 ))
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         for (id, label, ft, sf, line, comm, doc, sig) in rows {
             nodes.push((id, label, ft, sf, line, comm, doc, sig));
         }
@@ -146,8 +198,7 @@ pub(crate) fn load_graph(db: &Connection, db_path: &str) -> astria_core::Result<
                     row.get(6)?,
                 ))
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         for (src, tgt, rel, conf, score, sf, line) in rows {
             if let (Some(&s), Some(&t)) = (id_to_idx.get(&src), id_to_idx.get(&tgt)) {
                 graph.add_edge(
@@ -187,7 +238,7 @@ pub(crate) fn read_snapshot(
 pub(crate) fn load_graph_snapshot(
     db: &Connection,
     db_path: &str,
-) -> astria_core::Result<LoadedGraph> {
+) -> astria_core::Result<std::sync::Arc<LoadedGraph>> {
     let transaction = read_snapshot(db)?;
     let loaded = load_graph(db, db_path)?;
     if let Some(transaction) = transaction {

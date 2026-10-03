@@ -223,6 +223,13 @@ impl JevClient {
             "state": state,
             "questions": questions,
         }))?;
+        // Judge requests are billable calls too: claim a reservation for
+        // the request body plus the complete-call output allowance before
+        // it flies. The guard releases on every exit path.
+        let _reservation = crate::enrichment::reserve_budget(
+            body.len(),
+            crate::enrichment::MAX_OUTPUT_TOKENS_COMPLETE,
+        )?;
         let owned_headers = [
             ("Content-Type", "application/json".to_string()),
             ("Authorization", format!("Bearer {}", self.config.api_key)),

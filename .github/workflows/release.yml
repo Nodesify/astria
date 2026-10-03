@@ -154,7 +154,7 @@ jobs:
         # npm install (not ci) is deliberate: --install-strategy=nested shapes
         # node_modules for the napi tooling; scripts/check-napi-version.mjs
         # guards the lockfile dependency this bypasses.
-        run: cd packages/astria-cli && npm install --install-strategy=nested
+        run: cd packages/astria-cli && npm ci
       - name: Build native binary
         env:
           NAPI_RS_CLI_VERSION: '2.18.4'
@@ -202,7 +202,7 @@ jobs:
             cp "$dir"*.node "packages/astria-cli/npm/$platform/astria.$platform.node"
           done
       - name: Install dependencies
-        run: cd packages/astria-cli && npm install --install-strategy=nested
+        run: cd packages/astria-cli && npm ci
       - name: Build CLI
         run: cd packages/astria-cli && npm run build
       - name: Upgrade npm for OIDC

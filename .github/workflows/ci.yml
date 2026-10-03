@@ -70,10 +70,9 @@ jobs:
         with:
           key: ${{ hashFiles('**/Cargo.lock') }}
       - name: Install dependencies
-        # npm install (not ci) is deliberate: --install-strategy=nested shapes
-        # node_modules for the napi build; the drift check above guards the
-        # lockfile dependency this bypasses.
-        run: cd packages/astria-cli && npm install --install-strategy=nested
+        # npm ci is reproducible: the root .npmrc pins install-strategy
+        # and the lockfile encodes the nested tree the napi build expects.
+        run: cd packages/astria-cli && npm ci
       - name: Build native module
         env:
           NAPI_RS_CLI_VERSION: '2.18.4'
@@ -117,3 +116,8 @@ jobs:
           node-version: '22'
       - name: Docs vs code drift guard
         run: node scripts/check-docs-sync.mjs
+      - name: Install viewer toolchain
+        # esbuild is needed to rebuild the viewer bundle for the drift check.
+        run: npm install --no-audit --no-fund
+      - name: Viewer bundle drift guard
+        run: node scripts/check-viewer-bundle.mjs

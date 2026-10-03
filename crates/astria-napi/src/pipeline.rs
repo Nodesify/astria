@@ -672,9 +672,35 @@ fn run_pipeline_inner(
             |row| row.get(0),
         )
         .ok();
+    // Files whose external extraction was skipped last run (missing
+    // tooling/credentials) are owed a retry: an unchanged tree must still
+    // rebuild so installing the dependency is picked up.
+    let pending_retry: Vec<String> = db
+        .query_row(
+            "SELECT value FROM _meta WHERE key = 'pending_retry'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default();
     let files_processed = detected.new.len() + detected.changed.len();
+    // F22: Google Workspace shortcuts (.gdoc/.gsheet/.gslides) never change
+    // locally when the cloud document is edited, so content-hash detection
+    // alone cannot see remote edits. The build decision probes the remote
+    // revision for unchanged shortcuts; a moved revision forces a rebuild,
+    // and the gws extractor re-fingerprints (and re-exports) on the cache
+    // miss. An unreachable revision (offline, no credentials) leaves the
+    // cached extraction standing — remote freshness requires connectivity,
+    // and offline runs degrade to local hashes by design.
+    let gws_stale = stale_workspace_shortcuts(root, db, &detected.unchanged);
+    if gws_stale > 0 {
+        eprintln!("[astria] {gws_stale} workspace document(s) changed remotely; refreshing");
+    }
     let needs_build = files_processed > 0
         || !detected.removed.is_empty()
+        || !pending_retry.is_empty()
+        || gws_stale > 0
         || previous_configuration.as_deref() != Some(build_configuration.as_str());
     // Resolve against the complete corpus, including cached raw facts for
     // unchanged callers. AST parsing still runs only on cache misses.
@@ -683,11 +709,24 @@ fn run_pipeline_inner(
         let mut extractions = astria_extract::extract(&files, root, db)?;
         let semantic_stats =
             semantic_pass::enrich_with_semantics(&files, &mut extractions, db, &configuration)?;
+        // Deferred extractions (unavailable media tooling, missing workspace
+        // credentials) publish nothing this run and stay pending: their old
+        // facts are preserved and the next run retries them.
+        let deferred: Vec<std::path::PathBuf> = extractions
+            .iter()
+            .filter(|e| {
+                (e.language == "media" || e.language == "gws")
+                    && e.nodes.is_empty()
+                    && e.edges.is_empty()
+            })
+            .map(|e| e.file_path.clone())
+            .collect();
         let build_result = graph_update::publish(
             root,
             db,
             &detected,
             &extractions,
+            &deferred,
             &build_configuration,
             options.cli_version,
         )?;
@@ -818,7 +857,12 @@ fn run_pipeline_inner(
     }
     let report = astria_report::generate_report(db, &analysis)?;
 
-    write_report(astria_dir, &report)?;
+    // Stamp the publication generation BEFORE writing artifacts: the JSON
+    // and report then carry exactly this generation, and the stamp lands
+    // after the last graph-mutating write of the run so snapshot caches key
+    // on the final state.
+    let stamp = stamp_generation(db, astria_dir)?;
+    write_report(astria_dir, &report, &stamp)?;
     export_json(db, &astria_dir.join("graph.json"))?;
 
     Ok(PipelineResult {
@@ -835,12 +879,107 @@ fn run_pipeline_inner(
     })
 }
 
-fn write_report(astria_dir: &Path, report: &str) -> astria_core::Result<()> {
-    std::fs::write(astria_dir.join("graph_report.md"), report)?;
+fn write_report(astria_dir: &Path, report: &str, stamp: &str) -> astria_core::Result<()> {
+    // The generation rides in a footer so a consumer can verify the report,
+    // graph.json, and database all describe the same publication.
+    let body = format!("{report}\n---\n\ngeneration: {stamp}\n");
+    write_artifact_atomic(&astria_dir.join("graph_report.md"), body.as_bytes())
+}
+
+/// Write a published artifact whole: temp sibling + rename, so a concurrent
+/// reader never observes a torn or half-written file.
+fn write_artifact_atomic(path: &Path, bytes: &[u8]) -> astria_core::Result<()> {
+    let tmp = path.with_extension("new");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
+/// Fresh publication stamp: node count + wall-clock millis. Every writer
+/// (pipeline, merge, global) mints one at publication so snapshot caches
+/// keyed on it invalidate.
+pub(crate) fn generation_stamp(db: &Connection) -> String {
+    format!(
+        "{}:{}",
+        db.query_row(
+            "SELECT COUNT(*) + COALESCE((SELECT MAX(id) FROM pipeline_runs), 0) FROM nodes",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap_or(0),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    )
+}
+
+/// Record the generation this publication produced, in the database and in
+/// a sidecar stamp file next to the artifacts. Returns the stamp.
+fn stamp_generation(db: &Connection, astria_dir: &Path) -> astria_core::Result<String> {
+    let stamp = generation_stamp(db);
+    db.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', ?1)",
+        [&stamp],
+    )?;
+    write_artifact_atomic(&astria_dir.join("generation.txt"), stamp.as_bytes())?;
+    Ok(stamp)
+}
+
+/// Unchanged workspace shortcuts whose remote revision moved since the last
+/// extraction. Freshness = some extraction_cache row for the path carries
+/// the CURRENT revision in its fingerprint (`:gws-rev:<rev>` suffix).
+fn stale_workspace_shortcuts(
+    root: &Path,
+    db: &Connection,
+    unchanged: &[astria_detect::FileEntry],
+) -> usize {
+    let mut stale = 0usize;
+    for entry in unchanged {
+        let is_shortcut = entry
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e.to_lowercase().as_str(), "gdoc" | "gsheet" | "gslides"));
+        if !is_shortcut {
+            continue;
+        }
+        let path = root.join(&entry.path);
+        let Some(rev) = astria_gws::remote_revision(&path) else {
+            continue; // offline / no credentials: local hash stands
+        };
+        let key = astria_paths::normalize(&path);
+        let fresh = db
+            .prepare("SELECT content_hash FROM extraction_cache WHERE file_path = ?1")
+            .and_then(|mut stmt| {
+                let hashes: Vec<String> = stmt
+                    .query_map(rusqlite::params![key], |r| r.get::<_, String>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(hashes
+                    .iter()
+                    .any(|h| h.ends_with(&format!(":gws-rev:{rev}"))))
+            })
+            .unwrap_or(false);
+        if !fresh {
+            stale += 1;
+        }
+    }
+    stale
+}
+
 pub fn export_json(db: &Connection, out_path: &Path) -> astria_core::Result<()> {
+    // One read snapshot for every table: without a shared transaction a
+    // concurrent publisher can land between the node and edge reads and the
+    // exported graph would mix two builds.
+    let snapshot = db.unchecked_transaction()?;
+    export_json_snapshot(&snapshot, out_path)
+}
+
+fn export_json_snapshot(
+    snapshot: &rusqlite::Transaction<'_>,
+    out_path: &Path,
+) -> astria_core::Result<()> {
+    let db: &Connection = snapshot;
     let mut nodes = Vec::new();
     let mut stmt = db.prepare(
         "SELECT id, label, file_type, source_file, source_line, docstring, community, signature FROM nodes",
@@ -886,9 +1025,19 @@ pub fn export_json(db: &Connection, out_path: &Path) -> astria_core::Result<()> 
 
     let mut edges = Vec::new();
     let mut stmt = db.prepare(
-        "SELECT source, target, relation, confidence, confidence_score, source_file FROM edges",
+        "SELECT source, target, relation, confidence, confidence_score, source_file, source_line, context FROM edges",
     )?;
-    let edge_rows: Vec<(String, String, String, String, Option<f64>, String)> = stmt
+    #[allow(clippy::type_complexity)]
+    let edge_rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        Option<f64>,
+        String,
+        Option<i64>,
+        Option<String>,
+    )> = stmt
         .query_map([], |row| {
             Ok((
                 row.get(0)?,
@@ -897,12 +1046,16 @@ pub fn export_json(db: &Connection, out_path: &Path) -> astria_core::Result<()> 
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
             ))
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    for (src, tgt, rel, conf, score, sf) in &edge_rows {
+    // Evidence provenance rides with every edge: the line anchor and the
+    // derived-pass ownership ('global'/'deep') are part of the exchange
+    // format, matching what SQLite stores.
+    for (src, tgt, rel, conf, score, sf, line, context) in &edge_rows {
         edges.push(serde_json::json!({
             "source": src,
             "target": tgt,
@@ -910,6 +1063,8 @@ pub fn export_json(db: &Connection, out_path: &Path) -> astria_core::Result<()> 
             "confidence": conf,
             "confidence_score": score,
             "source_file": sf,
+            "source_line": line,
+            "context": context,
         }));
     }
 
@@ -948,7 +1103,8 @@ pub fn export_json(db: &Connection, out_path: &Path) -> astria_core::Result<()> 
                 r.get::<_, i64>(5)?,
             ))
         })?;
-        rows.filter_map(|r| r.ok())
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
             .map(|(id, label, summary, source, cohesion, size)| {
                 serde_json::json!({
                     "id": id,
@@ -962,14 +1118,26 @@ pub fn export_json(db: &Connection, out_path: &Path) -> astria_core::Result<()> 
             .collect()
     };
 
+    // Publication metadata: the generation stamped for this build rides with
+    // the export so consumers can detect mismatched artifact/database pairs.
+    let meta: serde_json::Map<String, serde_json::Value> = {
+        let mut stmt = db.prepare("SELECT key, value FROM _meta")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::Value::String(v)))
+            .collect()
+    };
+
     let graph = serde_json::json!({
         "nodes": nodes,
         "edges": edges,
         "hyperedges": hyperedges,
         "communities": communities,
+        "_meta": meta,
     });
     let json = serde_json::to_string_pretty(&graph)?;
-    std::fs::write(out_path, json)?;
+    write_artifact_atomic(out_path, json.as_bytes())?;
     Ok(())
 }
 

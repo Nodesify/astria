@@ -103,7 +103,11 @@ const optDeps: Record<string, string> = pkg.optionalDependencies ?? {};
 // One pin per published release target. Bump deliberately when a target
 // is added or retired — this assert exists to force that update to be
 // conscious (and to catch a stale pin, which ships an old .node binary).
-assert(Object.keys(optDeps).length === 7, 'all 7 napi platform packages should be pinned');
+// Five targets are published today; @nodesify/astria-linux-x64-musl,
+// -win32-arm64-msvc and -linux-arm64-musl still 404 on the registry and
+// must NOT be pinned until they publish (a pin npm cannot resolve breaks
+// `npm ci` for every consumer).
+assert(Object.keys(optDeps).length === 5, 'all 5 published napi platform packages should be pinned');
 for (const [name, pinned] of Object.entries(optDeps)) {
   assert(pinned === pkg.version, `${name} pinned at ${pinned} should match package version ${pkg.version}`);
 }

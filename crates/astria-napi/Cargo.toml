@@ -17,6 +17,7 @@ napi-derive = "3"
 astria-bolt = { workspace = true }
 astria-core = { workspace = true }
 astria-detect = { workspace = true }
+astria-gws = { workspace = true }
 astria-extract = { workspace = true }
 astria-export = { workspace = true }
 astria-build = { workspace = true }

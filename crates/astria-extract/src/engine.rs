@@ -25,6 +25,23 @@ use astria_audio::TranscribeError;
 use astria_core::AstriaError;
 use astria_gws::GwsError;
 
+/// Store the document layer's converted text for a binary format (PDF,
+/// office, workspace export, media transcript), keyed by content hash: the
+/// semantic pass enriches exactly this text instead of re-reading the raw
+/// bytes.
+fn save_derived_text(db: &Connection, file_path: &Path, hash: &str, text: &str) {
+    let key = astria_paths::normalize(file_path);
+    if let Err(e) = db.execute(
+        "INSERT OR REPLACE INTO derived_text (file_path, content_hash, text) VALUES (?1, ?2, ?3)",
+        rusqlite::params![key, hash, text],
+    ) {
+        eprintln!(
+            "warning: failed to store derived text for {}: {e}",
+            file_path.display()
+        );
+    }
+}
+
 pub fn extract(
     files: &[PathBuf],
     root: &Path,
@@ -84,6 +101,7 @@ pub fn extract(
             }
             let md_text = astria_pdf::extract_to_markdown(file_path)?;
             let extraction = extract_markdown_from_string(file_path, "pdf", &md_text, naming);
+            save_derived_text(db, file_path, &hash, &md_text);
             save_cache(db, file_path, &hash, &extraction);
             results.push(extraction);
             continue;
@@ -99,6 +117,7 @@ pub fn extract(
             }
             let md_text = astria_office::extract_to_markdown(file_path)?;
             let extraction = extract_markdown_from_string(file_path, "office", &md_text, naming);
+            save_derived_text(db, file_path, &hash, &md_text);
             save_cache(db, file_path, &hash, &extraction);
             results.push(extraction);
             continue;
@@ -109,12 +128,22 @@ pub fn extract(
         // Missing credentials or a failed export degrade to a notice and
         // an UNcached empty extraction (same shape as the whisper route).
         if matches!(ext, "gdoc" | "gsheet" | "gslides") {
+            // The local shortcut bytes never change when the cloud document
+            // is edited; the cache fingerprint therefore includes the
+            // remote revision when one is reachable (online refresh).
+            // Offline it falls back to the local hash: the cached
+            // extraction stands until credentials return.
+            let hash = match astria_gws::remote_revision(file_path) {
+                Some(rev) => format!("{hash}:gws-rev:{rev}"),
+                None => hash,
+            };
             if let Some(cached) = check_cache(db, file_path, &hash) {
                 results.push(cached);
                 continue;
             }
             match astria_gws::export_to_markdown(file_path) {
                 Ok(md_text) => {
+                    save_derived_text(db, file_path, &hash, &md_text);
                     let extraction =
                         extract_markdown_from_string(file_path, "gws", &md_text, naming);
                     save_cache(db, file_path, &hash, &extraction);
@@ -160,6 +189,7 @@ pub fn extract(
             }
             match astria_audio::transcribe_to_markdown(file_path, root) {
                 Ok(md_text) => {
+                    save_derived_text(db, file_path, &hash, &md_text);
                     let extraction =
                         extract_markdown_from_string(file_path, "transcript", &md_text, naming);
                     save_cache(db, file_path, &hash, &extraction);
@@ -284,6 +314,13 @@ pub fn extract(
         results.push(extraction);
     }
 
+    // Same-file case-distinct declarations that normalize to the same id
+    // get deterministic disambiguators before anything downstream sees
+    // them (idempotent for cached results from before this pass existed).
+    for result in &mut results {
+        crate::naming::disambiguate_duplicate_ids(result);
+    }
+
     // Cross-file resolution: try to match call/import targets to known node IDs
     resolve_cross_file_references(&mut results);
 
@@ -383,12 +420,12 @@ mod tests {
         let results = extract(&[py], dir.path(), &db).unwrap();
         let ids: Vec<&String> = results[0].nodes.iter().map(|n| &n.id).collect();
         assert!(
-            ids.iter().any(|id| id.ends_with("::greeter")),
-            "class id should be normalized lowercase: {ids:?}"
+            ids.iter().any(|id| id.ends_with("::Greeter")),
+            "class id keeps its case (structural identity is case-sensitive): {ids:?}"
         );
         assert!(
-            ids.iter().any(|id| id.contains("my_module")),
-            "file stem 'My-Module' should normalize to my_module: {ids:?}"
+            ids.iter().any(|id| id.contains("My_Module_PY_")),
+            "file stem keeps case; punctuation collapses: {ids:?}"
         );
         assert!(
             ids.iter().any(|id| id.ends_with("::greet")),
@@ -474,8 +511,8 @@ mod tests {
             "/// block above the item is the docstring"
         );
         assert!(
-            model.id.ends_with("::model"),
-            "id scopes under the file: {}",
+            model.id.ends_with("::MODEL"),
+            "id scopes under the file (case preserved): {}",
             model.id
         );
         assert!(

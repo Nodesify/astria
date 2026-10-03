@@ -9,7 +9,7 @@ keywords: [architecture, pipeline, rust, sqlite, tree-sitter, crates, data model
 
 astria turns source code into a queryable knowledge graph. It uses AST-based extraction via tree-sitter for deterministic, fast analysis, stored in a SQLite database.
 
-The project is a Rust workspace with 16 domain-specific crates and a Node.js CLI package.
+The project is a Rust workspace with 20 domain-specific crates and a Node.js CLI package.
 
 - **Language**: Rust 2021
 - **Build system**: Cargo + npm
@@ -33,7 +33,7 @@ flowchart LR
 The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`. Validation runs before graph assembly: every node needs id/label/file_type/source_file, every edge needs existing endpoints and a valid confidence class — a corrupted extraction fails the run with the full violation list (`diagnose` reports the same classes of problem read-only on an existing graph).
 
 1. **detect()** (`astria-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run. Manifest ingestion also covers dependency manifests — including Cargo workspace members and internal path dependencies (`crate::*` nodes with `crate_depends_on` edges).
-2. **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Uses 25 registered language configurations; discovery and parser selection share `astria-core/src/languages.rs`, with AST rules in `src/langs/`.
+2. **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Uses 42 registered language configurations; discovery and parser selection share `astria-core/src/languages.rs`, with AST rules in `src/langs/`.
 3. **enrich_with_semantics()** (`astria-semantic`, optional): When `--backend` or `ASTRIA_LLM_BACKEND` explicitly selects a backend, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results. With `--judge jev`, a TypeSafe System One judge layer wraps the engine: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking.
 4. **build()** (`astria-build`): Publishes extracted nodes and edges into SQLite. The extraction reference pass reconciles cross-file references before publication; deduplication runs as a derived pass.
 5. **embed()** (`astria-embed`, optional `--embed`): Computes local node embeddings (fastembed/ONNX, no API key) and adds `similar_to` edges ahead of clustering, so community detection consumes semantic similarity. Also runs without the flag when embeddings already exist and the model is cached.
@@ -98,6 +98,7 @@ The graph is stored in `.astria/db.sqlite`. The listing below is generated from 
 - `node_embeddings`: `node_id`, `dim`, `embedding`, `model`, `embedded_at`
 - `query_pairs`: `source`, `target`, `question`, `hits`, `first_seen`, `last_seen`
 - `_meta`: `key`, `value`
+- `derived_text`: `file_path`, `content_hash`, `text`
 <!-- schema:end -->
 
 Notes: `node_embeddings` is populated only by `--embed` builds; `_meta` carries the schema version and build stamps (what `status` reads); while a process has the database open you will also see `db.sqlite-wal` / `db.sqlite-shm` sidecars (SQLite WAL mode).

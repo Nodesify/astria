@@ -4,7 +4,7 @@ astria turns source code into a queryable knowledge graph. It uses AST-based ext
 
 ## Overview
 
-The project is structured as a Rust workspace with 16 domain-specific crates and a Node.js CLI.
+The project is structured as a Rust workspace with 20 domain-specific crates and a Node.js CLI.
 
 **Language**: Rust 2021
 **Build system**: Cargo + npm
@@ -19,7 +19,7 @@ detect() → extract() → enrich_with_semantics() → build() → dedup_nodes()
 The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 
 1.  **detect()** (`astria-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run.
-2.  **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Uses 25 registered language configurations; discovery and parser selection share `astria-core/src/languages.rs`, with AST rules in `src/langs/`.
+2.  **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Uses 42 registered language configurations; discovery and parser selection share `astria-core/src/languages.rs`, with AST rules in `src/langs/`.
 3.  **enrich_with_semantics()** (`astria-semantic`, optional): When `--backend` or `ASTRIA_LLM_BACKEND` explicitly selects a backend, extracts topics, concepts, and entities (including from images via vision) concurrently and caches the results. With `--judge jev`, a TypeSafe System One judge layer wraps the engine: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking.
 4.  **build()** (`astria-build`): Publishes extracted nodes and edges into SQLite. The extraction reference pass reconciles cross-file references before publication; semantic entity deduplication runs as a derived pass. Code and test definitions, packages, rationale nodes and file identities are excluded from fuzzy merging: identical method names in different scopes remain separate definitions.
 5.  **embed()** (`astria-embed`, optional `--embed`): Computes local node embeddings (fastembed/ONNX, no API key) and adds `similar_to` edges ahead of the cluster() stage, so community detection consumes semantic similarity.
