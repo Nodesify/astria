@@ -348,8 +348,132 @@ fn stderr_tail(bytes: &[u8]) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Media URL download (yt-dlp)
+// ---------------------------------------------------------------------------
+
+/// Locate yt-dlp on PATH (Windows `.exe` suffix included).
+pub fn locate_ytdlp() -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        if cfg!(windows) {
+            let candidate = dir.join("yt-dlp.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        let candidate = dir.join("yt-dlp");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Deterministic, filesystem-safe slug for a media URL (used as the output
+/// file stem so repeated ingests of the same URL overwrite in place).
+pub fn slug_from_url(url: &str) -> String {
+    let mut slug: String = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    slug.truncate(80);
+    slug
+}
+
+/// Download a video/audio URL to `out_dir` via yt-dlp. With ffmpeg present
+/// the result is a 16 kHz mono WAV (ready for whisper-cli); without it the
+/// raw bestaudio track is saved for a later run once ffmpeg is installed.
+pub fn download_media_to(url: &str, out_dir: &Path) -> Result<PathBuf, TranscribeError> {
+    let ytdlp = locate_ytdlp().ok_or_else(|| {
+        TranscribeError::Unavailable(
+            "yt-dlp not found on PATH - media URLs cannot be downloaded. Install yt-dlp: https://github.com/yt-dlp/yt-dlp"
+                .to_string(),
+        )
+    })?;
+    std::fs::create_dir_all(out_dir)
+        .map_err(|e| TranscribeError::Failed(format!("media download dir: {e}")))?;
+
+    let slug = slug_from_url(url);
+    // Only ffmpeg availability matters here; whisper is not involved yet.
+    let ffmpeg = Tooling::probe().ok().and_then(|t| t.ffmpeg);
+    let mut command = std::process::Command::new(&ytdlp);
+    command.current_dir(out_dir);
+    if ffmpeg.is_some() {
+        command.args([
+            "-x",
+            "--audio-format",
+            "wav",
+            "--postprocessor-args",
+            "ffmpeg:-ac 1 -ar 16000",
+        ]);
+        command.arg("-o").arg(format!("{slug}.wav"));
+    } else {
+        command.args(["-f", "bestaudio"]);
+        command.arg("-o").arg(format!("{slug}.%(ext)s"));
+    }
+    command.arg(url);
+
+    let output = command
+        .output()
+        .map_err(|e| TranscribeError::Failed(format!("yt-dlp spawn failed: {e}")))?;
+    if !output.status.success() {
+        return Err(TranscribeError::Failed(format!(
+            "yt-dlp failed: {}",
+            stderr_tail(&output.stderr)
+        )));
+    }
+
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    let entries =
+        std::fs::read_dir(out_dir).map_err(|e| TranscribeError::Failed(format!("{e}")))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| TranscribeError::Failed(format!("{e}")))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with(&slug) {
+            let modified = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            if newest.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+                newest = Some((modified, entry.path()));
+            }
+        }
+    }
+    newest
+        .map(|(_, p)| p)
+        .ok_or_else(|| TranscribeError::Failed("yt-dlp produced no file".to_string()))
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn media_slug_is_deterministic_and_safe() {
+        let a = slug_from_url("https://youtu.be/dQw4w9WgXcQ?si=x");
+        let b = slug_from_url("https://youtu.be/dQw4w9WgXcQ?si=x");
+        assert_eq!(a, b);
+        assert!(!a.contains('/'));
+        assert!(!a.contains(':'));
+        assert!(a.len() <= 80);
+    }
+
+    #[test]
+    fn download_media_degrades_to_unavailable_without_ytdlp() {
+        let dir = tempfile::tempdir().unwrap();
+        match download_media_to("https://youtu.be/dQw4w9WgXcQ", dir.path()) {
+            Err(TranscribeError::Unavailable(notice)) => {
+                assert!(notice.contains("yt-dlp"), "notice: {notice}");
+                assert!(notice.contains("https://github.com/yt-dlp/yt-dlp"));
+            }
+            // yt-dlp installed on this machine: a network/ffmpeg failure or a
+            // real download are both acceptable local outcomes.
+            Err(TranscribeError::Failed(_)) => {}
+            Ok(_) => {}
+        }
+    }
     use super::*;
     use std::fs;
 

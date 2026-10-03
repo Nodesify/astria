@@ -17,16 +17,62 @@ Activates the `enrich_with_semantics()` pipeline stage (docs, papers, images →
 
 | Variable | Purpose |
 |---|---|
-| `ASTRIA_LLM_BACKEND` | Required opt-in selection: `claude` (or `anthropic`), `openai` (or `openai-compatible`/`openai_compatible`), or `gemini` (or `google`); `none` disables enrichment |
+| `ASTRIA_LLM_BACKEND` | Required opt-in selection: `claude` (or `anthropic`), `openai` (or `openai-compatible`/`openai_compatible`), `azure` (or `azure-openai`), `bedrock` (or `aws`), `kimi` (or `moonshot`), or `gemini` (or `google`); `none` disables enrichment |
 | `ASTRIA_LLM_API_KEY` | API key for the explicitly selected backend; does not select or activate a backend |
 | `ASTRIA_LLM_BASE_URL` | Endpoint for any OpenAI-compatible provider (OpenAI, DeepSeek, Ollama, LM Studio, custom) |
-| `ASTRIA_LLM_MODEL` | Overrides the default model for the selected backend |
+| `ASTRIA_LLM_MODEL` | Overrides the default model for the selected backend (for Bedrock: the full model id, e.g. `anthropic.claude-3-5-sonnet-20241022-v2:0`) |
 | `ASTRIA_LLM_CONCURRENCY` | Size of the parallel LLM worker pool (default `4`, clamped to 1–8) |
 | `ASTRIA_LLM_BUDGET` | Total LLM token budget (input + output) per run; `0` or unset = unlimited. When the budget is exhausted, extraction stops loudly before publishing; engine calls, judge calls, and usage-less responses all count toward it |
 | `ASTRIA_LLM_COMMUNITY_MAX` | Cap on community-naming LLM calls per run for `--label-communities` (default `48`) |
 | `OPENAI_API_KEY` | Fallback key for the OpenAI-compatible backend |
 | `OPENAI_BASE_URL` | Fallback base URL for the OpenAI-compatible backend when `ASTRIA_LLM_BASE_URL` is unset |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Key for the Gemini backend |
+
+## Azure OpenAI backend
+
+`ASTRIA_LLM_BACKEND=azure` authenticates with Azure's `api-key` header against a resource deployment (the OpenAI-compatible backend cannot produce this auth shape). Requests go to `{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={version}`.
+
+| Variable | Purpose |
+|---|---|
+| `ASTRIA_AZURE_ENDPOINT` | Resource endpoint, e.g. `https://my-resource.openai.azure.com` (fallback `AZURE_OPENAI_ENDPOINT`) |
+| `ASTRIA_AZURE_DEPLOYMENT` | Deployment name hosting the chat model — the deployment, not the model name (fallback `AZURE_OPENAI_DEPLOYMENT_NAME`) |
+| `ASTRIA_AZURE_API_KEY` | Resource API key (fallback `AZURE_OPENAI_API_KEY`) |
+| `ASTRIA_AZURE_API_VERSION` | API version query parameter (default `2024-10-21`) |
+
+## AWS Bedrock backend
+
+`ASTRIA_LLM_BACKEND=bedrock` calls the Bedrock Converse API with real SigV4 request signing, so standard AWS credentials (static keys or `AWS_SESSION_TOKEN` temporary credentials) work directly — no bearer-token proxy required. Requires `ASTRIA_LLM_MODEL` to name a Bedrock model id.
+
+| Variable | Purpose |
+|---|---|
+| `ASTRIA_AWS_REGION` | AWS region for the Bedrock runtime endpoint (fallbacks: `AWS_REGION`, `AWS_DEFAULT_REGION`) |
+| `ASTRIA_AWS_ACCESS_KEY_ID` | IAM access key (fallback `AWS_ACCESS_KEY_ID`) |
+| `ASTRIA_AWS_SECRET_ACCESS_KEY` | IAM secret key (fallback `AWS_SECRET_ACCESS_KEY`) |
+| `ASTRIA_AWS_SESSION_TOKEN` | Optional session token for temporary credentials (fallback `AWS_SESSION_TOKEN`) |
+
+## Kimi (Moonshot) backend
+
+`ASTRIA_LLM_BACKEND=kimi` is the OpenAI-compatible surface pointed at Moonshot's endpoint. Default model `kimi-k2-0905-preview`.
+
+| Variable | Purpose |
+|---|---|
+| `ASTRIA_KIMI_BASE_URL` | Overrides the endpoint (default `https://api.moonshot.cn/v1`) |
+| `MOONSHOT_API_KEY` / `KIMI_API_KEY` | Kimi API key (also honors `ASTRIA_LLM_API_KEY`, then `OPENAI_API_KEY`) |
+
+## Cost reporting
+
+Every `run`/`update` writes `.astria/cost.json` with the run's measured token spend plus lifetime totals. These two optional rates add a dollar estimate:
+
+| Variable | Purpose |
+|---|---|
+| `ASTRIA_COST_INPUT_PER_MTOK` | USD per 1M input tokens; both rates must be set for an estimate to appear |
+| `ASTRIA_COST_OUTPUT_PER_MTOK` | USD per 1M output tokens |
+
+## MCP HTTP serving
+
+| Variable | Purpose |
+|---|---|
+| `ASTRIA_MCP_TOKEN` | Default bearer token for `astria mcp --http` (the `--token` flag overrides). Required whenever the server binds a non-loopback host |
 
 Keys and endpoint variables do not activate enrichment. Without explicit backend selection, the pipeline makes no LLM calls. Per-run overrides without env vars: `astria run . --backend openai --model gpt-4o-mini`.
 
@@ -68,6 +114,14 @@ Optional decision layer over the selected backend (`--judge jev` / `ASTRIA_LLM_J
 | Variable | Purpose |
 |---|---|
 | `ASTRIA_WHISPER_MODEL` | Path to a whisper.cpp ggml `.bin` model file. Unset, astria uses the first `*.bin` in `<project>/.astria/models/`, then in `~/.astria/models/` |
+
+## Google Workspace
+
+`.gdoc`/`.gsheet`/`.gslides` shortcut files are resolved to Drive file ids and exported through the Drive API v3 (`files.export`). Missing credentials skip the file with a one-line notice — builds never fail on Google Workspace files.
+
+| Variable | Meaning |
+|---|---|
+| `ASTRIA_GDRIVE_ACCESS_TOKEN` | OAuth bearer token with the Drive read-only scope. Unset, astria refreshes via a gcloud Application Default Credentials file (`authorized_user` JSON from `gcloud auth application-default login`), honoring `GOOGLE_APPLICATION_CREDENTIALS` when set |
 
 ## Query logging
 

@@ -14,13 +14,16 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 
 use crate::cache::{check_cache, file_hash, save_cache};
-use crate::docs::{extract_markdown, extract_markdown_from_string, extract_rst, extract_text_file};
+use crate::docs::{
+    extract_html, extract_markdown, extract_markdown_from_string, extract_rst, extract_text_file,
+};
 use crate::langs;
 use crate::refs::resolve_cross_file_references;
 use crate::schema::Extraction;
 use crate::walkers::extract_single;
 use astria_audio::TranscribeError;
 use astria_core::AstriaError;
+use astria_gws::GwsError;
 
 pub fn extract(
     files: &[PathBuf],
@@ -62,7 +65,7 @@ pub fn extract(
         }
 
         // Markdown: plain-text extraction (no tree-sitter)
-        if ext == "md" || ext == "mdx" {
+        if ext == "md" || ext == "mdx" || ext == "qmd" {
             if let Some(cached) = check_cache(db, file_path, &hash) {
                 results.push(cached);
                 continue;
@@ -83,6 +86,64 @@ pub fn extract(
             let extraction = extract_markdown_from_string(file_path, "pdf", &md_text, naming);
             save_cache(db, file_path, &hash, &extraction);
             results.push(extraction);
+            continue;
+        }
+
+        // Office docs (.docx/.xlsx): extract via astria-office, then parse
+        // as markdown - the same shape as the PDF route above. Deterministic,
+        // so results are cached.
+        if ext == "docx" || ext == "xlsx" {
+            if let Some(cached) = check_cache(db, file_path, &hash) {
+                results.push(cached);
+                continue;
+            }
+            let md_text = astria_office::extract_to_markdown(file_path)?;
+            let extraction = extract_markdown_from_string(file_path, "office", &md_text, naming);
+            save_cache(db, file_path, &hash, &extraction);
+            results.push(extraction);
+            continue;
+        }
+
+        // Google Workspace shortcuts (.gdoc/.gsheet/.gslides): resolve
+        // the Drive link, export via the Drive API, parse as markdown.
+        // Missing credentials or a failed export degrade to a notice and
+        // an UNcached empty extraction (same shape as the whisper route).
+        if matches!(ext, "gdoc" | "gsheet" | "gslides") {
+            if let Some(cached) = check_cache(db, file_path, &hash) {
+                results.push(cached);
+                continue;
+            }
+            match astria_gws::export_to_markdown(file_path) {
+                Ok(md_text) => {
+                    let extraction =
+                        extract_markdown_from_string(file_path, "gws", &md_text, naming);
+                    save_cache(db, file_path, &hash, &extraction);
+                    results.push(extraction);
+                }
+                Err(GwsError::Unavailable(notice)) => {
+                    if transcription_notices.insert(notice.clone()) {
+                        eprintln!("[astria] google workspace skipped: {notice}");
+                    }
+                    results.push(Extraction {
+                        file_path: file_path.clone(),
+                        language: "gws".into(),
+                        nodes: Vec::new(),
+                        edges: Vec::new(),
+                    });
+                }
+                Err(GwsError::Failed(message)) => {
+                    eprintln!(
+                        "warning: google workspace export failed for {}: {message}",
+                        file_path.display()
+                    );
+                    results.push(Extraction {
+                        file_path: file_path.clone(),
+                        language: "gws".into(),
+                        nodes: Vec::new(),
+                        edges: Vec::new(),
+                    });
+                }
+            }
             continue;
         }
 
@@ -131,13 +192,31 @@ pub fn extract(
             continue;
         }
 
-        // Plain text: paragraph-based extraction
-        if ext == "txt" {
+        // HTML: strip tags/scripts/styles, then paragraph-based extraction
+        if ext == "html" || ext == "htm" {
             if let Some(cached) = check_cache(db, file_path, &hash) {
                 results.push(cached);
                 continue;
             }
-            let extraction = extract_text_file(file_path, "text", naming)?;
+            let extraction = extract_html(file_path, naming)?;
+            save_cache(db, file_path, &hash, &extraction);
+            results.push(extraction);
+            continue;
+        }
+
+        // Plain text: paragraph-based extraction (YAML/YML included - config
+        // and docs-as-config files are read as text chunks)
+        if ext == "txt" || ext == "yaml" || ext == "yml" {
+            if let Some(cached) = check_cache(db, file_path, &hash) {
+                results.push(cached);
+                continue;
+            }
+            let language = if ext == "yaml" || ext == "yml" {
+                "yaml"
+            } else {
+                "text"
+            };
+            let extraction = extract_text_file(file_path, language, naming)?;
             save_cache(db, file_path, &hash, &extraction);
             results.push(extraction);
             continue;
@@ -155,6 +234,25 @@ pub fn extract(
             continue;
         }
 
+        // Component files carry their logic in embedded TS/JS blocks;
+        // extract those with the JavaScript/TypeScript grammars.
+        if matches!(ext, "vue" | "svelte" | "astro") {
+            results.push(crate::langs::embedded::extract_component(
+                file_path, naming,
+            )?);
+            continue;
+        }
+
+        // VB.NET and Pascal have no tree-sitter grammar crate; use the
+        // regex-fallback extractors (same approach as upstream graphify).
+        if ext == "vb" {
+            results.push(crate::langs::vb_net::extract_regex(file_path, naming)?);
+            continue;
+        }
+        if matches!(ext, "pas" | "dpr" | "dpk" | "inc") {
+            results.push(crate::langs::pascal::extract_regex(file_path, naming)?);
+            continue;
+        }
         let cfg = match langs::get_language_for_extension(ext) {
             Some(c) => c,
             None => {
@@ -884,5 +982,91 @@ class Greeter:
             .find(|n| n.label == "Greeter")
             .expect("class node");
         assert!(class.signature.is_some());
+    }
+
+    #[test]
+    fn extract_qmd_file_as_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("doc.qmd");
+        fs::write(
+            &file,
+            "---\ntitle: T\n---\n\n# Heading\n\nBody text here.\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[file], dir.path(), &db).unwrap();
+        assert_eq!(results.len(), 1);
+        let ext = &results[0];
+        let joined: String = ext
+            .nodes
+            .iter()
+            .map(|n| format!("{}|{}|{:?}", n.label, n.node_type, n.docstring))
+            .collect();
+        assert!(
+            joined.contains("Heading") || joined.contains("Body"),
+            "content: {joined}"
+        );
+    }
+
+    #[test]
+    fn extract_html_strips_tags_and_scripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("page.html");
+        fs::write(
+            &file,
+            "<html><head><style>p { color: red }</style></head>\n<body>\n<script>evil()</script>\n<h1>Hello</h1>\n<p>World body text.</p>\n</body></html>\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[file], dir.path(), &db).unwrap();
+        assert_eq!(results.len(), 1);
+        let ext = &results[0];
+        assert_eq!(ext.language, "html");
+        let joined = format!(
+            "{}{}",
+            ext.nodes
+                .iter()
+                .map(|n| n.label.as_str())
+                .collect::<Vec<_>>()
+                .join("|"),
+            ext.nodes
+                .iter()
+                .map(|n| n.docstring.as_deref().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("|")
+        );
+        assert!(joined.contains("Hello"), "html text: {joined}");
+        assert!(joined.contains("World body text."), "html text: {joined}");
+        assert!(!joined.contains("evil"), "script must be dropped: {joined}");
+        assert!(
+            !joined.contains("color: red"),
+            "style must be dropped: {joined}"
+        );
+    }
+
+    #[test]
+    fn extract_yaml_as_text_chunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("conf.yaml");
+        fs::write(&file, "service:\n  port: 8080\n  name: astria\n").unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[file], dir.path(), &db).unwrap();
+        assert_eq!(results.len(), 1);
+        let ext = &results[0];
+        assert_eq!(ext.language, "yaml");
+        let joined = format!(
+            "{}{}",
+            ext.nodes
+                .iter()
+                .map(|n| n.label.as_str())
+                .collect::<Vec<_>>()
+                .join("|"),
+            ext.nodes
+                .iter()
+                .map(|n| n.docstring.as_deref().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("|")
+        );
+        assert!(joined.contains("8080"), "yaml content: {joined}");
     }
 }

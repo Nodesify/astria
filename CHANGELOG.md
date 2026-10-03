@@ -6,6 +6,16 @@ this file is the per-version summary.
 
 ## [Unreleased]
 
+### Ingestion & language parity expansion (#A1–A6)
+
+- **17 new registered languages** (25 → 42): SQL (tables/views/functions + `CREATE TRIGGER` via `tree-sitter-sequel`), Julia, R, Fortran, Solidity, Groovy, Luau, Objective-C, OCaml + OCaml Interface, Common Lisp, BYOND DreamMaker (`.dm`), Astro (`.astro`); Vue + Svelte extract embedded `<script>` TS/JS via the JS/TS grammars (`langs::embedded`); VB.NET + Pascal/Delphi use regex declaration extraction (no upstream grammar crate). Every language ships its own extraction test.
+- **Office documents**: new `astria-office` crate — `.docx` (headings/lists/tables via `word/document.xml`) and `.xlsx` (per-sheet markdown tables, 500×30 cap) become document nodes; classified as `Document`.
+- **Google Workspace**: new `astria-gws` crate — `.gdoc`/`.gsheet`/`.gslides` shortcuts resolve a Drive file id and export via Drive API v3 (Docs→text, Sheets→CSV→markdown table, Slides→text); auth via `ASTRIA_GDRIVE_ACCESS_TOKEN` or gcloud ADC refresh; missing credentials skip with a notice, never fail the build (whisper-route semantics, results uncached).
+- **Media URLs**: `astria add` classifies YouTube/Vimeo/Dailymotion/Twitch links and direct media URLs as `UrlKind::Media` and downloads via external `yt-dlp` (16 kHz mono WAV with ffmpeg, raw bestaudio without) into the project for whisper transcription; yt-dlp missing degrades to a stub node with the install hint.
+- **Doc formats**: `.qmd` rides the markdown path, `.html`/`.htm` are tag-stripped (scripts/styles dropped, entities decoded), `.yaml`/`.yml` chunk as text — all classified `Document`.
+- **Rationale comments** generalize across comment styles (`#`, `--`, `;`, `'`, `!`) — hash-comment languages (Ruby, Shell, Elixir, Lua, and the new Julia/R/Groovy/SQL/Luau/Common Lisp/VB.NET/Fortran) now emit `rationale` nodes.
+- Grammars are compile-time optional as before (new `lang-*` features incl. `lang-ocaml-interface`); `EXTRACTION_HASH_VERSION` unchanged — none of these types were previously ingested, so no cache invalidation is needed.
+
 ### Video/audio ingestion — Whisper transcription (#82)
 - **Media files join the graph** — `mp4`/`mov`/`webm`/`mkv`/`avi` video and `mp3`/`wav`/`m4a`/`flac`/`ogg`/`opus`/`aac`/`wma` audio files are transcribed during `run`/`update` and enter the graph as transcript documents through the same markdown pipeline PDFs use. External-binary mode, like `add --postgres` requiring `psql`: transcription runs in [whisper.cpp](https://github.com/ggml-org/whisper.cpp)'s `whisper-cli`, video files also need `ffmpeg` on PATH to demux the audio track (audio-only repos transcribe without it). Nothing is vendored, no API key is involved, and the napi binaries stay small.
 - **Missing tooling degrades to a notice, not a failure** — without `whisper-cli`, a model, or (for video) `ffmpeg`, media files are skipped with one actionable notice per cause per run while the rest of the graph builds normally; failed attempts are never cached, so installing the tooling is picked up on the next run even for unchanged files. Model resolution order: `$ASTRIA_WHISPER_MODEL`, then the first `*.bin` in `<project>/.astria/models/`, then `~/.astria/models/`.

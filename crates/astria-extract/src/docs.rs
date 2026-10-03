@@ -227,6 +227,16 @@ pub(crate) fn extract_text_file(
 ) -> Result<Extraction, AstriaError> {
     let bytes = std::fs::read(path)?;
     let content = String::from_utf8_lossy(&bytes).into_owned();
+    extract_text_from_str(path, language, naming, &content)
+}
+
+/// Extract paragraphs from pre-read text (HTML tag stripping feeds this).
+pub(crate) fn extract_text_from_str(
+    path: &Path,
+    language: &str,
+    naming: &Path,
+    content: &str,
+) -> Result<Extraction, AstriaError> {
     let fid = file_stem(naming);
     let file_id = make_node_id(&[&fid]);
 
@@ -736,6 +746,37 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
         nodes,
         edges,
     })
+}
+
+/// Extract an HTML file as text: scripts/styles are dropped, tags are
+/// stripped, common entities are decoded, then the plain-text paragraph
+/// chunker runs over what remains.
+pub(crate) fn extract_html(path: &Path, naming: &Path) -> Result<Extraction, AstriaError> {
+    let bytes = std::fs::read(path)?;
+    let raw = String::from_utf8_lossy(&bytes).into_owned();
+    let text = strip_html(&raw);
+    extract_text_from_str(path, "html", naming, &text)
+}
+
+static HTML_SCRIPTS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?is)<script\b[^>]*>.*?</script>").expect("static regex")
+});
+static HTML_STYLES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?is)<style\b[^>]*>.*?</style>").expect("static regex")
+});
+static HTML_TAGS: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"(?s)<[^>]*>").expect("static regex"));
+
+fn strip_html(input: &str) -> String {
+    let text = HTML_SCRIPTS.replace_all(input, " ");
+    let text = HTML_STYLES.replace_all(&text, " ");
+    let text = HTML_TAGS.replace_all(&text, " ");
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
 }
 
 #[cfg(test)]

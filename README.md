@@ -106,7 +106,7 @@ crates/
   astria-core/      Types, error, SQLite schema + migrations, path validation, sensitive-path denylist
   astria-paths/     Path normalization, .astria directory management
   astria-detect/    File discovery, classification, incremental change detection
-  astria-extract/   Tree-sitter AST extraction (25 languages)
+  astria-extract/   AST + document extraction (42 languages incl. SQL, Vue/Svelte/Astro, VB.NET, Pascal)
   astria-embed/     Local embeddings (fastembed/ONNX) — similar_to edges, semantic query recall
   astria-build/     Merge extractions into SQLite graph, entity dedup (MinHash + Jaro-Winkler)
   astria-cluster/   Deterministic label propagation community detection
@@ -117,6 +117,8 @@ crates/
   astria-semantic/  LLM semantic extraction (Claude / OpenAI-compatible / Gemini), with vision
   astria-ingest/    URL ingestion (arXiv/tweet/webpage/image), SCIP + Postgres intake, SSRF protection
   astria-audio/     Audio/video transcription via whisper.cpp (external whisper-cli + ffmpeg)
+  astria-office/    Office document extraction (.docx/.xlsx -> markdown)
+  astria-gws/       Google Workspace shortcut ingestion (.gdoc/.gsheet/.gslides via Drive API)
   astria-pdf/       PDF text extraction
   astria-napi/      napi-rs bindings, pipeline orchestration, merge/diff, JSON/HTML/GraphML/tree export
 packages/

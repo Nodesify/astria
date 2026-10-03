@@ -25,7 +25,10 @@ pub struct DetectResult {
     pub removed: Vec<FileEntry>,
 }
 
-const DOC_EXTENSIONS: &[&str] = &[".md", ".mdx", ".txt", ".rst"];
+const DOC_EXTENSIONS: &[&str] = &[
+    ".md", ".mdx", ".qmd", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".docx", ".xlsx",
+    ".gdoc", ".gsheet", ".gslides",
+];
 const PAPER_EXTENSIONS: &[&str] = &[".pdf"];
 const IMAGE_EXTENSIONS: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
 // Video/audio extension lists live in astria-core: detect classifies them
@@ -265,6 +268,42 @@ mod tests {
         assert_eq!(classify_file(Path::new("foo.py")), Some(FileType::Code));
         assert_eq!(classify_file(Path::new("foo.rs")), Some(FileType::Code));
         assert_eq!(classify_file(Path::new("foo.md")), Some(FileType::Document));
+        assert_eq!(
+            classify_file(Path::new("foo.qmd")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.html")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.yaml")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.yml")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.docx")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("foo.xlsx")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("report.gdoc")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("budget.gsheet")),
+            Some(FileType::Document)
+        );
+        assert_eq!(
+            classify_file(Path::new("deck.gslides")),
+            Some(FileType::Document)
+        );
         assert_eq!(classify_file(Path::new("foo.pdf")), Some(FileType::Paper));
         assert_eq!(classify_file(Path::new("foo.png")), Some(FileType::Image));
         assert_eq!(classify_file(Path::new("foo.mp4")), Some(FileType::Video));
