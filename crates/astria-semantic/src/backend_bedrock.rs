@@ -207,7 +207,7 @@ impl BedrockBackend {
             return Err(AstriaError::Graph(format!(
                 "Bedrock response missing output (model {}): {}",
                 self.model,
-                &response.chars().take(300).collect::<String>()
+                response.chars().take(300).collect::<String>()
             )));
         }
         Ok(text)
