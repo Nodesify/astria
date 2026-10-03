@@ -12,6 +12,10 @@ use astria_core::Result;
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const SERVER_NAME: &str = "astria";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Default output token budget for query_graph and repo_map. One value shared
+/// by the MCP schema, the MCP handler fallbacks, and the CLI defaults
+/// (packages/astria-cli/src/defaults.ts must match).
+pub const DEFAULT_QUERY_BUDGET: u64 = 2000;
 
 fn tools() -> Value {
     json!([
@@ -20,7 +24,7 @@ fn tools() -> Value {
             "question": {"type": "string"},
             "mode": {"type": "string", "enum": ["bfs", "dfs"], "default": "bfs"},
             "depth": {"type": "integer", "default": 2},
-            "budget": {"type": "integer", "default": 2000},
+            "budget": {"type": "integer", "default": DEFAULT_QUERY_BUDGET},
             "directed": {"type": "boolean", "default": false,
                 "description": "Follow edges only in their stored direction (caller -> callee, importer -> module) instead of both ways."},
             "detail": {"type": "string", "enum": ["all", "high"], "default": "all",
@@ -30,7 +34,7 @@ fn tools() -> Value {
             "required": ["question"]}},
         {"name": "repo_map", "description": "Aider-style repo map: files ranked by PageRank over the reference graph with top symbols per file. One budgeted blob to orient on a codebase.",
          "inputSchema": {"type": "object", "properties": {
-            "budget": {"type": "integer", "default": 2000},
+            "budget": {"type": "integer", "default": DEFAULT_QUERY_BUDGET},
             "detail": {"type": "string", "enum": ["all", "high"], "default": "all"}}}},
         {"name": "explain", "description": "Explain a node: metadata plus its strongest 20 connections with real edge direction (--> it calls/imports the neighbor, <-- the neighbor points back) and evidence tier per connection.",
          "inputSchema": {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}},
@@ -52,7 +56,7 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "list_communities", "description": "All communities with labels, sizes, and cohesion. Labels are LLM-thematic when a semantic backend ran with --label-communities, else deterministic thematic/hub terms.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "graph_stats", "description": "Node/edge/community/file counts for the graph.",
+        {"name": "graph_stats", "description": "Node/edge/community/file counts for the graph. The `embeddings:` suffix says whether this binary supports local embeddings (`--embed`) — it is compiled out on release platforms without ONNX Runtime binaries (x86_64-apple-darwin).",
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "health", "description": "Code-health report: unreachable-symbol candidates, circular file dependencies, hub concentration, graph staleness — one heuristic score (0-100).",
          "inputSchema": {"type": "object", "properties": {}}}
@@ -103,7 +107,10 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             let question = str_arg(args, "question").unwrap_or_default();
             let mode = str_arg(args, "mode").unwrap_or_else(|| "bfs".into());
             let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
-            let budget = args.get("budget").and_then(|v| v.as_u64()).unwrap_or(2000) as usize;
+            let budget = args
+                .get("budget")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(DEFAULT_QUERY_BUDGET) as usize;
             let directed = bool_arg(args, "directed").unwrap_or(false);
             let detail = str_arg(args, "detail");
             let cursor = args.get("cursor").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -122,7 +129,10 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             .map(|(text, _, _, _)| text_result(text))
         }
         "repo_map" => {
-            let budget = args.get("budget").and_then(|v| v.as_u64()).unwrap_or(2000) as i64;
+            let budget = args
+                .get("budget")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(DEFAULT_QUERY_BUDGET) as i64;
             let detail = str_arg(args, "detail");
             astria_query::repo_map(db, db_path, budget, min_strength_for(&detail))
                 .map(|(text, files)| text_result(format!("{text}\n\n({files} files shown)")))
@@ -360,8 +370,13 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             let modularity_txt = modularity
                 .map(|q| format!(", modularity: {q:.3}"))
                 .unwrap_or_default();
+            let embed_txt = if cfg!(feature = "embed") {
+                ", embeddings: available"
+            } else {
+                ", embeddings: not supported in this build"
+            };
             Ok(text_result(format!(
-                "nodes: {nodes}, edges: {edges}, communities: {communities}, files tracked: {files}{modularity_txt}"
+                "nodes: {nodes}, edges: {edges}, communities: {communities}, files tracked: {files}{modularity_txt}{embed_txt}"
             )))
         }
         "health" => astria_analyze::health::health(db).map(|report| {
@@ -550,10 +565,20 @@ mod tests {
         let args = json!({});
         let result = call_tool(&db, ":memory:", "graph_stats", &args);
         assert_eq!(result["isError"], false);
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("nodes: 1"));
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("nodes: 1"));
+        // The embed disclosure must always be present; its value follows the
+        // feature flag, so the assertion holds under default and --no-default-
+        // features builds alike.
+        let expected_embed = if cfg!(feature = "embed") {
+            "embeddings: available"
+        } else {
+            "embeddings: not supported in this build"
+        };
+        assert!(
+            text.contains(expected_embed),
+            "graph_stats should disclose embed capability, got: {text}"
+        );
     }
 
     #[test]
