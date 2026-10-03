@@ -63,15 +63,84 @@ impl LoadedGraph {
     }
 }
 
-/// Process-wide snapshot cache, keyed by database path. Each request used
-/// to reload every node and edge (O(V+E) allocations); the HTTP transport
-/// multiplies that per request. A cached snapshot is reused only while the
-/// publication generation (`_meta.graph_generation`) is unchanged — one
-/// cheap scalar query per load replaces the full reload, and read
-/// consistency is preserved because each snapshot was loaded atomically
-/// and never mutates after construction.
-static SNAPSHOT_CACHE: std::sync::Mutex<Option<(String, String, std::sync::Arc<LoadedGraph>)>> =
-    std::sync::Mutex::new(None);
+/// Process-wide snapshot cache: a small LRU keyed by database path AND
+/// publication generation (`_meta.graph_generation`). Each request used to
+/// reload every node and edge (O(V+E) allocations); the HTTP transport
+/// multiplies that per request — and with multi-project serving it also
+/// thrashed, because a single-slot cache replaced the previous project's
+/// graph on every alternation. A cached snapshot is reused only while the
+/// generation is unchanged — one cheap scalar query per load replaces the
+/// full reload, and read consistency is preserved because each snapshot
+/// was loaded atomically and never mutates after construction.
+///
+/// Capacity trades memory for alternation latency: each entry is a full
+/// node+edge snapshot (roughly O(V+E) heap), so the default of 3 bounds a
+/// three-project MCP server to a few tens of MB on graphs like this repo's
+/// (~5k nodes / ~21k edges) while keeping alternating projects hot.
+/// `ASTRIA_SNAPSHOT_CACHE_ENTRIES` (1..=16) overrides for other shapes;
+/// entries beyond capacity evict least-recently-used first.
+struct SnapshotCache {
+    /// Front = most recently used.
+    entries: std::collections::VecDeque<(String, String, std::sync::Arc<LoadedGraph>)>,
+    capacity: usize,
+}
+
+impl SnapshotCache {
+    fn new() -> Self {
+        SnapshotCache {
+            entries: std::collections::VecDeque::new(),
+            capacity: snapshot_cache_capacity(),
+        }
+    }
+
+    /// Front = most recently used.
+    fn get(&mut self, path: &str, generation: &str) -> Option<std::sync::Arc<LoadedGraph>> {
+        if let Some(pos) = self
+            .entries
+            .iter()
+            .position(|(p, g, _)| p == path && g == generation)
+        {
+            let entry = self.entries.remove(pos).unwrap();
+            self.entries.push_front(entry);
+            return Some(std::sync::Arc::clone(&self.entries.front().unwrap().2));
+        }
+        None
+    }
+
+    fn insert(&mut self, path: String, generation: String, snapshot: std::sync::Arc<LoadedGraph>) {
+        // A same-key reinsert (two racing loads) replaces, not duplicates.
+        self.entries
+            .retain(|(p, g, _)| !(p == &path && g == &generation));
+        self.entries.push_front((path, generation, snapshot));
+        while self.entries.len() > self.capacity {
+            self.entries.pop_back();
+        }
+    }
+}
+
+/// Constructed on first use (capacity reads the environment, which cannot
+/// happen in a static initializer).
+fn snapshot_cache() -> &'static std::sync::Mutex<SnapshotCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<SnapshotCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(SnapshotCache::new()))
+}
+
+/// Clamp for `ASTRIA_SNAPSHOT_CACHE_ENTRIES`; a pure helper so the bounds
+/// are testable without touching process environment.
+fn clamp_capacity(requested: Option<usize>) -> usize {
+    const FLOOR: usize = 1;
+    const CEILING: usize = 16;
+    const DEFAULT: usize = 3;
+    requested.unwrap_or(DEFAULT).clamp(FLOOR, CEILING)
+}
+
+fn snapshot_cache_capacity() -> usize {
+    clamp_capacity(
+        std::env::var("ASTRIA_SNAPSHOT_CACHE_ENTRIES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok()),
+    )
+}
 
 /// The database's publication generation, when a writer has stamped one.
 /// A MISSING stamp is never treated as a shared empty value: two un-stamped
@@ -91,7 +160,7 @@ pub(crate) fn load_graph(
     db: &Connection,
     db_path: &str,
 ) -> astria_core::Result<std::sync::Arc<LoadedGraph>> {
-    // Cheap freshness probe first: when the generation stamp matches the
+    // Cheap freshness probe first: when the generation stamp matches a
     // cached snapshot, share it instead of rebuilding the graph. Databases
     // without a stamp (never written by this pipeline lineage) always load
     // uncached and are never cached.
@@ -100,18 +169,19 @@ pub(crate) fn load_graph(
         .replace('\\', "/");
     let generation = generation_of(db);
     if let Some(generation) = generation.as_ref() {
-        let cache = SNAPSHOT_CACHE.lock().unwrap();
-        if let Some((cached_path, cached_gen, snapshot)) = cache.as_ref() {
-            if *cached_path == normalized_path && cached_gen == generation {
-                return Ok(std::sync::Arc::clone(snapshot));
-            }
+        let mut cache = snapshot_cache().lock().unwrap();
+        if let Some(snapshot) = cache.get(&normalized_path, generation) {
+            return Ok(snapshot);
         }
     }
 
     let loaded = std::sync::Arc::new(load_graph_uncached(db, db_path)?);
     if let Some(generation) = generation {
-        *SNAPSHOT_CACHE.lock().unwrap() =
-            Some((normalized_path, generation, std::sync::Arc::clone(&loaded)));
+        snapshot_cache().lock().unwrap().insert(
+            normalized_path,
+            generation,
+            std::sync::Arc::clone(&loaded),
+        );
     }
     Ok(loaded)
 }
@@ -317,5 +387,107 @@ pub(crate) fn edge_between(
             .edges_directed(b, Direction::Outgoing)
             .find(|e| e.target() == a)
             .map(|e| e.weight()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The cache is process-global; serialize tests that read it.
+    static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn stamped_db(path_key: &str, stamp: &str) -> Connection {
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        db.execute_batch(&format!(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('{path_key}', '{path_key}', 'code', 'f.rs')"
+        ))
+        .unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', ?1)",
+            [stamp.to_string()],
+        )
+        .unwrap();
+        db
+    }
+
+    #[test]
+    fn capacity_clamps_to_bounds() {
+        assert_eq!(clamp_capacity(None), 3, "default keeps three projects hot");
+        assert_eq!(clamp_capacity(Some(0)), 1);
+        assert_eq!(clamp_capacity(Some(5)), 5);
+        assert_eq!(clamp_capacity(Some(99)), 16);
+    }
+
+    #[test]
+    fn multi_project_alternation_keeps_both_snapshots() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        // The regression: a single-slot cache replaced the previous project
+        // on every alternation, forcing a full O(V+E) reload each request.
+        let db_a = stamped_db("a", "1:100");
+        let db_b = stamped_db("b", "1:100");
+        let first_a = load_graph(&db_a, "proj/a/db.sqlite").unwrap();
+        let _first_b = load_graph(&db_b, "proj/b/db.sqlite").unwrap();
+        let second_a = load_graph(&db_a, "proj/a/db.sqlite").unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&first_a, &second_a),
+            "alternating projects must serve both from the cache"
+        );
+    }
+
+    #[test]
+    fn lru_evicts_least_recently_used_beyond_capacity() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let capacity = snapshot_cache_capacity();
+        assert!(capacity >= 2, "test needs a multi-entry cache");
+        let dbs: Vec<Connection> = (0..=capacity)
+            .map(|i| stamped_db(&format!("k{i}"), "1:100"))
+            .collect();
+        let paths: Vec<String> = (0..=capacity)
+            .map(|i| format!("proj/p{i}/db.sqlite"))
+            .collect();
+        // Fill to capacity with entries 0..capacity-1.
+        let mut snapshots: Vec<_> = dbs
+            .iter()
+            .zip(&paths)
+            .take(capacity)
+            .map(|(db, p)| load_graph(db, p).unwrap())
+            .collect();
+        // Touch entry 0: it becomes most-recently-used, so entry 1 is now
+        // the least-recently-used eviction candidate.
+        let touched = load_graph(&dbs[0], &paths[0]).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&snapshots[0], &touched));
+        // One more project than capacity: entry 1 evicts; the touched
+        // entry 0 stays.
+        snapshots.push(load_graph(&dbs[capacity], &paths[capacity]).unwrap());
+        let still_cached = load_graph(&dbs[0], &paths[0]).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&snapshots[0], &still_cached),
+            "the touched entry must survive the overflow insert"
+        );
+        let reloaded = load_graph(&dbs[1], &paths[1]).unwrap();
+        assert!(
+            !std::sync::Arc::ptr_eq(&snapshots[1], &reloaded),
+            "least-recently-used entry must have been evicted"
+        );
+    }
+
+    #[test]
+    fn generation_change_invalidates_cached_snapshot() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let db = stamped_db("g", "5:500");
+        let first = load_graph(&db, "proj/g/db.sqlite").unwrap();
+        let same = load_graph(&db, "proj/g/db.sqlite").unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &same));
+        db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', '6:600')",
+            [],
+        )
+        .unwrap();
+        let next = load_graph(&db, "proj/g/db.sqlite").unwrap();
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &next),
+            "a new publication generation must force a reload"
+        );
     }
 }

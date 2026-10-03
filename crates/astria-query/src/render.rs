@@ -255,27 +255,85 @@ pub fn count_response_tokens(text: &str) -> usize {
         .len()
 }
 
-/// Count manifest files modified after the graph was published (with a
-/// small skew so same-second writes do not cry stale). Stat-only: this runs
-/// on every query. `None` when the manifest is unreadable — disclosure is
-/// best-effort and must never fail a query.
-pub(crate) fn files_changed_since(db: &Connection, built_at_secs: u64) -> Option<usize> {
+/// How the working tree has drifted from the graph's source snapshot.
+/// Distinct counts keep the query header honest about WHAT drifted —
+/// deletions and timestamp-preserving edits used to be invisible.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct SourceDrift {
+    /// Manifest files modified after publication (mtime probe).
+    pub modified: usize,
+    /// Manifest files that no longer exist.
+    pub deleted: usize,
+    /// Files whose size differs from the manifest record while the mtime
+    /// looks fresh — edits that preserved (or forged) the timestamp but
+    /// not the length.
+    pub size_changed: usize,
+}
+
+impl SourceDrift {
+    pub(crate) fn total(&self) -> usize {
+        self.modified + self.deleted + self.size_changed
+    }
+}
+
+/// Compare the file manifest (the graph's source snapshot) against the
+/// working tree: modifications by mtime, deletions by existence, and
+/// preserved-timestamp edits by size. Stat-only — this runs on every query,
+/// so re-hashing content (the exact check `astria merge-gate` does at gate
+/// time) is out of scope here. This measures SOURCE freshness; the build
+/// timestamp in the same header carries graph AGE. `None` when the manifest
+/// is unreadable — disclosure is best-effort and must never fail a query.
+/// Known limit: an edit that preserves BOTH mtime and size is invisible
+/// without re-hashing, and files ADDED after the build are not in the
+/// manifest to probe (the merge gate's commit check covers both).
+pub(crate) fn source_drift_since(
+    db: &Connection,
+    built_at_secs: u64,
+    root: Option<&str>,
+) -> Option<SourceDrift> {
     let cutoff = std::time::UNIX_EPOCH + std::time::Duration::from_secs(built_at_secs + 2);
-    let mut stmt = db.prepare("SELECT file_path FROM file_manifest").ok()?;
-    let paths: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(0))
+    let mut stmt = db
+        .prepare("SELECT file_path, size_bytes FROM file_manifest")
+        .ok()?;
+    let rows: Vec<(String, i64)> = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
         .ok()?
         .flatten()
         .collect();
-    let mut changed = 0usize;
-    for path in &paths {
-        if let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) {
-            if modified > cutoff {
-                changed += 1;
+    // Manifest paths are stored RELATIVE to the project root — resolve
+    // them against it, or the probe silently stats nothing whenever the
+    // process cwd is not the project (an MCP server's usual case).
+    let resolve = |path: &str| -> std::path::PathBuf {
+        let p = std::path::Path::new(path);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            match root {
+                Some(r) => std::path::Path::new(r).join(p),
+                None => p.to_path_buf(),
+            }
+        }
+    };
+    let mut drift = SourceDrift::default();
+    for (path, recorded_size) in &rows {
+        match std::fs::metadata(resolve(path)) {
+            Err(_) => drift.deleted += 1,
+            Ok(meta) => {
+                if let Ok(modified) = meta.modified() {
+                    if modified > cutoff {
+                        drift.modified += 1;
+                        continue;
+                    }
+                }
+                if meta.len() as i64 != *recorded_size {
+                    drift.size_changed += 1;
+                }
             }
         }
     }
-    Some(changed)
+    Some(drift)
 }
 
 pub(crate) fn render_page(

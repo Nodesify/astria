@@ -91,6 +91,28 @@ export interface GraphBuildInfoJs {
   currentExtractionHashVersion: string;
 }
 
+export interface SourceCoverageJs {
+  /** The project is a git work tree and git ran successfully. */
+  insideGit: boolean;
+  /** Why git could not be consulted, when it could not. */
+  gitError: string | null;
+  currentHead: string | null;
+  /** HEAD recorded in the graph at publication time; null on graphs built
+   *  before commit provenance was recorded. */
+  recordedHead: string | null;
+  /** Whether the work tree has uncommitted/untracked changes, when known. */
+  treeDirty: boolean | null;
+  filesChecked: number;
+  filesMismatched: number;
+  filesMissing: number;
+  /** Up to five sample paths that drifted, for the gate's detail line. */
+  driftSamples: string[];
+  /** true/false = proven; null = cannot determine (not a repository, git
+   *  failure, or unresolvable dirty-tree ambiguity). */
+  coversHead: boolean | null;
+  reason: string;
+}
+
 export interface GodNodeJs {
   id: string;
   label: string;
@@ -280,6 +302,7 @@ export function updatePipeline(
 export function embeddingsSupported(): boolean;
 export function graphStats(root: string): GraphStatsJs;
 export function graphBuildInfo(root: string): GraphBuildInfoJs;
+export function verifySourceCommit(root: string): SourceCoverageJs;
 export function godNodes(root: string): Array<GodNodeJs>;
 export function listCommunities(root: string): CommunitiesJs;
 export function exportJsonCmd(root: string, outPath: string): void;

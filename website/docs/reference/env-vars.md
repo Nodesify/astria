@@ -25,6 +25,7 @@ Activates the `enrich_with_semantics()` pipeline stage (docs, papers, images →
 | `ASTRIA_LLM_BUDGET` | Total LLM token budget (input + output) per run; `0` or unset = unlimited. When the budget is exhausted, extraction stops loudly before publishing; engine calls, judge calls, and usage-less responses all count toward it |
 | `ASTRIA_LLM_MAX_CHUNKS` | Per-file semantic extraction chunk cap (default `8`, clamped to 1–64). Content needing more chunks fails loudly instead of being truncated and cached as complete — raise this for oversized generated files |
 | `ASTRIA_LLM_COMMUNITY_MAX` | Cap on community-naming LLM calls per run for `--label-communities` (default `48`) |
+| `ASTRIA_SNAPSHOT_CACHE_ENTRIES` | Process-wide graph snapshot cache capacity (default `3`, clamped to 1–16). Each entry holds one project's full node+edge snapshot, keyed by database path and publication generation; raise it for MCP servers alternating across many repositories, lower it to bound memory |
 | `OPENAI_API_KEY` | Fallback key for the OpenAI-compatible backend |
 | `OPENAI_BASE_URL` | Fallback base URL for the OpenAI-compatible backend when `ASTRIA_LLM_BASE_URL` is unset |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Key for the Gemini backend |

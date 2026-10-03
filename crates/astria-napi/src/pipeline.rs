@@ -763,7 +763,9 @@ fn run_pipeline_inner(
     // Cross-layer linking: docs→packages, packages→entry files, napi FFI
     // imports→Rust functions. Deterministic DB passes (no LLM) that run over
     // the whole graph every pipeline, so incremental updates keep their
-    // bridges even when only one side of a link changed.
+    // bridges even when only one side of a link changed. Deterministic from
+    // graph content — when nothing upstream changed, the rewrite is
+    // content-identical and does not advance the generation.
     match astria_build::crosslayer::link_cross_layer(db) {
         Ok(stats) => {
             let _ = db.execute(
@@ -779,6 +781,12 @@ fn run_pipeline_inner(
         }
     };
 
+    // graph_mutated tracks whether THIS run committed a content change; each
+    // contributing stage advances the generation immediately (see
+    // advance_generation), and the flag decides whether the terminal stamp
+    // mints a new generation or reuses the previous one.
+    let mut graph_mutated = needs_build;
+
     // Entity dedup runs after build, before clustering — duplicate nodes
     // poison community detection and god-node rankings.
     let dedup_merged = if options.dedup {
@@ -786,6 +794,10 @@ fn run_pipeline_inner(
     } else {
         0
     };
+    if dedup_merged > 0 {
+        graph_mutated = true;
+        advance_generation(db)?;
+    }
     if let Err(e) = db.execute(
         "INSERT OR REPLACE INTO _meta (key, value) VALUES ('last_dedup_merged', ?1)",
         rusqlite::params![dedup_merged.to_string()],
@@ -802,18 +814,42 @@ fn run_pipeline_inner(
     // cross-file INFERRED edges shape both: concept nodes bridge files the
     // AST never connected.
     let deep_stats = deep_link_stage(db, root, options.deep)?;
+    if deep_stats.as_ref().is_some_and(|s| s.links_added > 0) {
+        graph_mutated = true;
+        advance_generation(db)?;
+    }
 
     // Semantic similarity pass (local embeddings, no API key): embed new
     // nodes and regenerate similar_to edges BEFORE clustering so they shape
     // communities and analysis. Explicit --embed fails loudly; the silent
     // auto-refresh path never triggers a model download.
+    let similar_before: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM edges WHERE relation = 'similar_to'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     embed_stage(db, options.embed)?;
+    let similar_after: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM edges WHERE relation = 'similar_to'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if similar_after != similar_before {
+        graph_mutated = true;
+        advance_generation(db)?;
+    }
 
     // Feedback loop: promote query pairs that recurred across distinct
     // questions into learned edges. Best-effort — a failure here must not
     // block the build.
     match astria_query::promote_learned_edges(db, 2, 3) {
         Ok(n) if n > 0 => {
+            graph_mutated = true;
+            advance_generation(db)?;
             let _ = db.execute(
                 "INSERT OR REPLACE INTO _meta (key, value) VALUES ('last_learned_edges', ?1)",
                 rusqlite::params![n.to_string()],
@@ -823,12 +859,27 @@ fn run_pipeline_inner(
         Err(e) => eprintln!("warning: learned-edge promotion failed: {e}"),
     }
 
+    // Clustering rewrites memberships every run even when the partition is
+    // identical; only an assignment that actually CHANGED is a content
+    // mutation (and must advance the generation — a later stage can still
+    // fail after these writes commit).
+    let memberships_before = community_assignments(db);
     let cluster_result = astria_cluster::cluster(db)?;
+    if community_assignments(db) != memberships_before {
+        graph_mutated = true;
+        advance_generation(db)?;
+    }
 
     // Thematic community naming runs after clustering (fresh memberships)
     // and before hyperedges/wiki exports so every downstream surface —
     // report, MCP list_communities, graph.json — sees the good names.
     let label_stats = label_communities_stage(db, options.label_communities)?;
+    if let Some(stats) = &label_stats {
+        if stats.labeled > 0 || stats.failed > 0 {
+            graph_mutated = true;
+            advance_generation(db)?;
+        }
+    }
 
     // Hyperedges: deterministic N-ary groups (communities, shared references).
     // Best-effort — a failure here must not block the build.
@@ -871,13 +922,10 @@ fn run_pipeline_inner(
     }
     let report = astria_report::generate_report(db, &analysis)?;
 
-    // Stamp the publication generation BEFORE writing artifacts: the JSON
-    // and report then carry exactly this generation, and the stamp lands
-    // after the last graph-mutating write of the run so snapshot caches key
-    // on the final state.
-    let stamp = stamp_generation(db, astria_dir)?;
-    write_report(astria_dir, &report, &stamp)?;
-    export_json(db, &astria_dir.join("graph.json"))?;
+    // One publication workflow: terminal generation stamp (fresh only when
+    // the run mutated the graph), report footer, and graph.json all carry
+    // the same generation, and the sidecar stamp lands with them.
+    publish_artifacts(db, astria_dir, &report, graph_mutated)?;
 
     Ok(PipelineResult {
         build_result,
@@ -930,13 +978,73 @@ pub(crate) fn generation_stamp(db: &Connection) -> String {
 
 /// Record the generation this publication produced, in the database and in
 /// a sidecar stamp file next to the artifacts. Returns the stamp.
-fn stamp_generation(db: &Connection, astria_dir: &Path) -> astria_core::Result<String> {
-    let stamp = generation_stamp(db);
+///
+/// `mint` — when the run mutated the graph, a fresh stamp is minted; when
+/// nothing changed, the existing generation is reused so no-op runs leave
+/// the publication identity (and every cache keyed on it) stable. A missing
+/// stamp is always minted.
+fn stamp_generation(db: &Connection, astria_dir: &Path, mint: bool) -> astria_core::Result<String> {
+    let stamp = if mint {
+        generation_stamp(db)
+    } else {
+        db.query_row(
+            "SELECT value FROM _meta WHERE key = 'graph_generation'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap_or_else(|_| generation_stamp(db))
+    };
     db.execute(
         "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', ?1)",
         [&stamp],
     )?;
     write_artifact_atomic(&astria_dir.join("generation.txt"), stamp.as_bytes())?;
+    Ok(stamp)
+}
+
+/// Advance the publication generation immediately after a stage committed a
+/// real content change. The terminal stamp covers the happy path; this
+/// covers the failure path — if a later stage errors after a mutation
+/// committed, snapshot caches keyed on the generation must not keep serving
+/// the previous state. Mid-run stages run in autocommit, so the advance must
+/// follow each mutation, not wait for publication.
+pub(crate) fn advance_generation(db: &Connection) -> astria_core::Result<()> {
+    db.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', ?1)",
+        [&generation_stamp(db)],
+    )?;
+    Ok(())
+}
+
+/// Current community assignment of every node — the before/after comparison
+/// that decides whether a clustering pass actually changed the graph.
+pub(crate) fn community_assignments(db: &Connection) -> HashMap<String, Option<i64>> {
+    let mut map = HashMap::new();
+    if let Ok(mut stmt) = db.prepare("SELECT id, community FROM nodes") {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))
+        }) {
+            for row in rows.flatten() {
+                map.insert(row.0, row.1);
+            }
+        }
+    }
+    map
+}
+
+/// One publication workflow for the derived artifacts: terminal generation
+/// stamp, report footer, and graph.json all move together, carrying the same
+/// generation. Shared by the pipeline and cluster-only republication so no
+/// surface can drift from the database state it describes.
+pub(crate) fn publish_artifacts(
+    db: &Connection,
+    astria_dir: &Path,
+    report: &str,
+    mint_generation: bool,
+) -> astria_core::Result<String> {
+    let stamp = stamp_generation(db, astria_dir, mint_generation)?;
+    write_report(astria_dir, report, &stamp)?;
+    export_json(db, &astria_dir.join("graph.json"))?;
     Ok(stamp)
 }
 
@@ -1495,7 +1603,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn unextractable_binaries_do_not_keep_the_graph_dirty() {
         // Files with no extractor at all (svg/png/unknown binaries) get an
         // empty language="media" extraction from the engine. They must NOT
@@ -1518,6 +1625,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn deep_linking_writes_inferred_edges_then_caches() {
         let _guard = TEST_LOCK.lock().unwrap();
         reset_stubs();
@@ -1659,5 +1767,62 @@ mod tests {
         assert!(deep_link_stage_with(&db, dir.path(), false, broken_factory)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn advance_generation_replaces_any_previous_stamp() {
+        // The failure-path contract: a mid-run stage that committed a content
+        // change must leave a generation NO cache can mistake for the
+        // previous publication's.
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', 'stale')",
+            [],
+        )
+        .unwrap();
+        advance_generation(&db).unwrap();
+        let stamp: String = db
+            .query_row(
+                "SELECT value FROM _meta WHERE key = 'graph_generation'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_ne!(stamp, "stale");
+        assert!(!stamp.is_empty());
+    }
+
+    #[test]
+    fn terminal_stamp_reuses_generation_on_unchanged_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', 'keep:me')",
+            [],
+        )
+        .unwrap();
+        // Unchanged run: the publication identity stays stable so caches and
+        // artifacts keep describing the same generation.
+        assert_eq!(stamp_generation(&db, dir.path(), false).unwrap(), "keep:me");
+        // Mutated run (or a legacy DB with no stamp): mint a fresh one.
+        let minted = stamp_generation(&db, dir.path(), true).unwrap();
+        assert_ne!(minted, "keep:me");
+        assert!(dir.path().join("generation.txt").exists());
+    }
+
+    #[test]
+    fn community_assignments_reflect_membership_writes() {
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('a', 'A', 'code', 'f.py')",
+        )
+        .unwrap();
+        let before = community_assignments(&db);
+        assert_eq!(before.get("a"), Some(&None));
+        db.execute("UPDATE nodes SET community = 3 WHERE id = 'a'", [])
+            .unwrap();
+        let after = community_assignments(&db);
+        assert_ne!(before, after, "membership writes must be detectable");
+        assert_eq!(after.get("a"), Some(&Some(3)));
     }
 }

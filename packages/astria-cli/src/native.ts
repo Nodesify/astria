@@ -152,6 +152,7 @@ export const runPipeline = fn('runPipeline');
 export const updatePipeline = fn('updatePipeline');
 export const graphStats = fn('graphStats');
 export const graphBuildInfo = fn('graphBuildInfo');
+export const verifySourceCommit = fn('verifySourceCommit');
 export const godNodes = fn('godNodes');
 export const listCommunities = fn('listCommunities');
 export const explainNode = fn('explainNode');

@@ -78,6 +78,31 @@ Reading:
 - **The harness earned its keep.** It caught that no-op updates republished the entire graph on every run: files with no extractor (svg/png) are labeled `media` by the engine and were counted as deferred media waiting on tooling, so the pending-retry set never emptied. Fixed in `e12af80` — deferred extraction now applies only to actionable files (transcribable media, workspace shortcuts).
 - **A pre-existing cost, unchanged by the backlog:** a no-op update takes ~14s in both versions because clustering, analysis, report, and artifact export rerun on every pipeline invocation even when nothing was rebuilt — a future optimization target.
 
+### Follow-up A/B (72c469a + follow-up review fixes, 4 October 2026)
+
+A second review pass over the backlog's result found six further issues (publication-time cache invalidation, timestamp-only freshness, containment-blind health heuristics, single-slot snapshot cache thrashing under multi-project MCP, retrieval evidence gaps, documentation drift) — tracked as U1–U6 in `docs/project-review-2026-10-03.md`. The same harness re-measured the fixed tree against `72c469a` (the backlog exactly as shipped). Corpus refreshed to the current source (1,205 files, ~59 MB; the repo's committed prebuilt npm binaries excluded); release builds, warmup plus three interleaved rounds, medians.
+
+| Phase (median, ms) | follow-up fixes | `72c469a` (baseline) | Delta |
+|---|---:|---:|---:|
+| Cold `run` (full build) | 15,013 | 14,391 | +4.3% |
+| No-op `update` | 13,154 | 12,794 | +2.8% |
+| graphStats | 5.8 | 8.0 | −28% |
+| First query | 356 | 357 | −0.5% |
+| Warm queries 2–5, same process | 122–144 | 125–150 | −2% to −12% (mixed) |
+| Repo map | 6.8 | 6.2 | +9% (noise) |
+| Explain node | 11.5 | 12.6 | −8% |
+| God nodes | 53.9 | 55.0 | −2% |
+| Export JSON | 156 | 155 | parity |
+| Export HTML | 44 | 45 | −3% |
+
+Graph output is identical on both sides: 4,589 nodes, 21,499 edges, 231 communities — the follow-up changes behavior (generation stamping, coverage verification, health scoring), not extraction.
+
+Reading:
+
+- **Build paths pay a small, deliberate cost.** Cold +4.3% and no-op update +2.8% (~0.4–0.6 s) buy correctness: one `git rev-parse` spawn to stamp commit provenance inside the publication transaction, the before/after community-membership comparison that decides whether clustering changed content, and the edge-count probes that gate mid-run generation advances. No-op updates still skip all re-extraction.
+- **Reads at parity or slightly better.** Both sides already carry the publication-generation snapshot cache (the first A/B's win), so parity is the expected result — it confirms the single-slot-to-LRU change adds multi-project capacity at no single-project latency cost.
+- **The health-score drop is the fix, not a regression.** On this same graph the old heuristics score 75 with **zero** unreachable symbols (containment edges made every definition "reachable") and always exactly five hubs; the corrected ones score 55, surface 15 genuine dead-code candidates, and flag only hubs whose usage degree clears max(10, the graph's 95th percentile). The score's meaning changed deliberately — see the health section of the architecture notes.
+
 ## Live benchmark snapshot
 
 The table below is **regenerated automatically**: run **Benchmark snapshot → Run workflow** from the [Actions tab](https://github.com/Nodesify/astria/actions/workflows/bench-snapshot.yml), and the workflow runs both tools on a fresh GitHub runner, commits the updated snapshot JSON, and redeploys this site. The snapshot measures the installed release; proposed-source quality is checked separately.
