@@ -20,7 +20,7 @@ astria run <path> --global --as <tag>  # ...also merge this repo into the cross-
 astria update <path>              # Reuse cached ASTs, reconcile current corpus; regenerate an existing wiki
 astria watch <path> [--debounce 3000]  # Watch for file changes, auto-rebuild
 astria cluster-only <path> [--resolution 0.5] [--exclude-hubs]  # Re-cluster + analyze + report without re-extracting
-astria merge <pathA> <pathB> <outPath>  # Merge two graphs
+astria merge <pathA> <pathB> <outPath> [--same-repo]  # Merge two graphs (namespaced per repo; --same-repo shares ids and errors on conflicts)
 astria diff <pathA> <pathB>       # Compare two graphs
 astria merge-driver install       # Union-merge .astria/graph.json on parallel-branch commits (see Team serving & CI)
 ```
@@ -121,21 +121,13 @@ See [Wiki and exports](../guides/wiki-and-exports) for details.
 astria diagnose [--graph .] [--json]
 astria health [--graph .] [--json]
 astria risk [--graph .] [--staged] [--json]
-astria merge-gate [--max-age-hours 24] [--min-health 60] [--max-risk 70] [--staged] [--json]  # CI merge gate (see Team serving & CI)
+astria merge-gate [--max-age-hours 24] [--min-health 60] [--max-risk 70] [--staged] [--base <ref> --head <ref>] [--json]  # CI merge gate (see Team serving & CI)
 astria digest [--out .astria/digest.md] [--json]  # Engineering digest brief (see Team serving & CI)
 ```
 
 Read-only health report over an existing graph: dangling edge endpoints (stub vs actionable), self-loops, duplicate edges, unclassified files, and zero-cohesion communities. `--json` emits machine-readable output. Never mutates the graph.
 
-`health` scores code-health heuristics (unreachable-symbol candidates, file cycles, hub concentration, and staleness) from 0 to 100. `risk` maps the current git diff to impacted symbols and communities; use `--staged` to inspect only staged changes. Both support `--json`.
-
-### Migrating from pre-1.0 layouts
-
-```bash
-astria migrate [--graph .]
-```
-
-One-time rename migration: moves a pre-1.0 `.graphify/` data folder to `.astria/`, renames `.graphifyignore` to `.astriaignore`, and moves `~/.nodesify-graphify/global.db` to `~/.astria/global.db`. Idempotent, and never overwrites an existing target — if the graph is locked by a running editor or MCP server it says so and can simply be re-run.
+`health` scores code-health heuristics (unreachable-symbol candidates, file cycles, hub concentration, and staleness) from 0 to 100. `risk` maps the current git diff to impacted symbols and communities; use `--staged` to inspect only staged changes, or `--base origin/main --head HEAD` to score a committed PR range (the CI shape — a clean checkout has no working-tree diff). Both support `--json`.
 
 ## Memory and reflection
 
@@ -185,7 +177,7 @@ URL fetching is SSRF-guarded: only `http`/`https` schemes are accepted; each hos
 
 ```bash
 astria mcp [--graph .]                    # MCP over stdio (the default)
-astria mcp --http [--port 8620] [--host 127.0.0.1] [--token <t>] [--projects a=./b name2=./c]  # MCP over HTTP, multi-project
+astria mcp --http [--port 8620] [--host 127.0.0.1] [--token <t>] [--projects a=./b name2=./c] [--allow-origin http://localhost:5173]  # MCP over HTTP, multi-project
 astria install [--platform claude] [--all]  # Skill + MCP registration for one AI platform or all (claude, codex, gemini, cursor, copilot, aider, opencode, kiro, trae, zcode, vscode, windsurf, cline, roo, amp, pi)
 astria uninstall [--platform claude] [--all] [--purge]  # Remove the install for one platform or all; --purge deep-cleans everything
 astria hook install|uninstall|status  # Git hook management
@@ -195,7 +187,7 @@ astria merge-driver install|uninstall|run  # Gitattributes merge driver for the 
 
 ### Team serving & CI {#team-serving}
 
-**MCP over HTTP.** `astria mcp --http` serves one or many project graphs over MCP Streamable HTTP (JSON responses): `POST /mcp` speaks the same JSON-RPC as stdio, `GET /healthz` is a liveness probe. Clients pick a project with the `x-astria-project` header or a `?project=` query parameter (unlisted names 404 — no silent fallback); the `--graph` root is the default project and `--projects name=path` adds more. Requests must carry `--token` (or `ASTRIA_MCP_TOKEN`) as a bearer token whenever the server binds a non-loopback host — unauthenticated remote serving is refused at startup, never allowed.
+**MCP over HTTP.** `astria mcp --http` serves one or many project graphs over MCP Streamable HTTP (JSON responses): `POST /mcp` speaks the same JSON-RPC as stdio, `GET /healthz` is a liveness probe. Clients pick a project with the `x-astria-project` header or a `?project=` query parameter (unlisted names 404 — no silent fallback); the `--graph` root is the default project and `--projects name=path` adds more. Requests must carry `--token` (or `ASTRIA_MCP_TOKEN`) as a bearer token whenever the server binds a non-loopback host — unauthenticated remote serving is refused at startup, never allowed. Requests carrying an `Origin` header (browsers) are refused unless their origin is listed with `--allow-origin` — native clients send no `Origin` and always pass — and loopback serving validates the `Host` header as a DNS-rebinding defense.
 
 **Git merge driver for the graph file.** Parallel branches both rebuild and both commit `.astria/graph.json`; `astria merge-driver install` wires a three-way union-merge driver into `.gitattributes` + git config (`merge.astria.*`) so those commits merge instead of conflicting: additions from both sides survive, a side's deletion is respected, community renumbering resolves to whichever side changed (the next `update` re-clusters anyway). `astria/graph_report.md` gets git's built-in `union` driver. `uninstall` removes the wiring.
 

@@ -36,21 +36,31 @@ pub(crate) fn vision_prompt() -> String {
 }
 
 /// Parse the model's text reply into an extraction, tolerating surrounding
-/// prose by falling back to the outermost {...} span. The result is always
-/// sanitized (see `sanitize_extraction`).
-pub(crate) fn parse_extraction_text(text: &str) -> SemanticExtraction {
-    if text.trim().is_empty() {
-        return SemanticExtraction::empty();
+/// prose by falling back to the outermost `{...}` span. Unusable replies
+/// (empty or containing no JSON) are errors, not empty extractions: a
+/// truncated or refused response must surface as a failure so it is retried
+/// rather than cached as a successful empty result. A valid JSON reply is
+/// `Ok` even when intentionally empty (the prompt allows it). The result is
+/// always sanitized (see `sanitize_extraction`).
+pub(crate) fn parse_extraction_text(text: &str) -> Result<SemanticExtraction> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(AstriaError::Graph(
+            "model reply was empty (refused, filtered, or truncated?)".into(),
+        ));
     }
-    if let Ok(parsed) = serde_json::from_str::<SemanticExtraction>(text.trim()) {
-        return sanitize_extraction(parsed);
+    if let Ok(parsed) = serde_json::from_str::<SemanticExtraction>(trimmed) {
+        return Ok(sanitize_extraction(parsed));
     }
-    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) {
-        if let Ok(parsed) = serde_json::from_str::<SemanticExtraction>(&text[start..=end]) {
-            return sanitize_extraction(parsed);
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if let Ok(parsed) = serde_json::from_str::<SemanticExtraction>(&trimmed[start..=end]) {
+            return Ok(sanitize_extraction(parsed));
         }
     }
-    SemanticExtraction::empty()
+    Err(AstriaError::Graph(format!(
+        "model reply was not valid JSON: {:?}",
+        trimmed.chars().take(120).collect::<String>()
+    )))
 }
 
 /// node_type values the schema allows; anything else is clamped.

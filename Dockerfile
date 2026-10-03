@@ -29,6 +29,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
+# Root npm manifests first: `npm ci` below resolves workspaces from the root
+# lockfile — without these it cannot install the workspace at all.
+COPY package.json package-lock.json ./
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
 COPY packages packages

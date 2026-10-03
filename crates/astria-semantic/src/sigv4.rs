@@ -114,8 +114,7 @@ impl SigV4Request<'_> {
             "host:{}\nx-amz-content-sha256:{}\nx-amz-date:{}\n",
             self.host, payload_hash, self.amz_date
         );
-        let mut signed_headers =
-            String::from("host;x-amz-content-sha256;x-amz-date");
+        let mut signed_headers = String::from("host;x-amz-content-sha256;x-amz-date");
         if let Some(token) = self.session_token {
             canonical_headers.push_str(&format!("x-amz-security-token:{token}\n"));
             signed_headers.push_str(";x-amz-security-token");
@@ -201,7 +200,10 @@ mod tests {
     fn hmac_sha256_long_key_falls_back_to_hash() {
         // RFC 4231 case 6: a key longer than the block size is hashed first.
         let key = [0xaau8; 131];
-        let mac = hmac_sha256(&key, b"Test Using Larger Than Block-Size Key - Hash Key First");
+        let mac = hmac_sha256(
+            &key,
+            b"Test Using Larger Than Block-Size Key - Hash Key First",
+        );
         assert_eq!(
             hex(&mac),
             "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
@@ -218,7 +220,10 @@ mod tests {
 
     #[test]
     fn amz_dates_format_epoch_and_known_instant() {
-        assert_eq!(amz_dates(0), ("19700101T000000Z".to_string(), "19700101".to_string()));
+        assert_eq!(
+            amz_dates(0),
+            ("19700101T000000Z".to_string(), "19700101".to_string())
+        );
         assert_eq!(
             amz_dates(1_700_000_000),
             ("20231114T221320Z".to_string(), "20231114".to_string())
@@ -285,9 +290,13 @@ mod tests {
             short_date: "20231114",
         };
         let headers = req.sign();
-        assert!(headers.iter().any(|(k, v)| k == "x-amz-security-token" && v == "TOKEN"));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "x-amz-security-token" && v == "TOKEN"));
         let auth = headers.iter().find(|(k, _)| k == "authorization").unwrap();
-        assert!(auth.1.contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token"));
+        assert!(auth
+            .1
+            .contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token"));
     }
 
     #[test]

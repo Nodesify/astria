@@ -9,10 +9,20 @@
 // Output shape mirrors astria-pdf: transcript text is wrapped as markdown
 // (`# <filename>` + paragraphs) so the document extractor can consume it.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use astria_core::env_var;
+
+/// Hard cap on one downloaded media file (bytes). yt-dlp gets `--max-filesize`
+/// and the produced file is re-checked — the advisory flag is not trusted
+/// alone.
+const MAX_MEDIA_BYTES: usize = 200 * 1024 * 1024;
+/// Wall-clock deadline for one yt-dlp run; a wedged download is killed
+/// rather than waited on forever.
+const MEDIA_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Why a media file could not be transcribed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,6 +362,12 @@ fn stderr_tail(bytes: &[u8]) -> String {
 // Media URL download (yt-dlp)
 // ---------------------------------------------------------------------------
 
+/// Deadline for the metadata/resolution pass (`yt-dlp -J --simulate`).
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Cap on the `-J` metadata JSON read into memory (playlists are excluded,
+/// but hostile metadata must not balloon the process either).
+const MAX_INFO_JSON_BYTES: usize = 4 * 1024 * 1024;
+
 /// Locate yt-dlp on PATH (Windows `.exe` suffix included).
 pub fn locate_ytdlp() -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
@@ -383,16 +399,148 @@ pub fn slug_from_url(url: &str) -> String {
     slug
 }
 
+/// Wait for a spawned child under a wall-clock deadline, killing it when
+/// the budget runs out. A wedged child must be killed, not waited on.
+fn wait_bounded(
+    child: &mut std::process::Child,
+    deadline: std::time::Instant,
+    what: &str,
+) -> Result<std::process::ExitStatus, TranscribeError> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(TranscribeError::Failed(format!(
+                        "{what} exceeded its deadline"
+                    )));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            Err(e) => return Err(TranscribeError::Failed(format!("{what} wait failed: {e}"))),
+        }
+    }
+}
+
+/// Resolve where the media WOULD download from (`yt-dlp -J --simulate`, one
+/// metadata request, no bytes moved) and hand every post-redirect,
+/// post-format-selection media URL to the caller's vetting policy. The
+/// downloader does its own DNS resolution and redirect following — this
+/// pass makes the destination visible to the caller's SSRF rules BEFORE
+/// the download runs; a URL the policy rejects fails the ingest. Returns
+/// the vetted final URLs (also used to warn when metadata carries none).
+fn resolve_and_vet_media_urls(
+    ytdlp: &Path,
+    url: &str,
+    vet_url: &dyn Fn(&str) -> Option<String>,
+) -> Result<Vec<String>, TranscribeError> {
+    let mut command = std::process::Command::new(ytdlp);
+    command
+        .args([
+            "-J",
+            "--simulate",
+            "--no-playlist",
+            "--quiet",
+            "--no-warnings",
+        ])
+        .arg(url)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|e| TranscribeError::Failed(format!("yt-dlp spawn failed: {e}")))?;
+    let mut stdout_pipe = child.stdout.take();
+    let status = wait_bounded(
+        &mut child,
+        std::time::Instant::now() + RESOLVE_TIMEOUT,
+        "yt-dlp media resolution",
+    )?;
+    let mut stdout_bytes = Vec::new();
+    if let Some(pipe) = stdout_pipe.as_mut() {
+        let mut limited = std::io::Read::take(pipe, MAX_INFO_JSON_BYTES as u64);
+        let _ = std::io::Read::read_to_end(&mut limited, &mut stdout_bytes);
+    }
+    if !status.success() {
+        return Err(TranscribeError::Failed(format!(
+            "yt-dlp could not resolve the media URL: exit {}",
+            status.code().unwrap_or(-1)
+        )));
+    }
+    let info: serde_json::Value = serde_json::from_slice(&stdout_bytes).map_err(|e| {
+        TranscribeError::Failed(format!("unparseable yt-dlp metadata for {url}: {e}"))
+    })?;
+
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(top) = info.get("url").and_then(|v| v.as_str()) {
+        candidates.push(top.to_string());
+    }
+    if let Some(list) = info.get("requested_downloads").and_then(|v| v.as_array()) {
+        for entry in list {
+            if let Some(u) = entry.get("url").and_then(|v| v.as_str()) {
+                candidates.push(u.to_string());
+            }
+        }
+    }
+    if let Some(formats) = info.get("formats").and_then(|v| v.as_array()) {
+        for entry in formats.iter().take(20) {
+            if let Some(u) = entry.get("url").and_then(|v| v.as_str()) {
+                candidates.push(u.to_string());
+            }
+        }
+    }
+    if candidates.is_empty() {
+        // Fail closed: with no resolved destination there is nothing the
+        // policy could have checked, and the download must not fly blind.
+        return Err(TranscribeError::Failed(format!(
+            "yt-dlp metadata for {url} carries no media URL; refusing an unvetted download"
+        )));
+    }
+    let mut vetted = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if !candidate.starts_with("http://") && !candidate.starts_with("https://") {
+            return Err(TranscribeError::Failed(format!(
+                "resolved media URL uses a disallowed scheme: {candidate}"
+            )));
+        }
+        if let Some(reason) = vet_url(&candidate) {
+            return Err(TranscribeError::Failed(format!(
+                "resolved media URL rejected by the network policy: {reason}"
+            )));
+        }
+        vetted.push(candidate);
+    }
+    Ok(vetted)
+}
+
 /// Download a video/audio URL to `out_dir` via yt-dlp. With ffmpeg present
 /// the result is a 16 kHz mono WAV (ready for whisper-cli); without it the
 /// raw bestaudio track is saved for a later run once ffmpeg is installed.
-pub fn download_media_to(url: &str, out_dir: &Path) -> Result<PathBuf, TranscribeError> {
+///
+/// Security posture: the DESTINATION is vetted before any media byte moves
+/// — yt-dlp first runs in `--simulate` metadata mode and every resolved
+/// (post-redirect) media URL must pass `vet_url`. The subsequent download
+/// still executes inside yt-dlp with its own resolver (there is no way to
+/// pin its transport without a local proxy); the bounds below — one file
+/// per URL, a size cap, a socket timeout, and a wall-clock deadline —
+/// constrain that residual window, and the vetted resolution closes the
+/// redirect-to-internal-network path at decision time.
+pub fn download_media_to(
+    url: &str,
+    out_dir: &Path,
+    vet_url: &dyn Fn(&str) -> Option<String>,
+) -> Result<PathBuf, TranscribeError> {
     let ytdlp = locate_ytdlp().ok_or_else(|| {
         TranscribeError::Unavailable(
             "yt-dlp not found on PATH - media URLs cannot be downloaded. Install yt-dlp: https://github.com/yt-dlp/yt-dlp"
                 .to_string(),
         )
     })?;
+
+    // Phase 1: resolve + vet the destination (no media bytes moved).
+    resolve_and_vet_media_urls(&ytdlp, url, vet_url)?;
+
     std::fs::create_dir_all(out_dir)
         .map_err(|e| TranscribeError::Failed(format!("media download dir: {e}")))?;
 
@@ -401,6 +549,21 @@ pub fn download_media_to(url: &str, out_dir: &Path) -> Result<PathBuf, Transcrib
     let ffmpeg = Tooling::probe().ok().and_then(|t| t.ffmpeg);
     let mut command = std::process::Command::new(&ytdlp);
     command.current_dir(out_dir);
+    // Bounds applied to every run: never expand one URL into a playlist,
+    // never move more than MAX_MEDIA_BYTES, never wait on a dead socket.
+    // --quiet --no-progress keep stderr to error-sized output so it can be
+    // piped without risking a full pipe blocking the child.
+    command.args([
+        "--no-playlist",
+        "--quiet",
+        "--no-progress",
+        "--max-filesize",
+        &format!("{}m", MAX_MEDIA_BYTES / (1024 * 1024)),
+        "--socket-timeout",
+        "30",
+    ]);
+    command.stderr(std::process::Stdio::piped());
+    command.stdout(std::process::Stdio::null());
     if ffmpeg.is_some() {
         command.args([
             "-x",
@@ -416,13 +579,23 @@ pub fn download_media_to(url: &str, out_dir: &Path) -> Result<PathBuf, Transcrib
     }
     command.arg(url);
 
-    let output = command
-        .output()
+    let mut child = command
+        .spawn()
         .map_err(|e| TranscribeError::Failed(format!("yt-dlp spawn failed: {e}")))?;
-    if !output.status.success() {
+    let mut stderr_pipe = child.stderr.take();
+    let status = wait_bounded(
+        &mut child,
+        std::time::Instant::now() + MEDIA_DOWNLOAD_TIMEOUT,
+        "yt-dlp download",
+    )?;
+    let mut stderr_bytes = Vec::new();
+    if let Some(pipe) = stderr_pipe.as_mut() {
+        let _ = pipe.read_to_end(&mut stderr_bytes);
+    }
+    if !status.success() {
         return Err(TranscribeError::Failed(format!(
             "yt-dlp failed: {}",
-            stderr_tail(&output.stderr)
+            stderr_tail(&stderr_bytes)
         )));
     }
 
@@ -433,6 +606,16 @@ pub fn download_media_to(url: &str, out_dir: &Path) -> Result<PathBuf, Transcrib
         let entry = entry.map_err(|e| TranscribeError::Failed(format!("{e}")))?;
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with(&slug) {
+            // Enforce the size cap ourselves: --max-filesize is advisory
+            // for some formats/extractors, the produced file is the truth.
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(u64::MAX);
+            if size > MAX_MEDIA_BYTES as u64 {
+                let _ = std::fs::remove_file(entry.path());
+                return Err(TranscribeError::Failed(format!(
+                    "downloaded media exceeds {} MB limit",
+                    MAX_MEDIA_BYTES / (1024 * 1024)
+                )));
+            }
             let modified = entry
                 .metadata()
                 .and_then(|m| m.modified())
@@ -463,7 +646,7 @@ mod tests {
     #[test]
     fn download_media_degrades_to_unavailable_without_ytdlp() {
         let dir = tempfile::tempdir().unwrap();
-        match download_media_to("https://youtu.be/dQw4w9WgXcQ", dir.path()) {
+        match download_media_to("https://youtu.be/dQw4w9WgXcQ", dir.path(), &|_| None) {
             Err(TranscribeError::Unavailable(notice)) => {
                 assert!(notice.contains("yt-dlp"), "notice: {notice}");
                 assert!(notice.contains("https://github.com/yt-dlp/yt-dlp"));

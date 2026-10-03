@@ -1,6 +1,16 @@
 import { join } from 'path';
 import { existsSync } from 'fs';
 
+// The generated declarations in ../astria.node.d.ts are the single source
+// of truth for the native surface: the lazy binding is typed as the module
+// itself, so argument order, optionality, and result shapes are checked at
+// compile time on both ends of every wrapper below. A native signature
+// change without a d.ts update fails `tsc` instead of surfacing at runtime.
+type NativeModule = typeof import('../astria.node');
+type NativeFn = {
+  [K in keyof NativeModule]: NativeModule[K] extends (...args: any[]) => any ? K : never;
+}[keyof NativeModule];
+
 const PLATFORM_SUFFIX: Record<string, string> = {
   'win32-x64': 'win32-x64-msvc',
   'win32-arm64': 'win32-arm64-msvc',
@@ -87,7 +97,7 @@ function warnIfShadowed(root: string, dist: string): void {
   }
 }
 
-function loadNativeBinding(): any {
+function loadNativeBinding(): NativeModule {
   const local = join(__dirname, '..', 'astria.node');
   if (existsSync(local)) {
     warnIfShadowed(local, join(__dirname, '..', 'dist', 'astria.node'));
@@ -120,55 +130,62 @@ function loadNativeBinding(): any {
 // The binding loads lazily on first native call, not at import time: pure-JS
 // commands (`astria install`, `astria uninstall`, `--version`) must work on a
 // machine where the binary is missing — uninstall is the repair path.
-let cachedBinding: any;
-function binding(): any {
+let cachedBinding: NativeModule | undefined;
+function binding(): NativeModule {
   if (cachedBinding === undefined) {
     cachedBinding = loadNativeBinding();
   }
   return cachedBinding;
 }
 
-// Every export defers to binding() at call time; a missing binary therefore
-// throws one clear diagnostic when a native command actually runs, and never
-// at module load.
-export const runPipeline = (...args: any[]) => binding().runPipeline(...args);
-export const updatePipeline = (...args: any[]) => binding().updatePipeline(...args);
-export const graphStats = (...args: any[]) => binding().graphStats(...args);
-export const graphBuildInfo = (...args: any[]) => binding().graphBuildInfo(...args);
-export const godNodes = (...args: any[]) => binding().godNodes(...args);
-export const listCommunities = (...args: any[]) => binding().listCommunities(...args);
-export const explainNode = (...args: any[]) => binding().explainNode(...args);
-export const exportJsonCmd = (...args: any[]) => binding().exportJsonCmd(...args);
-export const exportHtmlCmd = (...args: any[]) => binding().exportHtmlCmd(...args);
-export const exportGraphmlCmd = (...args: any[]) => binding().exportGraphmlCmd(...args);
-export const exportCypherCmd = (...args: any[]) => binding().exportCypherCmd(...args);
-export const exportSvgCmd = (...args: any[]) => binding().exportSvgCmd(...args);
-export const neo4jPushCmd = (...args: any[]) => binding().neo4jPushCmd(...args);
-export const healthReport = (...args: any[]) => binding().healthReport(...args);
-export const riskReport = (...args: any[]) => binding().riskReport(...args);
-export const tokenBenchmark = (...args: any[]) => binding().tokenBenchmark(...args);
-export const queryGraph = (...args: any[]) => binding().queryGraph(...args);
-export const callflowMermaid = (...args: any[]) => binding().callflowMermaid(...args);
-export const repoMap = (...args: any[]) => binding().repoMap(...args);
-export const findPath = (...args: any[]) => binding().findPath(...args);
-export const clusterOnly = (...args: any[]) => binding().clusterOnly(...args);
-export const mergeGraphs = (...args: any[]) => binding().mergeGraphs(...args);
-export const diffGraphs = (...args: any[]) => binding().diffGraphs(...args);
-export const graphHistory = (...args: any[]) => binding().graphHistory(...args);
-export const affectedNode = (...args: any[]) => binding().affectedNode(...args);
-export const runMcpServer = (...args: any[]) => binding().runMcpServer(...args);
-export const runMcpHttpServer = (...args: any[]) => binding().runMcpHttpServer(...args);
-export const exportTree = (...args: any[]) => binding().exportTree(...args);
-export const exportWiki = (...args: any[]) => binding().exportWiki(...args);
-export const exportObsidian = (...args: any[]) => binding().exportObsidian(...args);
-export const ingestUrl = (...args: any[]) => binding().ingestUrl(...args);
-export const saveTranscript = (...args: any[]) => binding().saveTranscript(...args);
-export const diagnoseGraph = (...args: any[]) => binding().diagnoseGraph(...args);
-export const saveQueryResult = (...args: any[]) => binding().saveQueryResult(...args);
-export const reflectGraph = (...args: any[]) => binding().reflect(...args);
-export const globalAdd = (...args: any[]) => binding().globalAdd(...args);
-export const globalRemove = (...args: any[]) => binding().globalRemove(...args);
-export const globalList = (...args: any[]) => binding().globalList(...args);
-export const globalPath = (...args: any[]) => binding().globalPath(...args);
-export const ingestScip = (...args: any[]) => binding().ingestScip(...args);
-export const ingestPostgres = (...args: any[]) => binding().ingestPostgres(...args);
+// Every wrapper defers to binding() at call time (a missing binary throws
+// one clear diagnostic when a native command actually runs, never at module
+// load) while keeping the declared signature: the cast is checked against
+// the generated declaration, so a drift between wrapper and native surface
+// is a compile error here, not a runtime surprise.
+function fn<K extends NativeFn>(name: K): NativeModule[K] {
+  return ((...args: unknown[]) =>
+    (binding() as Record<string, (...a: unknown[]) => unknown>)[name](...args)) as NativeModule[K];
+}
+
+export const runPipeline = fn('runPipeline');
+export const updatePipeline = fn('updatePipeline');
+export const graphStats = fn('graphStats');
+export const graphBuildInfo = fn('graphBuildInfo');
+export const godNodes = fn('godNodes');
+export const listCommunities = fn('listCommunities');
+export const explainNode = fn('explainNode');
+export const exportJsonCmd = fn('exportJsonCmd');
+export const exportHtmlCmd = fn('exportHtmlCmd');
+export const exportGraphmlCmd = fn('exportGraphmlCmd');
+export const exportCypherCmd = fn('exportCypherCmd');
+export const exportSvgCmd = fn('exportSvgCmd');
+export const neo4jPushCmd = fn('neo4jPushCmd');
+export const healthReport = fn('healthReport');
+export const riskReport = fn('riskReport');
+export const tokenBenchmark = fn('tokenBenchmark');
+export const queryGraph = fn('queryGraph');
+export const callflowMermaid = fn('callflowMermaid');
+export const repoMap = fn('repoMap');
+export const findPath = fn('findPath');
+export const clusterOnly = fn('clusterOnly');
+export const mergeGraphs = fn('mergeGraphs');
+export const diffGraphs = fn('diffGraphs');
+export const graphHistory = fn('graphHistory');
+export const affectedNode = fn('affectedNode');
+export const runMcpServer = fn('runMcpServer');
+export const runMcpHttpServer = fn('runMcpHttpServer');
+export const exportTree = fn('exportTree');
+export const exportWiki = fn('exportWiki');
+export const exportObsidian = fn('exportObsidian');
+export const ingestUrl = fn('ingestUrl');
+export const saveTranscript = fn('saveTranscript');
+export const diagnoseGraph = fn('diagnoseGraph');
+export const saveQueryResult = fn('saveQueryResult');
+export const reflectGraph = fn('reflect');
+export const globalAdd = fn('globalAdd');
+export const globalRemove = fn('globalRemove');
+export const globalList = fn('globalList');
+export const globalPath = fn('globalPath');
+export const ingestScip = fn('ingestScip');
+export const ingestPostgres = fn('ingestPostgres');

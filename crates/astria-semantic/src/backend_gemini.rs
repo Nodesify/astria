@@ -60,7 +60,7 @@ impl GeminiBackend {
         serde_json::json!({
             "system_instruction": {"parts": [{"text": system_prompt(file_type)}]},
             "contents": [{"role": "user", "parts": [{"text": content}]}],
-            "generationConfig": {"maxOutputTokens": 4096}
+            "generationConfig": {"maxOutputTokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT}
         })
     }
 
@@ -71,7 +71,7 @@ impl GeminiBackend {
                 {"inline_data": {"mime_type": media_type, "data": image_b64}},
                 {"text": "Extract the knowledge graph from this image."}
             ]}],
-            "generationConfig": {"maxOutputTokens": 4096}
+            "generationConfig": {"maxOutputTokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT}
         })
     }
 
@@ -91,8 +91,17 @@ impl GeminiBackend {
         let json: serde_json::Value = serde_json::from_str(&response)
             .map_err(|e| AstriaError::Graph(format!("Failed to parse Gemini response: {e}")))?;
         enrichment::record_usage(&json);
+        let finish = json
+            .pointer("/candidates/0/finishReason")
+            .and_then(|f| f.as_str())
+            .unwrap_or("");
+        if finish == "MAX_TOKENS" || finish == "SAFETY" || finish == "RECITATION" {
+            return Err(AstriaError::Graph(format!(
+                "Gemini reply unusable (finishReason: {finish})"
+            )));
+        }
         let text = Self::gemini_text(&json);
-        Ok(parse_extraction_text(text))
+        parse_extraction_text(text)
     }
 
     /// The first candidate's text part, shared by extraction and the
@@ -113,7 +122,7 @@ impl GeminiBackend {
         serde_json::json!({
             "system_instruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"maxOutputTokens": 1024}
+            "generationConfig": {"maxOutputTokens": enrichment::MAX_OUTPUT_TOKENS_COMPLETE}
         })
     }
 }

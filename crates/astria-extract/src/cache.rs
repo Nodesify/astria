@@ -12,7 +12,7 @@ use astria_paths::normalize;
 /// SHA-256 hash of the file contents, versioned with the extraction scheme
 /// tag so scheme changes (e.g. the id-format change in v2) invalidate all
 /// cached extractions and force one clean re-extraction.
-pub(crate) fn file_hash(path: &Path) -> Result<String, AstriaError> {
+pub fn file_hash(path: &Path) -> Result<String, AstriaError> {
     let bytes = std::fs::read(path)?;
     let mut hasher = Sha256::new();
     hasher.update(astria_core::EXTRACTION_HASH_VERSION.as_bytes());

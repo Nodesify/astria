@@ -68,10 +68,10 @@ fn fetch_cumulative(db: &Connection) -> Result<(i64, i64, i64, i64)> {
 /// Optional USD-per-million-token prices; both must be set for an estimate
 /// to appear (a half-priced estimate would be a lie).
 fn pricing() -> Option<(f64, f64)> {
-    let input = astria_core::env_var("COST_INPUT_PER_MTOK")
-        .and_then(|v| v.trim().parse::<f64>().ok())?;
-    let output = astria_core::env_var("COST_OUTPUT_PER_MTOK")
-        .and_then(|v| v.trim().parse::<f64>().ok())?;
+    let input =
+        astria_core::env_var("COST_INPUT_PER_MTOK").and_then(|v| v.trim().parse::<f64>().ok())?;
+    let output =
+        astria_core::env_var("COST_OUTPUT_PER_MTOK").and_then(|v| v.trim().parse::<f64>().ok())?;
     Some((input, output))
 }
 

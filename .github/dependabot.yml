@@ -6,3 +6,20 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # npm workspaces: root lockfile governs the CLI and viewer; the website
+  # has its own. PRs run through the same CI (audit, build, tests).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+  # Cargo: lockfile bumps only (version updates), so MSRV and the audit
+  # gate in CI stay the arbiters of what lands.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only

@@ -74,6 +74,18 @@ pub const MANIFEST_FILENAMES: &[&str] = &[
     "claude_desktop_config.json",
 ];
 
+/// True when `file_name` (any case) is an MCP server configuration — files
+/// that routinely embed literal credentials (`env` blocks, API keys). They
+/// are ingested by the deterministic manifest extractor, which preserves
+/// only tool names and environment variable *names*; the raw bytes must
+/// never reach an LLM backend or any other raw-content consumer.
+pub fn is_mcp_config_filename(file_name: &str) -> bool {
+    matches!(
+        file_name.to_lowercase().as_str(),
+        ".mcp.json" | "mcp.json" | "mcp_servers.json" | "claude_desktop_config.json"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

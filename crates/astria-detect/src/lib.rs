@@ -29,6 +29,12 @@ const DOC_EXTENSIONS: &[&str] = &[
     ".md", ".mdx", ".qmd", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml", ".docx", ".xlsx",
     ".gdoc", ".gsheet", ".gslides",
 ];
+/// Document extensions that are actually text — the minified-content
+/// heuristic applies to these, never to the binary document formats
+/// sharing the Document classification.
+const TEXTUAL_DOC_EXTENSIONS: &[&str] = &[
+    ".md", ".mdx", ".qmd", ".txt", ".rst", ".html", ".htm", ".yaml", ".yml",
+];
 const PAPER_EXTENSIONS: &[&str] = &[".pdf"];
 const IMAGE_EXTENSIONS: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
 // Video/audio extension lists live in astria-core: detect classifies them
@@ -155,19 +161,36 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
         }
 
         let bytes = std::fs::read(path)?;
-        // Minified/generated blobs (bundler output = few, huge lines) are
-        // noise: they spawn single-letter function nodes that flood hubs
-        // and query results.
-        let sample_len = bytes.len().min(64 * 1024);
-        let sample_newlines = bytes[..sample_len].iter().filter(|&&b| b == b'\n').count();
-        if astria_core::security::looks_minified(bytes.len() as u64, sample_len, sample_newlines) {
-            continue;
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ext_with_dot = format!(".{}", ext.to_lowercase());
+
+        // The minified heuristic measures prose layout, so it is meaningful
+        // only for textual source formats. Binary documents, PDFs, images,
+        // and media have no line structure to measure — e.g. a large WAV
+        // whose sampled prefix is zero bytes has no newlines and would be
+        // misread as generated source, silently dropped before
+        // transcription/office extraction ever ran.
+        let heuristic_applies = file_type == FileType::Code
+            || (file_type == FileType::Document
+                && TEXTUAL_DOC_EXTENSIONS.contains(&ext_with_dot.as_str()));
+        if heuristic_applies {
+            // Minified/generated blobs (bundler output = few, huge lines) are
+            // noise: they spawn single-letter function nodes that flood hubs
+            // and query results.
+            let sample_len = bytes.len().min(64 * 1024);
+            let sample_newlines = bytes[..sample_len].iter().filter(|&&b| b == b'\n').count();
+            if astria_core::security::looks_minified(
+                bytes.len() as u64,
+                sample_len,
+                sample_newlines,
+            ) {
+                continue;
+            }
         }
 
         seen_paths.insert(rel_str.clone());
         let hash = hash_bytes(&bytes);
 
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let language = language_for_extension(ext).map(|s| s.to_string());
 
         let stored_hash: Option<String> = db
@@ -231,7 +254,19 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
     })
 }
 
-pub fn update_manifest(result: &DetectResult, db: &Connection) -> astria_core::Result<()> {
+/// Update the file manifest from a detection run. `deferred` files (their
+/// extraction could not run this pass — missing tooling, absent workspace
+/// credentials) keep their previous manifest row: an unchanged content
+/// hash would otherwise mark them fresh even though their extraction was
+/// skipped, so the promised retry after installing the dependency would
+/// never fire.
+pub fn update_manifest(
+    result: &DetectResult,
+    deferred: &[PathBuf],
+    db: &Connection,
+) -> astria_core::Result<()> {
+    let deferred_keys: std::collections::HashSet<String> =
+        deferred.iter().map(|p| normalize(p)).collect();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -245,6 +280,9 @@ pub fn update_manifest(result: &DetectResult, db: &Connection) -> astria_core::R
         .chain(result.unchanged.iter())
         .collect();
     for entry in &all_entries {
+        if deferred_keys.contains(&normalize(&entry.path)) {
+            continue;
+        }
         db.execute(
             "INSERT OR REPLACE INTO file_manifest (file_path, content_hash, file_type, language, last_seen_at, size_bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -271,6 +309,36 @@ mod tests {
     use super::*;
     use astria_core::db::open_db_in_memory;
     use std::fs;
+
+    #[test]
+    fn binary_media_is_not_filtered_as_minified() {
+        // A large WAV whose prefix is zero-valued samples has no newlines:
+        // the prose-layout heuristic would have silently excluded it before
+        // transcription ever ran. Binary formats must skip the heuristic.
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("talk.wav");
+        let zeros = vec![0u8; 100_000];
+        fs::write(&wav, zeros).unwrap();
+        // Control: the same bytes as .js WOULD be filtered (generated blob).
+        let js = dir.path().join("bundle.js");
+        fs::write(&js, vec![b'a'; 100_000]).unwrap();
+
+        let db = open_db_in_memory().unwrap();
+        let result = detect(dir.path(), &db).unwrap();
+        let seen: Vec<&str> = result
+            .new
+            .iter()
+            .map(|e| e.path.to_str().unwrap())
+            .collect();
+        assert!(
+            seen.iter().any(|p| p.ends_with("talk.wav")),
+            "binary media must survive discovery: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|p| p.ends_with("bundle.js")),
+            "newline-free large source is still filtered: {seen:?}"
+        );
+    }
 
     #[test]
     fn classify_known_extensions() {
@@ -358,7 +426,7 @@ mod tests {
 
         let db = open_db_in_memory().unwrap();
         let result = detect(dir.path(), &db).unwrap();
-        update_manifest(&result, &db).unwrap();
+        update_manifest(&result, &[], &db).unwrap();
 
         fs::write(dir.path().join("main.py"), "def goodbye(): pass\n").unwrap();
         let result2 = detect(dir.path(), &db).unwrap();
@@ -375,7 +443,7 @@ mod tests {
 
         let db = open_db_in_memory().unwrap();
         let result = detect(dir.path(), &db).unwrap();
-        update_manifest(&result, &db).unwrap();
+        update_manifest(&result, &[], &db).unwrap();
 
         fs::remove_file(dir.path().join("b.py")).unwrap();
         let result2 = detect(dir.path(), &db).unwrap();

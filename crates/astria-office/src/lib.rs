@@ -195,6 +195,16 @@ fn flush_row(md: &mut String, row_cells: &[String], first_row: bool) {
 fn xlsx_to_markdown(bytes: &[u8]) -> std::result::Result<String, String> {
     use calamine::Reader;
 
+    // Bounds pre-scan: each worksheet part's DECLARED used range must fit
+    // the extraction bounds before calamine materializes anything. The
+    // compressed input can hide a much larger sheet; `worksheet_range`
+    // allocates the full declared grid up front, so the post-load guard
+    // alone would fire after the memory was already spent.
+    xlsx_dimensions_within_bounds(bytes)?;
+
+    // The compressed input can hide a much larger sheet; refuse workbooks
+    // whose sheets declare more cells than the output caps could ever need
+    // before loading the range into memory.
     let cursor = std::io::Cursor::new(bytes);
     let mut workbook = calamine::Xlsx::new(cursor).map_err(|e| e.to_string())?;
 
@@ -203,6 +213,16 @@ fn xlsx_to_markdown(bytes: &[u8]) -> std::result::Result<String, String> {
         let Ok(range) = workbook.worksheet_range(&name) else {
             continue;
         };
+        // Belt and braces: a sheet without a usable declared dimension (or
+        // one that lied) is still bounded after loading.
+        let (rows, cols) = range.get_size();
+        if rows > MAX_SHEET_ROWS.saturating_mul(4) || cols > MAX_SHEET_COLS.saturating_mul(4) {
+            return Err(format!(
+                "sheet {name} loads {rows}x{cols} cells, beyond the extraction bounds \
+                 ({} rows x {} cols)",
+                MAX_SHEET_ROWS, MAX_SHEET_COLS
+            ));
+        }
         let mut emitted_header = false;
         let mut row_count = 0usize;
         for row in range.rows() {
@@ -246,19 +266,141 @@ fn cell_to_string(cell: &calamine::Data) -> String {
     }
 }
 
+/// Scan every worksheet part (`xl/worksheets/*.xml`) for its declared used
+/// range (`<dimension ref="A1:BZ999"/>`) and refuse the workbook when any
+/// sheet declares more rows/columns than the extraction bounds allow. The
+/// scan reads each part under [`MAX_PART_BYTES`], so it cannot be blown up
+/// by a hostile archive either.
+fn xlsx_dimensions_within_bounds(bytes: &[u8]) -> std::result::Result<(), String> {
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| e.to_string())?;
+    for index in 0..archive.len() {
+        let mut part = archive.by_index(index).map_err(|e| e.to_string())?;
+        let name = part.name().to_string();
+        if !(name.starts_with("xl/worksheets/") && name.ends_with(".xml")) {
+            continue;
+        }
+        if part.size() > MAX_PART_BYTES {
+            return Err(format!(
+                "worksheet part {name} expands to {} bytes (limit {MAX_PART_BYTES})",
+                part.size()
+            ));
+        }
+        let mut xml = String::new();
+        let mut limited = std::io::Read::take(&mut part, MAX_PART_BYTES);
+        std::io::Read::read_to_string(&mut limited, &mut xml).map_err(|e| e.to_string())?;
+        if let Some((rows, cols)) = declared_dimension(&xml) {
+            if rows > MAX_SHEET_ROWS.saturating_mul(4) || cols > MAX_SHEET_COLS.saturating_mul(4) {
+                return Err(format!(
+                    "sheet {name} declares {rows}x{cols} cells, beyond the extraction bounds \
+                     ({MAX_SHEET_ROWS} rows x {MAX_SHEET_COLS} cols)"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The sheet's declared extent (`rows x cols`) from its
+/// `<dimension ref="A1:C5"/>` element. `None` when the part declares no
+/// dimension or an unusable one (full-column/full-row refs like `A:A` carry
+/// no row count — the post-load guard covers those).
+fn declared_dimension(xml: &str) -> Option<(usize, usize)> {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(e)) | Ok(quick_xml::events::Event::Empty(e))
+                if e.local_name().as_ref() == b"dimension" =>
+            {
+                let ref_attr = attr(&e, b"ref")?;
+                return declared_extent(&ref_attr);
+            }
+            Ok(quick_xml::events::Event::Eof) => return None,
+            Err(_) => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+/// Extent of an A1-style range: `A1:C5` → (5 rows, 3 cols); a single cell
+/// `B7` → (1, 1). Absolute `$` markers are tolerated; refs missing either
+/// axis (`A:A`, `1:3`) are unusable → `None`.
+fn declared_extent(ref_attr: &str) -> Option<(usize, usize)> {
+    let clean = |s: &str| s.replace('$', "");
+    let (start, end) = match clean(ref_attr).split_once(':') {
+        Some((s, e)) => (s.to_string(), e.to_string()),
+        None => {
+            let single = clean(ref_attr);
+            return cell_axes(&single).map(|_| (1usize, 1usize));
+        }
+    };
+    let (start_row, start_col) = cell_axes(&start)?;
+    let (end_row, end_col) = cell_axes(&end)?;
+    Some((
+        end_row.checked_sub(start_row)?.checked_add(1)?,
+        end_col.checked_sub(start_col)?.checked_add(1)?,
+    ))
+}
+
+/// (row, col) of an A1-style cell reference, both 1-based.
+fn cell_axes(cell: &str) -> Option<(usize, usize)> {
+    let bytes = cell.as_bytes();
+    let letters: Vec<u8> = bytes
+        .iter()
+        .copied()
+        .take_while(|b| b.is_ascii_alphabetic())
+        .collect();
+    let digits: Vec<u8> = bytes
+        .iter()
+        .copied()
+        .skip(letters.len())
+        .take_while(|b| b.is_ascii_digit())
+        .collect();
+    if letters.is_empty() || digits.is_empty() || letters.len() + digits.len() != cell.len() {
+        return None; // not a plain A1 cell (column-only/row-only ref, etc.)
+    }
+    if letters.len() > 3 {
+        return None; // beyond XFD (16384), Excel's own maximum
+    }
+    let mut col = 0usize;
+    for letter in letters.iter().map(|b| (*b as char).to_ascii_uppercase()) {
+        let digit = letter as usize - 'A' as usize + 1; // A=1 ..= Z=26
+        col = col.checked_mul(26)?.checked_add(digit)?;
+    }
+    let row: usize = std::str::from_utf8(&digits).ok()?.parse().ok()?;
+    Some((row, col))
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Read one part out of a zip archive (in memory).
+/// Hard cap on one decompressed ZIP part. The discovery size limit applies
+/// to the COMPRESSED file; a small, highly compressed input must not
+/// expand into an unbounded in-memory string (zip bomb).
+const MAX_PART_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Read one part out of a zip archive (in memory), bounded: the declared
+/// decompressed size is checked up front and the read is capped regardless
+/// of what the header claims.
 fn read_zip_part(bytes: &[u8], name: &str) -> std::result::Result<String, String> {
     let cursor = std::io::Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| e.to_string())?;
     let mut file = archive
         .by_name(name)
         .map_err(|e| format!("missing {name} in document: {e}"))?;
+    if file.size() > MAX_PART_BYTES {
+        return Err(format!(
+            "document part {name} expands to {} bytes (limit {MAX_PART_BYTES})",
+            file.size()
+        ));
+    }
     let mut xml = String::new();
-    std::io::Read::read_to_string(&mut file, &mut xml).map_err(|e| e.to_string())?;
+    // take() bounds the read even when the declared size lied.
+    let mut limited = std::io::Read::take(&mut file, MAX_PART_BYTES);
+    std::io::Read::read_to_string(&mut limited, &mut xml).map_err(|e| e.to_string())?;
     Ok(xml)
 }
 
@@ -503,6 +645,58 @@ mod tests {
         let refs: Vec<(&str, String)> =
             parts.iter().map(|(n, c)| (n.as_str(), c.clone())).collect();
         zip_of(&refs)
+    }
+
+    #[test]
+    fn declared_extent_parses_a1_ranges() {
+        assert_eq!(declared_extent("A1:C5"), Some((5, 3)));
+        assert_eq!(declared_extent("B7"), Some((1, 1)));
+        assert_eq!(declared_extent("$A$1:$BZ$100"), Some((100, 78)));
+        // Full-column / full-row refs carry no usable row/col count.
+        assert_eq!(declared_extent("A:A"), None);
+        assert_eq!(declared_extent("1:3"), None);
+        assert_eq!(declared_extent(""), None);
+    }
+
+    #[test]
+    fn cell_axes_rejects_non_cell_refs() {
+        assert_eq!(cell_axes("A1"), Some((1, 1)));
+        assert_eq!(cell_axes("AA12"), Some((12, 27)));
+        assert_eq!(cell_axes("XFD1048576"), Some((1048576, 16384)));
+        assert_eq!(cell_axes("A"), None);
+        assert_eq!(cell_axes("A:"), None);
+        assert_eq!(cell_axes("12"), None);
+        assert_eq!(cell_axes("AAAA1"), None, "beyond Excel's own max column");
+    }
+
+    #[test]
+    fn oversized_declared_dimension_is_refused_before_loading() {
+        // A sheet that DECLARES a 1048576x16384 used range but carries no
+        // cells: the pre-scan must refuse it before calamine materializes
+        // the declared grid.
+        let xml_decl = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#;
+        let sheet = format!(
+            r#"{xml_decl}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:XFD1048576"/><sheetData/></worksheet>"#
+        );
+        let bytes = zip_of(&[("xl/worksheets/sheet1.xml", sheet)]);
+        let err = xlsx_to_markdown(&bytes).unwrap_err();
+        assert!(
+            err.contains("declares"),
+            "message should name the declaration: {err}"
+        );
+    }
+
+    #[test]
+    fn modest_declared_dimension_passes_the_prescan() {
+        let xml_decl = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#;
+        let sheet = format!(
+            r#"{xml_decl}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:C3"/><sheetData></sheetData></worksheet>"#
+        );
+        let bytes = zip_of(&[("xl/worksheets/sheet1.xml", sheet)]);
+        // The pre-scan itself is the unit under test here: a modest
+        // declared dimension passes it. (Full extraction needs the
+        // workbook scaffolding the sheets tests above already cover.)
+        assert!(xlsx_dimensions_within_bounds(&bytes).is_ok());
     }
 
     fn col_letter(mut col: usize) -> String {

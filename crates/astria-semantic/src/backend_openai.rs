@@ -54,7 +54,12 @@ impl OpenAiBackend {
                  the API key is sent unencrypted"
             );
         }
-        Ok(Self::new_with_auth(api_key, base_url, model, AuthStyle::Bearer))
+        Ok(Self::new_with_auth(
+            api_key,
+            base_url,
+            model,
+            AuthStyle::Bearer,
+        ))
     }
 
     pub fn new(api_key: Option<String>, base_url: String, model: String) -> Self {
@@ -101,7 +106,8 @@ impl OpenAiBackend {
             .filter(|k| !k.trim().is_empty());
         if api_key.is_none() {
             return Err(AstriaError::Graph(
-                "no Kimi API key: set MOONSHOT_API_KEY (or KIMI_API_KEY / ASTRIA_LLM_API_KEY)".into(),
+                "no Kimi API key: set MOONSHOT_API_KEY (or KIMI_API_KEY / ASTRIA_LLM_API_KEY)"
+                    .into(),
             ));
         }
         let model = astria_core::env_var("LLM_MODEL")
@@ -113,7 +119,7 @@ impl OpenAiBackend {
     pub fn build_request_body(&self, content: &str, file_type: &str) -> serde_json::Value {
         serde_json::json!({
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT,
             "messages": [
                 {"role": "system", "content": system_prompt(file_type)},
                 {"role": "user", "content": content}
@@ -124,7 +130,7 @@ impl OpenAiBackend {
     pub fn build_image_request_body(&self, image_b64: &str, media_type: &str) -> serde_json::Value {
         serde_json::json!({
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT,
             "messages": [
                 {"role": "system", "content": vision_prompt()},
                 {"role": "user", "content": [
@@ -155,14 +161,27 @@ impl OpenAiBackend {
         let json: serde_json::Value = serde_json::from_str(&response)
             .map_err(|e| AstriaError::Graph(format!("Failed to parse OpenAI response: {e}")))?;
         enrichment::record_usage(&json);
-        let text = json
+        let choice = json
             .get("choices")
             .and_then(|c| c.get(0))
-            .and_then(|c| c.get("message"))
+            .ok_or_else(|| AstriaError::Graph("OpenAI reply had no choices".into()))?;
+        // Truncation and refusals report themselves through finish_reason;
+        // neither is a usable extraction and both must fail the call.
+        let finish = choice
+            .get("finish_reason")
+            .and_then(|f| f.as_str())
+            .unwrap_or("");
+        if finish == "length" || finish == "content_filter" {
+            return Err(AstriaError::Graph(format!(
+                "OpenAI reply unusable (finish_reason: {finish})"
+            )));
+        }
+        let text = choice
+            .get("message")
             .and_then(|m| m.get("content"))
             .and_then(|t| t.as_str())
-            .unwrap_or("");
-        Ok(parse_extraction_text(text))
+            .ok_or_else(|| AstriaError::Graph("OpenAI reply had no content".into()))?;
+        parse_extraction_text(text)
     }
 
     /// Chat-completions body for the auxiliary passes (smaller output cap).
@@ -217,7 +236,11 @@ impl SemanticBackend for OpenAiBackend {
     }
 
     fn complete(&self, system: &str, user: &str) -> Result<String> {
-        self.complete_text(self.chat_body(system, user, 1024))
+        self.complete_text(self.chat_body(
+            system,
+            user,
+            enrichment::MAX_OUTPUT_TOKENS_COMPLETE as u32,
+        ))
     }
 }
 

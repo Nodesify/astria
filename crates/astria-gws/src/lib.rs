@@ -69,6 +69,41 @@ pub fn export_to_markdown(path: &Path) -> std::result::Result<String, GwsError> 
     }
 }
 
+/// The remote document's revision fingerprint (`version` + `modifiedTime`
+/// from the Drive metadata endpoint), for cache freshness: the local
+/// shortcut file never changes when the cloud document is edited, so a
+/// local-bytes-only hash cannot notice remote edits. `None` offline or
+/// unauthenticated — callers then keep their last cached extraction
+/// (offline mode), which the pending-retry path supersedes once
+/// credentials return.
+pub fn remote_revision(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let file_id = resolve_file_id(&text)?;
+    let bearer = resolve_access_token().ok()?;
+    let url = format!("{DRIVE_EXPORT_URL}{file_id}?fields=version,modifiedTime");
+    let response = gws_agent()
+        .get(&url)
+        .header("Authorization", &format!("Bearer {bearer}"))
+        .call()
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let mut body = String::new();
+    std::io::Read::read_to_string(&mut response.into_body().into_reader(), &mut body).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let version = json.get("version").and_then(|v| v.as_str()).unwrap_or("");
+    let modified = json
+        .get("modifiedTime")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if version.is_empty() && modified.is_empty() {
+        return None;
+    }
+    Some(format!("{version}/{modified}"))
+}
+
 /// Map a Google Workspace extension to its Drive export MIME type.
 pub fn export_mime(ext: &str) -> Option<&'static str> {
     match ext {

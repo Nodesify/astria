@@ -1,17 +1,30 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { runPipeline } from '../native';
-import { VERSION } from '../version';
+import { spawn } from 'child_process';
 
-const CODE_EXTENSIONS = new Set([
-  '.py', '.js', '.jsx', '.mjs', '.ts', '.tsx',
-  '.rs', '.go', '.java', '.c', '.h', '.cpp', '.cc', '.cxx', '.hpp',
+// The watcher does not second-guess discovery: the pipeline's detect pass
+// already classifies every supported input (code, docs, manifests, media,
+// office, PDFs) and honors .gitignore/.astriaignore, so any event outside
+// the known-irrelevant directories schedules a rebuild. Filtering to a
+// small language subset here used to miss Ruby/PHP/Kotlin edits, Markdown
+// and manifest changes, and directory renames entirely.
+const SKIP_DIRS = new Set([
+  '.astria',
+  'node_modules',
+  'target',
+  '.git',
+  'dist',
+  '__pycache__',
+  '.cache',
 ]);
 
-const SKIP_DIRS = new Set(['.astria', 'node_modules', 'target', '.git', 'dist', '__pycache__']);
-
 export async function watchCommand(watchPath: string, opts: { debounce: string }) {
-  const debounceMs = parseInt(opts.debounce || '3000', 10);
+  const debounceMs = Number(opts.debounce || '3000');
+  if (!Number.isFinite(debounceMs) || debounceMs <= 0) {
+    console.error(`Error: invalid --debounce value "${opts.debounce}" (must be a positive number of milliseconds)`);
+    process.exitCode = 1;
+    return;
+  }
   const resolved = path.resolve(watchPath);
 
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
@@ -20,35 +33,67 @@ export async function watchCommand(watchPath: string, opts: { debounce: string }
     return;
   }
 
-  let changedFiles = new Set<string>();
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pendingEvents = new Set<string>();
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  // One rebuild at a time, at most one queued behind it: the rebuild runs
+  // as a child process (the pipeline is synchronous native code — running
+  // it inline would freeze the watcher for the whole build).
+  let rebuildInFlight = false;
+  let rebuildQueued = false;
+
+  const runRebuild = () => {
+    if (rebuildInFlight) {
+      rebuildQueued = true;
+      return;
+    }
+    rebuildInFlight = true;
+    console.log(`\n[astria] ${pendingEvents.size} change event(s), rebuilding...`);
+    pendingEvents.clear();
+    const child = spawn(
+      process.execPath,
+      [process.argv[1], 'update', resolved],
+      { stdio: 'inherit' },
+    );
+    child.on('error', (err) => {
+      console.error('[astria] Rebuild could not start:', err.message);
+    });
+    child.on('exit', (code) => {
+      if (code !== 0) {
+        console.error(`[astria] Rebuild exited with code ${code}`);
+      }
+      rebuildInFlight = false;
+      if (rebuildQueued) {
+        rebuildQueued = false;
+        runRebuild();
+      }
+    });
+  };
+
+  const scheduleRebuild = () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(runRebuild, debounceMs);
+  };
 
   let watcher: fs.FSWatcher;
   try {
     watcher = fs.watch(resolved, { recursive: true }, (_event, filename) => {
-      if (!filename) return;
-      const filePath = filename.replace(/\\/g, '/');
-      const parts = filePath.split('/');
-
-      if (parts.some((p: string) => SKIP_DIRS.has(p))) return;
-
-      const ext = path.extname(filePath).toLowerCase();
-      if (!CODE_EXTENSIONS.has(ext)) return;
-
-      changedFiles.add(filePath);
-
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        const batch = [...changedFiles];
-        changedFiles.clear();
-        console.log(`\n[astria] ${batch.length} file(s) changed, rebuilding...`);
-        try {
-          const result = runPipeline(resolved, false, false, false, false, VERSION);
-          console.log(`[astria] Rebuilt: ${result.nodesAdded} nodes, ${result.edgesAdded} edges, ${result.communities} communities`);
-        } catch (e: any) {
-          console.error(`[astria] Rebuild failed:`, e.message || e);
-        }
-      }, debounceMs);
+      // A missing filename or an extension-less name is usually a
+      // directory event (create/rename/delete): schedule a rebuild and
+      // let discovery reconcile the tree.
+      if (filename) {
+        const filePath = filename.replace(/\\/g, '/');
+        if (filePath.split('/').some((p: string) => SKIP_DIRS.has(p))) return;
+        pendingEvents.add(filePath);
+      } else {
+        pendingEvents.add('(directory event)');
+      }
+      scheduleRebuild();
+    });
+    watcher.on('error', (err) => {
+      console.error(`[astria] Watcher failed:`, err.message || err);
+      console.error('[astria] Stopping; restart the watcher to continue.');
+      watcher.close();
+      process.exitCode = 1;
     });
   } catch (err: any) {
     console.error(`Error: Failed to watch "${resolved}": ${err.message || err}`);
@@ -59,25 +104,17 @@ export async function watchCommand(watchPath: string, opts: { debounce: string }
   console.log(`[astria] Watching ${resolved} (debounce: ${debounceMs}ms)`);
   console.log('[astria] Press Ctrl+C to stop');
 
+  const stop = () => {
+    console.log('\n[astria] Stopped.');
+    watcher.close();
+    process.exit(0);
+  };
   if (process.platform === 'win32') {
     const readline = require('readline');
     const rl = readline.createInterface({ input: process.stdin });
-    rl.on('SIGINT', () => {
-      console.log('\n[astria] Stopped.');
-      watcher.close();
-      rl.close();
-      process.exit(0);
-    });
+    rl.on('SIGINT', stop);
   } else {
-    process.on('SIGINT', () => {
-      console.log('\n[astria] Stopped.');
-      watcher.close();
-      process.exit(0);
-    });
-    process.on('SIGTERM', () => {
-      console.log('\n[astria] Stopped.');
-      watcher.close();
-      process.exit(0);
-    });
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
   }
 }

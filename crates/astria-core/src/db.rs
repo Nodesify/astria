@@ -261,6 +261,23 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         set_schema_version(&tx, 9)?;
         tx.commit()?;
     }
+    if version < 10 {
+        // v10: derived text for binary formats. The document layer's
+        // converted content (office, workspace exports, media transcripts)
+        // is stored once per (path, content hash) so the semantic pass can
+        // enrich exactly what extraction saw instead of re-reading the raw
+        // bytes as UTF-8.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS derived_text (
+                file_path TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL,
+                text TEXT NOT NULL
+            );",
+        )?;
+        set_schema_version(&tx, 10)?;
+        tx.commit()?;
+    }
 
     Ok(())
 }
@@ -352,7 +369,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "9");
+        assert_eq!(version, "10");
     }
 
     #[test]
@@ -429,7 +446,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "9");
+        assert_eq!(version, "10");
         conn.execute(
             "INSERT INTO nodes (id, label, file_type, source_file, signature) VALUES ('a', 'A', 'code', 'f.rs', 'fn a()')",
             [],

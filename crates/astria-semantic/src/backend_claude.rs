@@ -38,7 +38,7 @@ impl ClaudeBackend {
     pub fn build_request_body(&self, content: &str, file_type: &str) -> serde_json::Value {
         serde_json::json!({
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT,
             "system": system_prompt(file_type),
             "messages": [
                 {"role": "user", "content": content}
@@ -49,7 +49,7 @@ impl ClaudeBackend {
     pub fn build_image_request_body(&self, image_b64: &str, media_type: &str) -> serde_json::Value {
         serde_json::json!({
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT,
             "system": vision_prompt(),
             "messages": [
                 {"role": "user", "content": [
@@ -87,20 +87,31 @@ impl ClaudeBackend {
         let json: serde_json::Value = serde_json::from_str(response)
             .map_err(|e| AstriaError::Graph(format!("Failed to parse Claude API response: {e}")))?;
         enrichment::record_usage(&json);
+        // Refusals and truncations report through stop_reason; neither is
+        // a usable extraction.
+        let stop = json
+            .get("stop_reason")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        if stop == "max_tokens" || stop == "refusal" {
+            return Err(AstriaError::Graph(format!(
+                "Claude reply unusable (stop_reason: {stop})"
+            )));
+        }
         let text = json
             .get("content")
             .and_then(|c| c.get(0))
             .and_then(|block| block.get("text"))
             .and_then(|t| t.as_str())
-            .unwrap_or("");
-        Ok(parse_extraction_text(text))
+            .ok_or_else(|| AstriaError::Graph("Claude reply had no text block".into()))?;
+        parse_extraction_text(text)
     }
 
     /// Single-turn Messages-API body for the auxiliary passes.
     pub(crate) fn claude_chat_body(&self, system: &str, user: &str) -> serde_json::Value {
         serde_json::json!({
             "model": self.model,
-            "max_tokens": 1024,
+            "max_tokens": enrichment::MAX_OUTPUT_TOKENS_COMPLETE,
             "system": system,
             "messages": [
                 {"role": "user", "content": user}

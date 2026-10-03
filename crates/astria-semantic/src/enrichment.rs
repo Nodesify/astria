@@ -81,6 +81,7 @@ pub fn record_usage(response: &serde_json::Value) {
 /// Cap the run's total tokens (input + output). `0` disables the cap.
 pub fn configure_budget(total_tokens: u64) {
     BUDGET.store(total_tokens, Ordering::Relaxed);
+    RESERVED.store(0, Ordering::Relaxed);
 }
 
 /// Read `ASTRIA_LLM_BUDGET` (total tokens) once per process; 0 = unlimited.
@@ -106,6 +107,76 @@ pub fn ensure_budget() -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Tokens claimed by in-flight requests. A check-then-call sequence lets
+/// every concurrent worker pass the same check and collectively overshoot
+/// the cap; the reservation is claimed atomically before a request flies
+/// and released (by drop) once the call finishes.
+static RESERVED: AtomicU64 = AtomicU64::new(0);
+
+/// Output allowance reserved per EXTRACTION request, tokens. This matches
+/// the `max_tokens`/`maxOutputTokens` the backends put on the wire for
+/// extraction calls — the reserve must cover what a response can cost.
+pub const MAX_OUTPUT_TOKENS_EXTRACT: u64 = 4096;
+/// Output allowance for single-shot `complete()` calls (community naming,
+/// deep linking, judge gate/rank). Matches the backends' complete() cap.
+pub const MAX_OUTPUT_TOKENS_COMPLETE: u64 = 1024;
+
+/// A claimed budget reservation. Released exactly once on drop — whether
+/// the call succeeded, failed, or the worker unwound — so no path can
+/// double-release or leak a claim.
+#[derive(Debug)]
+pub struct Reservation {
+    estimate: u64,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if self.estimate > 0 {
+            RESERVED.fetch_sub(
+                self.estimate.min(RESERVED.load(Ordering::Acquire)),
+                Ordering::AcqRel,
+            );
+        }
+    }
+}
+
+/// Atomically claim a conservative allowance for one upcoming call:
+/// roughly `input_chars / 4` input tokens plus the call's full output
+/// allowance. The claim either fits under the remaining budget (recorded
+/// spend + already-claimed reservations) or the call is refused before it
+/// can cost anything. Every billable request — extraction chunks, vision
+/// calls, `complete()` passes, judge requests — claims one. This bounds
+/// spend, not bills it exactly: actual usage is still recorded per response
+/// and the reservation is released when it lands — ASTRIA_LLM_BUDGET is
+/// therefore an enforced estimate, not a metered invoice.
+pub fn reserve_budget(input_chars: usize, output_allowance: u64) -> Result<Reservation> {
+    let budget = BUDGET.load(Ordering::Relaxed);
+    if budget == 0 {
+        return Ok(Reservation { estimate: 0 });
+    }
+    let estimate = (input_chars as u64 / 4).saturating_add(output_allowance);
+    loop {
+        let spent = usage_snapshot().total();
+        let reserved = RESERVED.load(Ordering::Acquire);
+        if spent.saturating_add(reserved).saturating_add(estimate) > budget {
+            return Err(AstriaError::Graph(
+                "LLM token budget exhausted (ASTRIA_LLM_BUDGET) — raising the cap or caching \
+                 more files will resume extraction"
+                    .into(),
+            ));
+        }
+        match RESERVED.compare_exchange_weak(
+            reserved,
+            reserved + estimate,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Ok(Reservation { estimate }),
+            Err(_) => continue,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,11 +228,9 @@ pub fn summarize_community(
     size: usize,
     members: &[String],
 ) -> Result<CommunityNaming> {
-    ensure_budget()?;
-    let text = backend.complete(
-        community_label_system_prompt(),
-        &community_label_user_prompt(hub_label, size, members),
-    )?;
+    let user_prompt = community_label_user_prompt(hub_label, size, members);
+    let _reservation = reserve_budget(user_prompt.len(), MAX_OUTPUT_TOKENS_COMPLETE)?;
+    let text = backend.complete(community_label_system_prompt(), &user_prompt)?;
     parse_community_naming(&text)
         .ok_or_else(|| AstriaError::Graph("community naming reply was not usable JSON".into()))
 }
@@ -253,11 +322,9 @@ pub fn link_concepts(
     symbols: &[String],
     concepts: &[(String, String)],
 ) -> Result<Vec<ConceptLink>> {
-    ensure_budget()?;
-    let text = backend.complete(
-        deep_link_system_prompt(),
-        &deep_link_user_prompt(file_display, symbols, concepts),
-    )?;
+    let user_prompt = deep_link_user_prompt(file_display, symbols, concepts);
+    let _reservation = reserve_budget(user_prompt.len(), MAX_OUTPUT_TOKENS_COMPLETE)?;
+    let text = backend.complete(deep_link_system_prompt(), &user_prompt)?;
     Ok(parse_deep_links(&text))
 }
 

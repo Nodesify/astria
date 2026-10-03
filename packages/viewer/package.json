@@ -5,7 +5,7 @@
   "license": "MIT",
   "description": "Source for the single-file interactive graph viewer embedded in `astria export --format html`.",
   "scripts": {
-    "build": "tsc --noEmit && esbuild src/viewer.ts --bundle --minify --platform=browser --target=es2020 --outfile=../../crates/astria-napi/src/assets/viewer.js",
+    "build": "tsc --noEmit && esbuild src/viewer.ts --bundle --minify --platform=browser --target=es2020 --outfile=../../crates/astria-export/assets/viewer.js",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

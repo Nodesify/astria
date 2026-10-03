@@ -24,7 +24,23 @@ pub fn normalize_id(raw: &str) -> String {
         }
         current = next;
     }
+    collapse_punctuation(&current)
+}
 
+/// Structural-identity normalization: identical to [`normalize_id`] except
+/// letter case is preserved. Node ids built from this are collision-free for
+/// case-distinct declarations (`Foo`/`foo` are different symbols), while
+/// search and reference matching keep using the case-folded form — the two
+/// concerns stay separate. Case itself is already NFKC-stable, so a single
+/// normalization round suffices.
+pub fn normalize_id_case_preserved(raw: &str) -> String {
+    let folded: String = raw.nfkc().collect();
+    collapse_punctuation(&folded)
+}
+
+/// Shared tail of both normalizers: keep Unicode word characters, collapse
+/// everything else to single underscores, trim the ends.
+fn collapse_punctuation(current: &str) -> String {
     let mut out = String::with_capacity(current.len());
     let mut pending_underscore = false;
     for ch in current.chars() {
@@ -100,6 +116,30 @@ mod tests {
     fn cjk_and_cyrillic_survive() {
         assert_eq!(normalize_id("図書館"), "図書館");
         assert_eq!(normalize_id("Библиотека"), "библиотека");
+    }
+
+    #[test]
+    fn case_preserving_normalization_keeps_case_but_collapses_the_rest() {
+        // Structural identity: `Foo` and `foo` stay distinct.
+        assert_eq!(normalize_id_case_preserved("Foo"), "Foo");
+        assert_eq!(normalize_id_case_preserved("My-Class!"), "My_Class");
+        assert_eq!(
+            normalize_id_case_preserved("  spaced   out  "),
+            "spaced_out"
+        );
+        assert_eq!(normalize_id_case_preserved("()"), "");
+        // NFKC compatibility folding still applies.
+        assert_eq!(normalize_id_case_preserved("ﬁle"), "file");
+        assert_eq!(normalize_id_case_preserved("Ⅻ"), "XII");
+    }
+
+    #[test]
+    fn case_preserving_normalization_is_idempotent() {
+        for input in ["İstanbul", "Straße", "My-Class!", "a::b__c"] {
+            let once = normalize_id_case_preserved(input);
+            let twice = normalize_id_case_preserved(&once);
+            assert_eq!(once, twice, "not idempotent for {input:?}");
+        }
     }
 
     #[test]

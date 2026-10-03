@@ -61,14 +61,13 @@ astria affected <node>                        # what breaks if you change this
 
 Exclude files with a `.astriaignore` file in the project root (gitignore syntax). Everything astria writes lives in plain files under `.astria/` — [the full layout](https://nodesify.github.io/astria/docs/reference/directory-layout).
 
-> **Migrating from `@nodesify/graphify`?** 1.0 is a rebrand: the binary is `astria`, the npm package is `@nodesify/astria`, and graphs live in `.astria/` instead of `.graphify/`. Run once after installing:
+> **Migrating from `@nodesify/graphify`?** 1.0 is a rebrand: the binary is `astria`, the npm package is `@nodesify/astria`, and graphs live in `.astria/` instead of `.graphify/`. Rename `.graphify/` → `.astria/` and `.graphifyignore` → `.astriaignore` yourself, then run:
 >
 > ```bash
-> astria migrate          # renames .graphify/ -> .astria/ and the global store
 > astria install          # refreshes AI-tool skills/hooks (also cleans the old graphify entries)
 > ```
 >
-> Legacy configuration variables remain supported where documented. LLM activation requires `--backend` or `ASTRIA_LLM_BACKEND`; `GRAPHIFY_LLM_BACKEND` does not opt in.
+> All configuration is `ASTRIA_*`; there is no legacy spelling support. LLM activation requires `--backend` or `ASTRIA_LLM_BACKEND`.
 
 ## Documentation
 
@@ -104,7 +103,7 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 
 ## Architecture
 
-Rust workspace with 16 crates + Node.js CLI:
+Rust workspace with 20 crates + Node.js CLI:
 
 ```
 crates/

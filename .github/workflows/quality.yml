@@ -16,7 +16,7 @@ jobs:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-      - run: npm install --install-strategy=nested
+      - run: npm ci
         working-directory: packages/astria-cli
       - run: cargo build --release --locked -p astria-napi
       - run: mkdir -p packages/astria-cli/dist && cp target/release/libastria_napi.so packages/astria-cli/dist/astria.node

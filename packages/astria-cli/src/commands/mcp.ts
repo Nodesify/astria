@@ -10,6 +10,12 @@ export interface McpOptions {
   token?: string;
   /** Additional projects: "name=path" or bare "path" entries. */
   projects?: string[];
+  /**
+   * Browser origins allowed to send HTTP requests (exact match, e.g.
+   * "http://localhost:5173"). Requests carrying an Origin header are refused
+   * unless listed; native MCP clients send no Origin and always pass.
+   */
+  allowOrigin?: string[];
 }
 
 export async function mcpCommand(opts: McpOptions) {
@@ -26,6 +32,7 @@ export async function mcpCommand(opts: McpOptions) {
         port,
         token: opts.token,
         projects: opts.projects,
+        allowedOrigins: opts.allowOrigin,
       });
       return;
     }

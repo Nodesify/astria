@@ -13,3 +13,6 @@ astria-core = { workspace = true }
 astria-paths = { workspace = true }
 rusqlite = { workspace = true }
 petgraph = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

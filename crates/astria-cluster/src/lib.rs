@@ -163,13 +163,13 @@ pub fn cluster_with(
                 .filter(|(_, &l)| l == big)
                 .map(|(i, _)| i)
                 .collect();
-        let mut sub_labels: Vec<u32> = (0..members.len() as u32).collect();
-        let sub_graph = induced_subgraph(&graph, &members);
-        // Hub exclusion does not apply inside oversized-community splits:
-        // hubs hold unique labels and can never be members of a split
-        // candidate, and re-deriving hub thresholds on the subgraph would
-        // flag ordinary connectors.
-        propagate(&sub_graph, &mut sub_labels, resolution, None);
+            let mut sub_labels: Vec<u32> = (0..members.len() as u32).collect();
+            let sub_graph = induced_subgraph(&graph, &members);
+            // Hub exclusion does not apply inside oversized-community splits:
+            // hubs hold unique labels and can never be members of a split
+            // candidate, and re-deriving hub thresholds on the subgraph would
+            // flag ordinary connectors.
+            propagate(&sub_graph, &mut sub_labels, resolution, None);
             let distinct: std::collections::HashSet<u32> = sub_labels.iter().copied().collect();
             if distinct.len() > 1 {
                 split_happened = true;
@@ -209,10 +209,8 @@ pub fn cluster_with(
     // become mergeable) — a pass with neither terminates the loop.
     // Excluded hubs sit in singleton communities until the assignment pass
     // below, so they must never be merged as fragments.
-    let mut isolated: std::collections::HashSet<u32> = excluded
-        .iter()
-        .map(|&i| labels[i])
-        .collect();
+    let mut isolated: std::collections::HashSet<u32> =
+        excluded.iter().map(|&i| labels[i]).collect();
     loop {
         let sizes = sizes_of(&labels);
         let mut fragment = None;
@@ -1075,8 +1073,10 @@ mod tests {
         .unwrap();
         assert_eq!(split.excluded_hubs, 1, "only the center is a hub here");
         let comm_of = |id: &str| -> i64 {
-            db.query_row("SELECT community FROM nodes WHERE id = ?1", [id], |r| r.get(0))
-                .unwrap()
+            db.query_row("SELECT community FROM nodes WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
         };
         assert_ne!(
             comm_of("l0"),
@@ -1085,7 +1085,11 @@ mod tests {
         );
         // Every node still ends up in a community, hub included.
         let unassigned: i64 = db
-            .query_row("SELECT COUNT(*) FROM nodes WHERE community IS NULL", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM nodes WHERE community IS NULL",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(unassigned, 0);
     }

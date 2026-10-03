@@ -25,7 +25,6 @@ import { diagnoseCommand } from './commands/diagnose';
 import { saveResultCommand, reflectCommand } from './commands/feedback';
 import { globalAddCommand, globalRemoveCommand, globalListCommand, globalPathCommand } from './commands/global';
 import { hookGuard } from './commands/hook-guard';
-import { migrateCommand } from './commands/migrate';
 import { updateCommand } from './commands/update';
 import { watchCommand } from './commands/watch';
 import { clusterCommand } from './commands/cluster';
@@ -218,10 +217,11 @@ program
 
 program
   .command('merge')
-  .description('Merge two graphs into a new output graph')
+  .description('Merge two graphs into a new output graph (cross-repo by default: ids namespaced per root; --same-repo shares ids and errors on conflicts)')
   .argument('<pathA>', 'First project root')
   .argument('<pathB>', 'Second project root')
   .argument('<outPath>', 'Output project root')
+  .option('--same-repo', 'Treat both inputs as one repository: no id namespacing; differing definitions under the same id fail the merge')
   .action(mergeCommand);
 
 program
@@ -246,6 +246,7 @@ program
   .option('--host <addr>', 'HTTP bind address (default 127.0.0.1; non-loopback requires a token)')
   .option('--port <n>', 'HTTP port', '8620')
   .option('--token <token>', 'Bearer token for HTTP serving (default: ASTRIA_MCP_TOKEN; required off-loopback)')
+  .option('--allow-origin <origin...>', 'Browser origins allowed to send HTTP requests, e.g. "http://localhost:5173" (requests with an Origin header are refused unless listed; native clients send none)')
   .option('--projects <paths...>', 'Additional projects to serve: "name=path" or "path" (project name defaults to the directory name)')
   .action(mcpCommand);
 
@@ -296,11 +297,6 @@ program
   .option('--json', 'Emit machine-readable JSON')
   .action(statusCommand);
 
-program
-  .command('migrate')
-  .description('Migrate a pre-1.0 .graphify layout to .astria (renames the data folder, ignore file, and global store)')
-  .option('--graph <path>', 'Path to project root', '.')
-  .action(migrateCommand);
 
 registerInstallCommand(program);
 registerHookCommand(program);
@@ -364,6 +360,8 @@ program
   .option('--min-health <n>', 'Fail when the health score is below this', '60')
   .option('--max-risk <n>', 'Fail when the diff risk score exceeds this', '70')
   .option('--staged', 'Assess the staged diff only (git diff --cached)')
+  .option('--base <ref>', 'Score the committed diff base...head (CI/PR mode — a clean checkout has no working-tree diff; e.g. --base origin/main)')
+  .option('--head <ref>', 'Head ref of the range (default HEAD; requires --base)')
   .option('--json', 'Emit machine-readable JSON')
   .action(mergeGateCommand);
 

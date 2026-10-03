@@ -70,8 +70,6 @@
     "@nodesify/astria-darwin-x64": "1.0.11",
     "@nodesify/astria-linux-x64-gnu": "1.0.11",
     "@nodesify/astria-darwin-arm64": "1.0.11",
-    "@nodesify/astria-linux-arm64-gnu": "1.0.11",
-    "@nodesify/astria-linux-x64-musl": "1.0.11",
-    "@nodesify/astria-win32-arm64-msvc": "1.0.11"
+    "@nodesify/astria-linux-arm64-gnu": "1.0.11"
   }
 }

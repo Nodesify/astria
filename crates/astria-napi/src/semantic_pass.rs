@@ -7,6 +7,48 @@ fn timestamp() -> String {
     super::timestamp()
 }
 
+/// True when a file's semantic input must come from the document layer's
+/// derived text rather than a raw read: media transcripts and workspace
+/// exports (identified by their extraction language) plus the binary
+/// document extensions.
+fn needs_derived_text(path: &Path, extractions: &[astria_extract::Extraction]) -> bool {
+    if let Some(ext) = extractions
+        .iter()
+        .find(|e| e.file_path == path)
+        .map(|e| e.language.as_str())
+    {
+        if matches!(ext, "transcript" | "gws") {
+            return true;
+        }
+    }
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_lowercase().as_str(), "pdf" | "docx" | "xlsx"))
+        .unwrap_or(false)
+}
+
+/// Load the document layer's derived text for a file. Rows are keyed by the
+/// same normalized path extraction wrote and by the extraction-layer content
+/// hash (plain, or `:gws-rev:`-suffixed for workspace shortcuts) — NOT by
+/// the semantic configuration hash, which never matches what extraction
+/// stored. Stale rows (file changed since extraction) count as missing.
+fn load_derived_text(db: &Connection, path: &Path) -> Option<String> {
+    let plain_hash = astria_extract::cache::file_hash(path).ok()?;
+    let key = astria_paths::normalize(path);
+    let mut stmt = db
+        .prepare("SELECT content_hash, text FROM derived_text WHERE file_path = ?1")
+        .ok()?;
+    let row: Option<(String, String)> = stmt
+        .query_row(rusqlite::params![key], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .ok();
+    let (stored_hash, text) = row?;
+    astria_extract::is_extraction_hash_for(&stored_hash, &plain_hash)
+        .then_some(text)
+        .filter(|t: &String| !t.trim().is_empty())
+}
+
 fn semantic_cache_key(path: &Path) -> String {
     format!("semantic:{}", astria_paths::normalize(path))
 }
@@ -133,6 +175,17 @@ pub(super) fn enrich_with_semantics(
         {
             continue;
         }
+        // MCP server configs embed literal credentials and are ingested by
+        // the deterministic manifest extractor (names only). Their raw
+        // bytes never become semantic candidates — not for the engine, not
+        // for the judge gate, not for the cache.
+        if file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(astria_core::is_mcp_config_filename)
+        {
+            continue;
+        }
         let hash = file_hash(file_path, configuration)?;
 
         // Text extraction paths require an existing extraction (images have
@@ -232,10 +285,43 @@ pub(super) fn enrich_with_semantics(
     };
     let gated = all_pending_paths.len() - pending_paths.len();
 
+    // F20: binary formats (office documents, workspace exports, media
+    // transcripts, PDFs) already had their text extracted by the document
+    // layer. Enrichment must consume that same normalized content — reading
+    // the raw bytes as UTF-8 fails and aborts publication. Files whose
+    // derived text is missing or stale keep their AST-only facts with a
+    // warning instead of failing the run; the next rebuild re-extracts and
+    // enriches them.
+    let mut sources: HashMap<PathBuf, astria_semantic::SourceContent> = HashMap::new();
+    let mut usable_paths: Vec<PathBuf> = Vec::with_capacity(pending_paths.len());
+    for path in &pending_paths {
+        if !needs_derived_text(path, extractions) {
+            usable_paths.push(path.clone());
+            continue;
+        }
+        match load_derived_text(db, path) {
+            Some(text) => {
+                sources.insert(
+                    path.clone(),
+                    astria_semantic::SourceContent::Extracted(text),
+                );
+                usable_paths.push(path.clone());
+            }
+            None => {
+                eprintln!(
+                    "warning: no derived text for {} — semantic enrichment skipped (AST facts kept); rebuild with `astria run` to enrich",
+                    path.display()
+                );
+            }
+        }
+    }
+    let pending_paths = usable_paths;
+
     // Batch-extract cache misses in parallel.
-    let results = astria_semantic::extract_semantic_for_files_parallel(
+    let results = astria_semantic::extract_semantic_for_files_parallel_with_content(
         &pending_paths,
         backend_factory,
+        std::sync::Arc::new(sources),
         astria_semantic::concurrency_from_env(),
     );
     let extraction_by_path: HashMap<PathBuf, astria_semantic::SemanticExtraction> = results
@@ -302,4 +388,50 @@ pub(super) fn enrich_with_semantics(
         cached,
         gated,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The lookup must key on the plain normalized path and accept the
+    /// extraction-layer hash family (plain or `:gws-rev:`-suffixed). The
+    /// previous version queried a `semantic:`-prefixed path with the
+    /// semantic configuration hash and could never match a stored row.
+    #[test]
+    fn derived_text_lookup_matches_extraction_hash_family() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("doc.pdf");
+        std::fs::write(&file, b"%PDF-1.4 fake").unwrap();
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        let plain = astria_extract::cache::file_hash(&file).unwrap();
+        let key = astria_paths::normalize(&file);
+
+        // Fresh plain-hash row matches.
+        db.execute(
+            "INSERT INTO derived_text (file_path, content_hash, text) VALUES (?1, ?2, ?3)",
+            rusqlite::params![key, plain, "# extracted"],
+        )
+        .unwrap();
+        assert_eq!(
+            load_derived_text(&db, &file).as_deref(),
+            Some("# extracted")
+        );
+
+        // GWS-suffixed hash (remote revision fingerprint) matches too.
+        db.execute(
+            "INSERT OR REPLACE INTO derived_text (file_path, content_hash, text) VALUES (?1, ?2, ?3)",
+            rusqlite::params![key, format!("{plain}:gws-rev:ABC123"), "# gws"],
+        )
+        .unwrap();
+        assert_eq!(load_derived_text(&db, &file).as_deref(), Some("# gws"));
+
+        // Stale hash (file changed since extraction) counts as missing.
+        db.execute(
+            "INSERT OR REPLACE INTO derived_text (file_path, content_hash, text) VALUES (?1, ?2, ?3)",
+            rusqlite::params![key, "0".repeat(64), "# stale"],
+        )
+        .unwrap();
+        assert_eq!(load_derived_text(&db, &file), None);
+    }
 }
