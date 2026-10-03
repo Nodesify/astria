@@ -10,13 +10,25 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Works with OpenAI, DeepSeek, Ollama (/v1), LM Studio, and custom
-/// OpenAI-compatible providers via a configurable base URL.
+/// How the API key is presented. Bearer is the OpenAI standard; Azure
+/// gateways expect a plain `api-key` header instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthStyle {
+    Bearer,
+    ApiKeyHeader,
+}
+
+/// Works with OpenAI, DeepSeek, Ollama (/v1), LM Studio, Kimi/Moonshot, and
+/// custom OpenAI-compatible providers via a configurable base URL.
 pub struct OpenAiBackend {
     agent: ureq::Agent,
     api_key: Option<String>,
     base_url: String,
     model: String,
+    auth_style: AuthStyle,
+    /// Appended verbatim after `/chat/completions` — Azure's mandatory
+    /// `?api-version=...` query parameter is the only current user.
+    query_suffix: String,
 }
 
 impl OpenAiBackend {
@@ -42,21 +54,60 @@ impl OpenAiBackend {
                  the API key is sent unencrypted"
             );
         }
-        Ok(Self {
-            agent: build_agent(),
-            api_key,
-            base_url: base_url.trim_end_matches('/').to_string(),
-            model,
-        })
+        Ok(Self::new_with_auth(api_key, base_url, model, AuthStyle::Bearer))
     }
 
     pub fn new(api_key: Option<String>, base_url: String, model: String) -> Self {
+        Self::new_with_auth(api_key, base_url, model, AuthStyle::Bearer)
+    }
+
+    /// Constructor for gateways whose auth or URL shape differs from stock
+    /// OpenAI (Azure: `api-key` header + api-version query).
+    pub(crate) fn new_with_auth(
+        api_key: Option<String>,
+        base_url: String,
+        model: String,
+        auth_style: AuthStyle,
+    ) -> Self {
         Self {
             agent: build_agent(),
             api_key,
             base_url: base_url.trim_end_matches('/').to_string(),
             model,
+            auth_style,
+            query_suffix: String::new(),
         }
+    }
+
+    pub(crate) fn with_query_suffix(mut self, suffix: String) -> Self {
+        self.query_suffix = suffix;
+        self
+    }
+
+    /// Named Kimi/Moonshot backend: the OpenAI-compatible surface with
+    /// Moonshot's endpoint, key variables, and a Kimi default model.
+    /// - `ASTRIA_KIMI_BASE_URL` — defaults to `https://api.moonshot.cn/v1`.
+    /// - `MOONSHOT_API_KEY` / `KIMI_API_KEY` / `ASTRIA_LLM_API_KEY` — the key.
+    /// - `ASTRIA_LLM_MODEL` — defaults to `kimi-k2-0905-preview`.
+    pub fn kimi_from_env() -> Result<Self> {
+        let base_url = astria_core::env_var("KIMI_BASE_URL")
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or_else(|| "https://api.moonshot.cn/v1".into());
+        let api_key = std::env::var("MOONSHOT_API_KEY")
+            .ok()
+            .or_else(|| std::env::var("KIMI_API_KEY").ok())
+            .or_else(|| astria_core::env_var("LLM_API_KEY"))
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+            .filter(|k| !k.trim().is_empty());
+        if api_key.is_none() {
+            return Err(AstriaError::Graph(
+                "no Kimi API key: set MOONSHOT_API_KEY (or KIMI_API_KEY / ASTRIA_LLM_API_KEY)".into(),
+            ));
+        }
+        let model = astria_core::env_var("LLM_MODEL")
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| "kimi-k2-0905-preview".into());
+        Ok(Self::new(api_key, base_url, model))
     }
 
     pub fn build_request_body(&self, content: &str, file_type: &str) -> serde_json::Value {
@@ -87,14 +138,17 @@ impl OpenAiBackend {
     pub(crate) fn headers(&self) -> Vec<(&'static str, String)> {
         let mut headers = vec![("Content-Type", "application/json".to_string())];
         if let Some(key) = &self.api_key {
-            headers.push(("Authorization", format!("Bearer {key}")));
+            match self.auth_style {
+                AuthStyle::Bearer => headers.push(("Authorization", format!("Bearer {key}"))),
+                AuthStyle::ApiKeyHeader => headers.push(("api-key", key.clone())),
+            }
         }
         headers
     }
 
     pub(crate) fn extract_raw(&self, body: serde_json::Value) -> Result<SemanticExtraction> {
         let body_str = serde_json::to_string(&body)?;
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = format!("{}/chat/completions{}", self.base_url, self.query_suffix);
         let headers = self.headers();
         let hdr: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let response = post_json(&self.agent, &url, &hdr, &body_str, "OpenAI-compatible")?;
@@ -125,7 +179,7 @@ impl OpenAiBackend {
 
     pub(crate) fn complete_text(&self, body: serde_json::Value) -> Result<String> {
         let body_str = serde_json::to_string(&body)?;
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = format!("{}/chat/completions{}", self.base_url, self.query_suffix);
         let headers = self.headers();
         let hdr: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let response = post_json(&self.agent, &url, &hdr, &body_str, "OpenAI-compatible")?;

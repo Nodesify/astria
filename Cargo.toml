@@ -99,6 +99,7 @@ tree-sitter-hcl = "1.1.0"
 tree-sitter-powershell = "0.26.4"
 tree-sitter-systemverilog = "0.4.1"
 base64 = "0.22"
+jieba-rs = "0.7"
 
 [workspace.package]
 rust-version = "1.88"

@@ -23,7 +23,7 @@
     "napi:dev": "node ../../scripts/build-native.mjs --debug",
     "napi:artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm",
-    "test": "npx tsx src/__tests__/cli.test.ts && npx tsx src/__tests__/install.test.ts && npx tsx src/__tests__/hooks.test.ts && npx tsx src/__tests__/e2e.test.ts"
+    "test": "npx tsx src/__tests__/cli.test.ts && npx tsx src/__tests__/install.test.ts && npx tsx src/__tests__/hooks.test.ts && npx tsx src/__tests__/merge-driver.test.ts && npx tsx src/__tests__/e2e.test.ts"
   },
   "keywords": [
     "knowledge-graph",

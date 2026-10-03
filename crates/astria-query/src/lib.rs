@@ -2091,6 +2091,34 @@ at the lake house');",
     }
 
     #[test]
+    fn tokenize_segments_cjk_queries_with_jieba() {
+        // Without segmentation the whole run is one token that matches
+        // nothing; jieba splits it into the words the graph's labels use.
+        let tokens = tokenize("用户登录处理");
+        assert!(tokens.contains(&"用户".to_string()), "got {tokens:?}");
+        assert!(tokens.contains(&"登录".to_string()), "got {tokens:?}");
+        assert!(
+            !tokens.contains(&"用户登录处理".to_string()),
+            "the unsegmented run must not survive, got {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn tokenize_mixed_cjk_and_latin() {
+        let tokens = tokenize("parse用户输入");
+        assert_eq!(tokens.first().map(|s| s.as_str()), Some("parse"));
+        assert!(tokens.contains(&"用户".to_string()), "got {tokens:?}");
+        assert!(tokens.contains(&"输入".to_string()), "got {tokens:?}");
+    }
+
+    #[test]
+    fn tokenize_cjk_is_not_applied_to_latin_words() {
+        // English text must tokenize exactly as before — the jieba pass only
+        // touches tokens that actually contain CJK characters.
+        assert_eq!(tokenize("authenticate user"), vec!["authenticate", "user"]);
+    }
+
+    #[test]
     fn camel_query_finds_snake_label() {
         let db = open_db_in_memory().unwrap();
         db.execute_batch(

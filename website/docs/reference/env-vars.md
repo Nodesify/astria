@@ -140,6 +140,15 @@ Appends a JSONL line (ts, kind, question, nodes, duration_ms) per query for agen
 | `NEO4J_USERNAME` | Username for `astria export --neo4j-push` (default `neo4j`; the `--neo4j-user` flag overrides) |
 | `NEO4J_PASSWORD` | Password for `astria export --neo4j-push` (empty by default; the `--neo4j-pass` flag overrides) |
 
+## Live Neo4j integration tests
+
+Credentials for the `#[ignore]`d astria-bolt integration tests, runnable against a local Neo4j with `cargo test -p astria-bolt --test live_neo4j -- --ignored`. Never read by the CLI or pipeline.
+
+| Variable | Purpose |
+|---|---|
+| `ASTRIA_BOLT_TEST_USER` | Username for the live tests (default `neo4j`) |
+| `ASTRIA_BOLT_TEST_PASS` | Password for the live tests (default `testpassword`) |
+
 ## Hook guard
 
 The editor `PreToolUse` guard (see [Agent integration](../guides/mcp-and-agents#editor-guard-hook-guard)). These are read by the hook process, so set them in your editor/agent environment, not your shell profile.

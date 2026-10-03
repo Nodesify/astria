@@ -13,6 +13,9 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const SERVER_NAME: &str = "astria";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+mod http;
+pub use http::{serve_http, HttpServerConfig};
+
 fn tools() -> Value {
     json!([
         {"name": "query_graph", "description": "Answer code-locating questions (where/how/what-breaks) with a ranked subgraph: NODE records carry id + src=file:line anchors, EDGE records carry provenance (EXTRACTED/RESOLVED/INFERRED). Prefer over grep for architecture and cross-module questions. An explicit \"No confident match\" means the question's vocabulary is absent from the graph — rephrase toward symbol names or file paths. The header discloses graph age and any files changed since the build.",
@@ -383,7 +386,9 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
     }
 }
 
-fn handle_message(db: &Connection, db_path: &str, msg: &Value) -> Option<Value> {
+/// Handle one JSON-RPC message against one graph. Shared by the stdio loop
+/// and the HTTP transport (http.rs); `pub(crate)` so both transports reach it.
+pub(crate) fn handle_message(db: &Connection, db_path: &str, msg: &Value) -> Option<Value> {
     // Notifications (no id) get no response
     let id = msg.get("id").cloned()?;
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
