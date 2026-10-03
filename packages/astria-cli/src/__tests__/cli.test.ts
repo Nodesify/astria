@@ -11,6 +11,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { Command } from 'commander';
 import { program } from '../index';
+import { DEFAULT_QUERY_BUDGET } from '../defaults';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const pkg = require('../../package.json');
@@ -149,6 +150,21 @@ if (existsSync(entry)) {
   }
 } else {
   console.log('(dist not built - skipping entrypoint load check)');
+}
+
+// Test 5: the --budget default comes from the shared constant in
+// src/defaults.ts (kept in sync with DEFAULT_QUERY_BUDGET in
+// crates/astria-mcp/src/lib.rs) — not a hardcoded literal that can drift
+// from the MCP server's default.
+function budgetDefault(commandName: string): unknown {
+  const command = program.commands.find((c: Command) => c.name() === commandName);
+  return command?.options.find((o) => o.long === '--budget')?.defaultValue;
+}
+for (const name of ['query', 'map']) {
+  assert(
+    budgetDefault(name) === String(DEFAULT_QUERY_BUDGET),
+    `${name} --budget default should be String(DEFAULT_QUERY_BUDGET), got ${budgetDefault(name)}`,
+  );
 }
 
 // Summary
