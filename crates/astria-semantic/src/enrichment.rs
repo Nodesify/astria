@@ -389,8 +389,9 @@ mod tests {
     use crate::SemanticExtraction;
 
     /// The usage counters are process-global; tests that assert on them
-    /// must not interleave.
-    static COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// must not interleave — with each other OR with reservation-path tests
+    /// (chunking/extraction) elsewhere in the crate.
+    use crate::BUDGET_TEST_LOCK as COUNTER_LOCK;
 
     fn obj(json: &str) -> serde_json::Value {
         serde_json::from_str(json).unwrap()

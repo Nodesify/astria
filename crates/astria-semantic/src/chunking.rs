@@ -129,19 +129,24 @@ mod tests {
 
     #[test]
     fn chunk_cap_is_a_hard_error_not_partial_success() {
+        // extract_content_chunked reserves from the process-global budget;
+        // hold the shared lock so a parallel budget test cannot cap it.
+        let _guard = crate::BUDGET_TEST_LOCK.lock().unwrap();
+        crate::enrichment::configure_budget(0);
         // Content needing more than the chunk cap must FAIL: a truncated
         // extraction returned as success would be cached as if it described
         // the whole file.
         let chunk = "b".repeat(MAX_CHUNK_CHARS) + "\n";
         let content = chunk.repeat(max_chunks() + 2);
         let err = extract_content_chunked(&content, "text", |_, _| Ok(SemanticExtraction::empty()))
-            .err()
-            .expect("oversized content must error");
+            .expect_err("oversized content must error");
         assert!(err.to_string().contains("ASTRIA_LLM_MAX_CHUNKS"), "{err}");
     }
 
     #[test]
     fn within_cap_content_extracts_every_chunk() {
+        let _guard = crate::BUDGET_TEST_LOCK.lock().unwrap();
+        crate::enrichment::configure_budget(0);
         // Two chunks of exactly the cap (no trailing newline, which would
         // push each over and hard-split them into four pieces).
         let chunk = "c".repeat(MAX_CHUNK_CHARS);

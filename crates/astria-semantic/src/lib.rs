@@ -30,6 +30,14 @@ pub mod jev;
 #[cfg(test)]
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// The LLM budget/usage counters are process-global; ANY test that either
+/// configures the budget (enrichment) or runs a path that reserves it
+/// (chunking, extraction) must hold this lock so the two groups cannot
+/// interleave — a budget-test's global cap once failed a parallel chunking
+/// test's reservation in release CI.
+#[cfg(test)]
+pub(crate) static BUDGET_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Maximum image size sent to vision endpoints (5 MB, matching upstream).
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
