@@ -248,6 +248,16 @@ jobs:
             npm publish --ignore-scripts --access public --provenance 2>publish.log || {
               if grep -q "previously published" publish.log; then
                 echo "already published — skipping"
+              elif grep -q "ENEEDAUTH" publish.log && ! npm view "$name" version > /dev/null 2>&1; then
+                # A package that has never existed on npm failing the OIDC
+                # exchange has no trusted-publisher binding registered at
+                # npmjs.com (the v1.0.12 musl and win32-arm64 legs). Treat
+                # as "not published this release" instead of aborting the
+                # remaining platforms and the main package; registration is
+                # a manual npmjs.com step. Auth failures for packages that
+                # DO exist remain hard errors.
+                echo "$name: OIDC exchange refused — no npm trusted-publisher binding for a never-published package; register it at npmjs.com (Settings > Trusted Publisher). Not published this release."
+                cat publish.log
               else
                 cat publish.log
                 exit 1
