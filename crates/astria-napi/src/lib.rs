@@ -1,4 +1,5 @@
 pub mod benchmark;
+pub mod cost;
 pub use astria_analyze::diagnose;
 pub use astria_export::export_cypher;
 pub use astria_export::export_graphml;
@@ -1368,8 +1369,64 @@ pub fn run_mcp_server(root: String) -> napi::Result<()> {
     astria_mcp::serve(&db_path).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
+#[napi(object)]
+pub struct McpHttpOptions {
+    /// Default project root (served when a request names no project).
+    pub root: String,
+    pub host: Option<String>,
+    pub port: Option<u32>,
+    /// Bearer token for every request. Falls back to ASTRIA_MCP_TOKEN.
+    pub token: Option<String>,
+    /// Extra projects: "name=path" entries, or bare "path" entries whose
+    /// project name defaults to the directory's file name.
+    pub projects: Option<Vec<String>>,
+}
+
+/// MCP over HTTP with multi-project serving: one process, many graphs.
+/// Project selection per request via the `x-astria-project` header or a
+/// `?project=` query parameter; `GET /healthz` for liveness.
 #[napi]
-pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
+pub fn run_mcp_http_server(opts: McpHttpOptions) -> napi::Result<()> {
+    let root_pb = PathBuf::from(&opts.root);
+    if !root_pb.exists() {
+        return Err(napi::Error::from_reason(format!(
+            "path does not exist: {}",
+            root_pb.display()
+        )));
+    }
+    let root_pb = root_pb
+        .canonicalize()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let mut config = astria_mcp::HttpServerConfig::from_roots(
+        &root_pb,
+        &opts.projects.unwrap_or_default(),
+    )
+    .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    if let Some(host) = opts.host {
+        config.host = host;
+    }
+    if let Some(port) = opts.port {
+        config.port = port as u16;
+    }
+    // Explicit --token wins; the environment is the unattended (CI, Docker,
+    // hosted) configuration path.
+    config.token = opts
+        .token
+        .or_else(|| std::env::var("ASTRIA_MCP_TOKEN").ok())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    astria_mcp::serve_http(config).map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+#[napi]
+pub fn cluster_only(
+    root: String,
+    // Minimum share of neighbors backing the winning label, 0.0–1.0.
+    // 0.0 = classic propagation; higher → more, smaller communities.
+    resolution: Option<f64>,
+    // Keep high-degree hub nodes from gluing communities together.
+    exclude_hubs: Option<bool>,
+) -> napi::Result<PipelineResultJs> {
     let root_pb = PathBuf::from(&root);
     let root_pb = root_pb
         .canonicalize()
@@ -1377,8 +1434,12 @@ pub fn cluster_only(root: String) -> napi::Result<PipelineResultJs> {
     let db =
         pipeline::load_graph_db(&root_pb).map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
-    let cluster_result =
-        astria_cluster::cluster(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let options = astria_cluster::ClusterOptions {
+        resolution: resolution.unwrap_or(0.0),
+        exclude_hubs: exclude_hubs.unwrap_or(false),
+    };
+    let cluster_result = astria_cluster::cluster_with(&db, &options)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let analysis =
         astria_analyze::analyze(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let report = astria_report::generate_report(&db, &analysis)

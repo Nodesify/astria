@@ -1,0 +1,33 @@
+# Keep the Docker build context lean: no build artifacts, no local graph
+# state, no dev tooling. The builder needs only Cargo.lock + crates/ +
+# packages/ + scripts/.
+.git
+.github
+.gitignore
+.gitattributes
+
+# Local build state
+target
+node_modules
+**/node_modules
+packages/astria-cli/dist
+packages/astria-cli/npm
+packages/viewer
+
+# Local graph data and analysis output
+.astria
+graphify-out
+raw
+bench-work
+worked
+coverage
+*.sqlite
+
+# Docs and site (not needed inside the image)
+website
+docs
+
+# Editor / OS noise
+.vscode
+.idea
+*.log

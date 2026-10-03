@@ -50,6 +50,8 @@ On Claude Code? One plugin bundles the MCP server, the skill, `/astria` + `/astr
 
 macOS/Linux without npm? `brew install nodesify/tap/astria` ([tap](https://github.com/Nodesify/homebrew-tap)).
 
+In a container? `docker build -t astria .` from the repo root produces the same CLI — analyze a mounted repo (`docker run --rm -v "$PWD":/workspace astria run /workspace`) or serve the MCP over HTTP on port 8620.
+
 ```bash
 astria run .                                  # build the graph (creates .astria/)
 astria query "how does authentication work"   # ask the graph a question
@@ -83,7 +85,11 @@ Full docs live at [nodesify.github.io/astria](https://nodesify.github.io/astria/
 
 - **Query it three ways** — CLI (`query`, `explain`, `path`, `affected`, `map`), an MCP server for AI agents, or an exported [markdown wiki](https://nodesify.github.io/astria/docs/guides/wiki-and-exports) any agent (or human) can crawl
 - **Local embeddings, no API key** — `run --embed` adds `similar_to` edges and semantic query recall ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
-- **Optional LLM enrichment, measured and cached** — Claude, any OpenAI-compatible endpoint, or Gemini, with an optional Jev judge layer on top of any of them (`--judge jev`): the judge re-judges relations and node types from the schema allowlists, gives every semantic edge a calibrated confidence score, and can batch-gate trivial files and re-rank suggested questions before they cost engine calls. Vision included for images; per-run with `--backend`/`--model`/`--judge` or env vars. Thematic community naming (`run --label-communities`, one call per *changed* community) and a `--deep` concept-linking tier (one call per changed file) are content-hash cached, so unchanged inputs and effective configuration can reuse cached output. Backend selection is explicit; credentials alone never activate enrichment. Every response's usage block is counted — the run summary prints API calls and input/output tokens, and `ASTRIA_LLM_BUDGET` caps the spend ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
+- **Optional LLM enrichment, measured and cached** — Claude, any OpenAI-compatible endpoint, Azure OpenAI, AWS Bedrock (real SigV4 signing), Kimi/Moonshot, or Gemini, with an optional Jev judge layer on top of any of them (`--judge jev`): the judge re-judges relations and node types from the schema allowlists, gives every semantic edge a calibrated confidence score, and can batch-gate trivial files and re-rank suggested questions before they cost engine calls. Vision included for images; per-run with `--backend`/`--model`/`--judge` or env vars. Thematic community naming (`run --label-communities`, one call per *changed* community) and a `--deep` concept-linking tier (one call per changed file) are content-hash cached, so unchanged inputs and effective configuration can reuse cached output. Backend selection is explicit; credentials alone never activate enrichment. Every response's usage block is counted — the run summary prints API calls and input/output tokens, and `ASTRIA_LLM_BUDGET` caps the spend ([semantic enrichment guide](https://nodesify.github.io/astria/docs/guides/semantic-enrichment))
+- **Teams & CI built in** — `astria mcp --http` serves many project graphs over MCP Streamable HTTP with bearer auth; `astria merge-driver install` union-merges `.astria/graph.json` on parallel-branch commits instead of conflicting; `astria merge-gate` is a CI check that fails on stale/unhealthy graphs or risky diffs; `astria digest` renders a weekly engineering brief; `astria prs` maps open PRs onto the graph with CI state, review status, worktree mapping, and a ranked review queue. A Dockerfile ships in the repo root ([Team serving & CI](https://nodesify.github.io/astria/docs/reference/cli#team-serving))
+- **Every run writes cost.json** — per-run and lifetime LLM token spend surfaced as a machine-readable artifact, with a dollar estimate when you set per-million-token rates
+- **Queries and code speak CJK** — Chinese/Japanese/Korean queries (and labels) segment via jieba instead of arriving as unmatchable character runs; `NOTE:`/`WHY:`/`HACK:` comments become `rationale_for` nodes linked to the code they explain
+- **Clustering controls** — `cluster-only --resolution <0-1>` dials community granularity, `--exclude-hubs` stops hub nodes from gluing every community together
 - **Cross-repo global graph** — merge many repos into one queryable store at `~/.astria/global.db` ([global graph guide](https://nodesify.github.io/astria/docs/guides/global-graph))
 - **The graph compounds with use** — repeated queries become `learned` edges; curated Q/A memory via `save-result`/`reflect` ([memory and learning](https://nodesify.github.io/astria/docs/guides/memory-and-learning))
 - **Interactive HTML viewer, SVG, and live Neo4j** — physics-free large-graph HTML mode, deterministic community-arc SVG for Notion/GitHub embedding, an idempotent Cypher script, or a direct Bolt push into a running Neo4j — hand-rolled protocol client, zero driver dependencies ([wiki and exports](https://nodesify.github.io/astria/docs/guides/wiki-and-exports))
@@ -112,9 +118,9 @@ crates/
   astria-cluster/   Deterministic label propagation community detection
   astria-analyze/   God nodes, surprising connections, blast radius
   astria-query/     Query engine: BFS/DFS (optionally directed), shortest path, explain
-  astria-mcp/       MCP stdio server exposing the graph to AI agents
+  astria-mcp/       MCP server exposing the graph to AI agents (stdio + HTTP, multi-project)
   astria-report/    Markdown report generation
-  astria-semantic/  LLM semantic extraction (Claude / OpenAI-compatible / Gemini), with vision
+  astria-semantic/  LLM semantic extraction (Claude / OpenAI-compatible / Azure / Bedrock / Kimi / Gemini), with vision
   astria-ingest/    URL ingestion (arXiv/tweet/webpage/image), SCIP + Postgres intake, SSRF protection
   astria-audio/     Audio/video transcription via whisper.cpp (external whisper-cli + ffmpeg)
   astria-office/    Office document extraction (.docx/.xlsx -> markdown)

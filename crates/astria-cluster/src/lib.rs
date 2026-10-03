@@ -20,6 +20,37 @@ const OVERSIZED_MIN: usize = 10;
 /// own community because there is nothing to merge into.
 const UNDERSIZED_MIN: usize = 3;
 
+/// A node is a hub when its degree reaches at least this, scaled up with the
+/// graph's mean degree — hubs are what glue communities together, so only
+/// `--exclude-hubs` needs them and the bar must sit far above ordinary
+/// connector symbols.
+const HUB_MIN_DEGREE: usize = 12;
+
+/// Knobs for `cluster_with`. Defaults reproduce the classic label-propagation
+/// behavior exactly; `astria cluster-only --resolution/--exclude-hubs` sets
+/// them.
+#[derive(Debug, Clone)]
+pub struct ClusterOptions {
+    /// Minimum share of a node's neighbors that must back the winning label
+    /// before the node joins it, in [0.0, 1.0]. 0.0 = join the dominant
+    /// neighbor label (classic propagation, the default); 1.0 requires
+    /// unanimous neighbors. Higher values → more, smaller communities.
+    pub resolution: f64,
+    /// Keep high-degree hub nodes out of label propagation so they cannot
+    /// bridge every community into one. Hubs are attached to their strongest
+    /// community after propagation, so every node still gets a community.
+    pub exclude_hubs: bool,
+}
+
+impl Default for ClusterOptions {
+    fn default() -> Self {
+        Self {
+            resolution: 0.0,
+            exclude_hubs: false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ClusterResult {
     pub communities: HashMap<u32, usize>,
@@ -30,9 +61,20 @@ pub struct ClusterResult {
     pub iterations: u32,
     /// Newman modularity of the final partition in [-1, 1].
     pub modularity: f64,
+    /// Nodes held out of propagation by `exclude_hubs` (0 when the flag is
+    /// off) — they were assigned communities only after the fact.
+    pub excluded_hubs: usize,
 }
 
 pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
+    cluster_with(db, &ClusterOptions::default())
+}
+
+pub fn cluster_with(
+    db: &Connection,
+    options: &ClusterOptions,
+) -> astria_core::Result<ClusterResult> {
+    let resolution = options.resolution.clamp(0.0, 1.0);
     // Load nodes (id + label for hub naming). Ordered by id so label
     // propagation is deterministic across runs and platforms.
     let node_ids: Vec<String> = {
@@ -54,6 +96,7 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
             labels: HashMap::new(),
             iterations: 0,
             modularity: 0.0,
+            excluded_hubs: 0,
         });
     }
 
@@ -82,10 +125,21 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
         }
     }
 
+    // Hub exclusion (`--exclude-hubs`): hubs keep their unique initial label
+    // out of the tally — no neighbor can adopt a hub's label, and hubs adopt
+    // none — then are attached to their strongest community after the merge
+    // passes, so every node still ends up in a community.
+    let excluded: std::collections::HashSet<usize> = if options.exclude_hubs {
+        hub_nodes(&graph)
+    } else {
+        Default::default()
+    };
+    let excluded_hubs = excluded.len();
+
     // Label propagation
     let n = node_ids.len();
     let mut labels: Vec<u32> = (0..n as u32).collect();
-    let iterations = propagate(&graph, &mut labels);
+    let iterations = propagate(&graph, &mut labels, resolution, Some(&excluded));
 
     // Split oversized communities by re-running propagation on the subgraph.
     for _ in 0..3 {
@@ -109,9 +163,13 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
                 .filter(|(_, &l)| l == big)
                 .map(|(i, _)| i)
                 .collect();
-            let mut sub_labels: Vec<u32> = (0..members.len() as u32).collect();
-            let sub_graph = induced_subgraph(&graph, &members);
-            propagate(&sub_graph, &mut sub_labels);
+        let mut sub_labels: Vec<u32> = (0..members.len() as u32).collect();
+        let sub_graph = induced_subgraph(&graph, &members);
+        // Hub exclusion does not apply inside oversized-community splits:
+        // hubs hold unique labels and can never be members of a split
+        // candidate, and re-deriving hub thresholds on the subgraph would
+        // flag ordinary connectors.
+        propagate(&sub_graph, &mut sub_labels, resolution, None);
             let distinct: std::collections::HashSet<u32> = sub_labels.iter().copied().collect();
             if distinct.len() > 1 {
                 split_happened = true;
@@ -149,7 +207,12 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
     // reduces the community count, and fragments with no cross edges are
     // recorded as isolated (their edges never change, so they can never
     // become mergeable) — a pass with neither terminates the loop.
-    let mut isolated: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // Excluded hubs sit in singleton communities until the assignment pass
+    // below, so they must never be merged as fragments.
+    let mut isolated: std::collections::HashSet<u32> = excluded
+        .iter()
+        .map(|&i| labels[i])
+        .collect();
     loop {
         let sizes = sizes_of(&labels);
         let mut fragment = None;
@@ -168,10 +231,15 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
             .collect();
         // Tally cross edges from every fragment member to each neighboring
         // community; the most-connected one absorbs the fragment. Ties go
-        // to the lower community id.
+        // to the lower community id. Excluded hubs are skipped — their
+        // singleton labels must not absorb fragments; the assignment pass
+        // below pulls hubs toward communities, never the reverse.
         let mut tally: HashMap<u32, usize> = HashMap::new();
         for &member in &members {
             for neighbor in graph.neighbors(NodeIndex::new(member)) {
+                if excluded.contains(&neighbor.index()) {
+                    continue;
+                }
                 let nl = labels[neighbor.index()];
                 if nl != fragment {
                     *tally.entry(nl).or_insert(0) += 1;
@@ -187,6 +255,27 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
         };
         for &member in &members {
             labels[member] = target;
+        }
+    }
+
+    // Attach excluded hubs: each joins the community it shares the most
+    // edges with (ties → lower community id, deterministic). Hubs are
+    // ordered by index so assignment order cannot change results; hub↔hub
+    // edges contribute nothing because neither side has a final community
+    // until its own turn — exactly the "strongest *community*" semantics.
+    for &hub in &excluded {
+        let mut tally: HashMap<u32, usize> = HashMap::new();
+        for neighbor in graph.neighbors(NodeIndex::new(hub)) {
+            if excluded.contains(&neighbor.index()) {
+                continue;
+            }
+            *tally.entry(labels[neighbor.index()]).or_insert(0) += 1;
+        }
+        if let Some((&target, _)) = tally
+            .iter()
+            .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        {
+            labels[hub] = target;
         }
     }
 
@@ -386,6 +475,7 @@ pub fn cluster(db: &Connection) -> astria_core::Result<ClusterResult> {
         labels,
         iterations,
         modularity,
+        excluded_hubs,
     })
 }
 
@@ -521,37 +611,82 @@ fn thematic_labels(
     out
 }
 
+/// Nodes whose degree reaches the hub bar: at least HUB_MIN_DEGREE, and at
+/// least 4× the graph's mean degree. Both bars must clear, so small graphs
+/// (where 12 edges around one node is normal) never gain phantom hubs.
+fn hub_nodes(graph: &UnGraph<String, ()>) -> std::collections::HashSet<usize> {
+    let n = graph.node_count();
+    let mut out = std::collections::HashSet::new();
+    if n == 0 {
+        return out;
+    }
+    let degrees: Vec<usize> = (0..n)
+        .map(|i| graph.neighbors(NodeIndex::new(i)).count())
+        .collect();
+    let mean = degrees.iter().sum::<usize>() as f64 / n as f64;
+    let threshold = (HUB_MIN_DEGREE as f64).max(4.0 * mean);
+    for (i, &d) in degrees.iter().enumerate() {
+        if d as f64 >= threshold {
+            out.insert(i);
+        }
+    }
+    out
+}
+
 /// One full label-propagation pass loop. Returns iterations used.
+///
+/// `resolution` is the minimum share of a node's (non-excluded) neighbors
+/// that must back the winning label before the node joins it: 0.0 joins the
+/// dominant label unconditionally (classic propagation), 1.0 requires
+/// unanimity. `excluded` nodes neither vote nor update — their labels stay
+/// untouched until the caller assigns them.
 ///
 /// Tie-breaking is deterministic: among labels with the maximum neighbor
 /// count, the smallest label id wins. Rust's HashMap iteration order is
 /// randomized per process, so `max_by_key` alone would make communities
 /// (and every downstream report) differ between runs.
-fn propagate(graph: &UnGraph<String, ()>, labels: &mut [u32]) -> u32 {
+fn propagate(
+    graph: &UnGraph<String, ()>,
+    labels: &mut [u32],
+    resolution: f64,
+    excluded: Option<&std::collections::HashSet<usize>>,
+) -> u32 {
+    let is_excluded = |i: usize| excluded.is_some_and(|e| e.contains(&i));
     let n = labels.len();
     let mut iterations = 0;
     for _ in 0..100 {
         iterations += 1;
         let mut changed = false;
         for i in 0..n {
+            if is_excluded(i) {
+                continue;
+            }
             let node_idx = NodeIndex::new(i);
             let mut neighbor_labels: HashMap<u32, usize> = HashMap::new();
-            neighbor_labels.insert(labels[i], 1);
+            let mut neighbor_total = 0usize;
             for neighbor in graph.neighbors(node_idx) {
+                if is_excluded(neighbor.index()) {
+                    continue;
+                }
                 *neighbor_labels.entry(labels[neighbor.index()]).or_insert(0) += 1;
+                neighbor_total += 1;
             }
-            let best_label = {
-                let max_count = neighbor_labels.values().copied().max().unwrap_or(0);
-                // Smallest label id among the maxima: fully deterministic
-                // (HashMap iteration order must not decide communities).
-                neighbor_labels
-                    .iter()
-                    .filter(|(_, &count)| count == max_count)
-                    .map(|(&label, _)| label)
-                    .min()
-                    .unwrap_or(labels[i])
-            };
-            if best_label != labels[i] {
+            if neighbor_total == 0 {
+                continue;
+            }
+            let max_count = neighbor_labels.values().copied().max().unwrap_or(0);
+            // Smallest label id among the maxima: fully deterministic
+            // (HashMap iteration order must not decide communities).
+            let best_label = neighbor_labels
+                .iter()
+                .filter(|(_, &count)| count == max_count)
+                .map(|(&label, _)| label)
+                .min()
+                .unwrap_or(labels[i]);
+            if best_label == labels[i] {
+                continue;
+            }
+            if (max_count as f64) >= resolution * neighbor_total as f64 {
                 labels[i] = best_label;
                 changed = true;
             }
@@ -855,6 +990,115 @@ mod tests {
         let first = assignments(&seed);
         let second = assignments(&seed);
         assert_eq!(first, second, "same input must give same communities");
+    }
+
+    #[test]
+    fn higher_resolution_never_merges_more() {
+        // Two triangles joined by a single bridge. Default propagation can
+        // pull everything together; requiring broad neighbor agreement at
+        // resolution 1.0 keeps the split visible.
+        let seed = || {
+            let db = open_db_in_memory().unwrap();
+            db.execute_batch(
+                "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                    ('a','A','code','f.py'),('b','B','code','f.py'),('c','C','code','f.py'),
+                    ('d','D','code','f.py'),('e','E','code','f.py'),('f','F','code','f.py');
+                 INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                    ('a','b','calls','EXTRACTED','f.py'),('b','c','calls','EXTRACTED','f.py'),
+                    ('a','c','calls','EXTRACTED','f.py'),('d','e','calls','EXTRACTED','f.py'),
+                    ('e','f','calls','EXTRACTED','f.py'),('d','f','calls','EXTRACTED','f.py'),
+                    ('c','d','calls','EXTRACTED','f.py');",
+            )
+            .unwrap();
+            db
+        };
+        let default_count = cluster(&seed()).unwrap().communities.len();
+        let fine = cluster_with(
+            &seed(),
+            &ClusterOptions {
+                resolution: 1.0,
+                exclude_hubs: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            fine.communities.len() >= default_count,
+            "resolution 1.0 must not coarsen ({} vs {})",
+            fine.communities.len(),
+            default_count
+        );
+    }
+
+    #[test]
+    fn exclude_hubs_keeps_hubs_from_gluing_communities() {
+        // A hub joined to 20 chain leaves: propagation through the hub
+        // collapses everything into one community; with exclusion the two
+        // chain halves survive and the hub is attached afterwards.
+        let db = open_db_in_memory().unwrap();
+        let mut sql = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('h','H','code','f.py'",
+        );
+        for i in 0..20 {
+            sql.push_str(&format!("),('l{i}','L{i}','code','f.py'"));
+        }
+        sql.push_str(");");
+        let edge = |a: &str, b: &str| {
+            format!(
+                "INSERT INTO edges (source, target, relation, confidence, source_file) VALUES ('{a}','{b}','calls','EXTRACTED','f.py');"
+            )
+        };
+        for i in 0..20 {
+            sql.push_str(&edge("h", &format!("l{i}")));
+        }
+        for i in 0..9 {
+            sql.push_str(&edge(&format!("l{i}"), &format!("l{}", i + 1)));
+        }
+        for i in 10..19 {
+            sql.push_str(&edge(&format!("l{i}"), &format!("l{}", i + 1)));
+        }
+        db.execute_batch(&sql).unwrap();
+
+        let plain = cluster(&db).unwrap();
+        assert_eq!(
+            plain.communities.len(),
+            1,
+            "the hub glues both halves into one community without exclusion"
+        );
+
+        let split = cluster_with(
+            &db,
+            &ClusterOptions {
+                resolution: 0.0,
+                exclude_hubs: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(split.excluded_hubs, 1, "only the center is a hub here");
+        let comm_of = |id: &str| -> i64 {
+            db.query_row("SELECT community FROM nodes WHERE id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_ne!(
+            comm_of("l0"),
+            comm_of("l10"),
+            "the chain halves must stay separate once the hub stops voting"
+        );
+        // Every node still ends up in a community, hub included.
+        let unassigned: i64 = db
+            .query_row("SELECT COUNT(*) FROM nodes WHERE community IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(unassigned, 0);
+    }
+
+    #[test]
+    fn exclude_hubs_off_by_default() {
+        let db = open_db_in_memory().unwrap();
+        seed_graph(&db);
+        let result = cluster(&db).unwrap();
+        assert_eq!(result.excluded_hubs, 0);
+        let options = ClusterOptions::default();
+        assert!(!options.exclude_hubs);
+        assert_eq!(options.resolution, 0.0);
     }
 
     #[test]
