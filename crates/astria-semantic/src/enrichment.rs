@@ -46,10 +46,11 @@ pub fn usage_snapshot() -> TokenUsage {
     }
 }
 
-/// Record one API response's usage block. Understands the three wire
+/// Record one API response's usage block. Understands the four wire
 /// formats astria speaks — OpenAI-compatible (`usage.prompt_tokens` /
 /// `completion_tokens`), Anthropic (`usage.input_tokens` / `output_tokens`),
-/// and Gemini (`usageMetadata.*TokenCount`). A response without a usage
+/// Gemini (`usageMetadata.*TokenCount`), and AWS Bedrock Converse
+/// (`usage.inputTokens` / `outputTokens`). A response without a usage
 /// block still counts its call: an unmeasured call must never look free.
 pub fn record_usage(response: &serde_json::Value) {
     USAGE_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -63,12 +64,14 @@ pub fn record_usage(response: &serde_json::Value) {
         .get("prompt_tokens")
         .or_else(|| usage.get("input_tokens"))
         .or_else(|| usage.get("promptTokenCount"))
+        .or_else(|| usage.get("inputTokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     let output = usage
         .get("completion_tokens")
         .or_else(|| usage.get("output_tokens"))
         .or_else(|| usage.get("candidatesTokenCount"))
+        .or_else(|| usage.get("outputTokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     USAGE_INPUT.fetch_add(input, Ordering::Relaxed);
@@ -329,7 +332,7 @@ mod tests {
     // -- Usage accounting --
 
     #[test]
-    fn record_usage_understands_all_three_wire_formats() {
+    fn record_usage_understands_all_four_wire_formats() {
         let _guard = COUNTER_LOCK.lock().unwrap();
         reset_usage();
         record_usage(&obj(
@@ -341,10 +344,13 @@ mod tests {
         record_usage(&obj(
             r#"{"usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 3}}"#,
         ));
+        record_usage(&obj(
+            r#"{"usage": {"inputTokens": 4, "outputTokens": 2, "totalTokens": 6}}"#,
+        ));
         let usage = usage_snapshot();
-        assert_eq!(usage.input, 117);
-        assert_eq!(usage.output, 28);
-        assert_eq!(usage.calls, 3);
+        assert_eq!(usage.input, 121);
+        assert_eq!(usage.output, 30);
+        assert_eq!(usage.calls, 4);
     }
 
     #[test]

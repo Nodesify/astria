@@ -14,7 +14,10 @@ use std::collections::{HashMap, HashSet};
 
 /// Lowercase word tokens, splitting camelCase / snake_case / kebab-case and
 /// punctuation so "parseExtraction", "parse_extraction" and
-/// "parse-extraction" all tokenize identically.
+/// "parse-extraction" all tokenize identically. CJK runs (Chinese, Japanese,
+/// Korean) carry no such boundaries — a whole sentence would otherwise come
+/// back as one useless token — so they are segmented with jieba before
+/// joining the token list. Non-CJK tokenization is unchanged.
 pub(crate) fn tokenize(s: &str) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -32,17 +35,53 @@ pub(crate) fn tokenize(s: &str) -> Vec<String> {
     if !current.is_empty() {
         tokens.push(current.to_lowercase());
     }
+    if tokens.iter().any(|t| contains_cjk(t)) {
+        tokens = tokens
+            .into_iter()
+            .flat_map(|t| if contains_cjk(&t) { segment_cjk(&t) } else { vec![t] })
+            .collect();
+    }
     tokens
+}
+
+/// True when `s` holds any CJK ideograph, kana, or hangul — scripts where
+/// word boundaries are not written and lexical matching needs segmentation.
+pub(crate) fn contains_cjk(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(c as u32,
+            0x3040..=0x30FF       // Hiragana + Katakana
+            | 0x3400..=0x4DBF     // CJK Extension A
+            | 0x4E00..=0x9FFF     // CJK Unified Ideographs
+            | 0xAC00..=0xD7AF     // Hangul syllables
+            | 0xF900..=0xFAFF     // CJK Compatibility Ideographs
+            | 0x20000..=0x2FA1F)  // CJK Extensions B–F
+    })
+}
+
+/// Segment one CJK-bearing token with jieba (dictionary + HMM for words the
+/// dictionary misses). The segmenter is built once and shared; short-token
+/// cuts are microseconds, and non-CJK text never reaches this path.
+pub(crate) fn segment_cjk(token: &str) -> Vec<String> {
+    static JIEBA: std::sync::OnceLock<jieba_rs::Jieba> = std::sync::OnceLock::new();
+    let jieba = JIEBA.get_or_init(jieba_rs::Jieba::new);
+    jieba
+        .cut(token, true)
+        .into_iter()
+        .map(|word| word.to_lowercase())
+        .filter(|word| !word.trim().is_empty())
+        .collect()
 }
 
 /// The `k` node labels most similar to `query` — did-you-mean suggestions
 /// so a failed lookup hands the agent something actionable instead of a
-/// dead end. Best Jaro-Winkler score across the query's terms wins.
+/// dead end. Best Jaro-Winkler score across the query's terms wins. Terms
+/// come from the shared tokenizer so CJK queries segment instead of
+/// arriving as one unsplittable run.
 pub(crate) fn nearest_labels(loaded: &LoadedGraph, query: &str, k: usize) -> Vec<String> {
-    let terms: Vec<String> = query
-        .split_whitespace()
+    let terms: Vec<String> = tokenize(query)
+        .into_iter()
+        .filter(|t| !STOPWORDS.contains(&t.as_str()))
         .filter(|t| t.len() > 2)
-        .map(|t| t.to_lowercase())
         .collect();
     if terms.is_empty() {
         return Vec::new();

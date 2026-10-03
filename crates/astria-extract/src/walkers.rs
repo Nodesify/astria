@@ -568,8 +568,15 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
             // Try name_field first, then a positional named child, then fall
             // back to second child for call-based languages
             let positional = state.cfg.name_child.and_then(|n| nth_named_child(node, n));
-            let name_node = node
-                .child_by_field_name(state.cfg.name_field)
+            // R names functions by assignment (`greet <- function(...) {...}`):
+            // the name lives on the enclosing binary_operator's `lhs`.
+            let r_lhs = if state.cfg.name == "R" {
+                node.parent().and_then(|p| p.child_by_field_name("lhs"))
+            } else {
+                None
+            };
+            let name_node = r_lhs
+                .or_else(|| node.child_by_field_name(state.cfg.name_field))
                 .or(positional)
                 .or_else(|| {
                     if !state.cfg.function_call_names.is_empty() {
@@ -749,6 +756,74 @@ fn extract_import_module(text: &str, kind: &str, language: &str) -> Option<Strin
             }
             None
         }
+        ("Julia", "import_statement" | "using_statement") => {
+            let cleaned = text.trim();
+            let keyword = cleaned.split_whitespace().next()?;
+            if !matches!(keyword, "using" | "import") {
+                return None;
+            }
+            let after = cleaned.trim_start_matches(keyword).trim();
+            let module = after.split(&[' ', ',', '.'][..]).next()?;
+            if module.is_empty() {
+                None
+            } else {
+                Some(module.to_string())
+            }
+        }
+        ("Groovy", "import_declaration") => {
+            let cleaned = text
+                .trim_start_matches("import")
+                .trim()
+                .trim_end_matches(';');
+            if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned.to_string())
+            }
+        }
+        ("Solidity", "import_directive") => {
+            // import "x.sol"; | import {A} from "x.sol"; | import * as B from "x.sol";
+            let last_quote = text.rfind('"')?;
+            let start = text[..last_quote].rfind('"')?;
+            let module = &text[start + 1..last_quote];
+            if module.is_empty() {
+                None
+            } else {
+                Some(module.to_string())
+            }
+        }
+        ("OCaml" | "OCaml Interface", "open_module" | "include_module") => {
+            let cleaned = text.trim();
+            let keyword = cleaned.split_whitespace().next()?;
+            if !matches!(keyword, "open" | "include") {
+                return None;
+            }
+            let after = cleaned.trim_start_matches(keyword).trim();
+            let module = after.split_whitespace().next()?;
+            if module.is_empty() {
+                None
+            } else {
+                Some(module.to_string())
+            }
+        }
+        ("Objective-C" | "DreamMaker", "preproc_include" | "module_import") => {
+            let cleaned = text
+                .trim_start_matches("#import")
+                .trim_start_matches("#include")
+                .trim_start_matches("@import")
+                .trim();
+            let module = cleaned
+                .trim_start_matches('<')
+                .trim_start_matches('"')
+                .split(&['>', '"'][..])
+                .next()
+                .unwrap_or("");
+            if module.is_empty() {
+                None
+            } else {
+                Some(module.to_string())
+            }
+        }
         ("Elixir", "call") => {
             // Elixir imports: use MyModule, import MyModule, alias My.Module, require MyModule
             let cleaned = text.trim();
@@ -845,11 +920,7 @@ fn extract_callee_name(call_node: &Node, source: &[u8]) -> Option<String> {
 const RATIONALE_TAGS: &[&str] = &["NOTE", "WHY", "HACK", "IMPORTANT", "TODO", "FIXME"];
 
 fn extract_rationale(state: &mut ExtractionState, source: &[u8]) {
-    let comment_prefix = if state.cfg.name == "Python" {
-        "#"
-    } else {
-        "//"
-    };
+    let comment_prefix = rationale_prefix(state.cfg.name);
     let text = match std::str::from_utf8(source) {
         Ok(t) => t,
         Err(_) => return,
@@ -915,6 +986,19 @@ fn extract_rationale(state: &mut ExtractionState, source: &[u8]) {
             source_file: state.file_path.clone(),
             source_line: Some(line_num),
         });
+    }
+}
+
+/// Line-comment prefix per language, used for rationale (`// NOTE:`-style) scans.
+/// Languages without line comments fall through to `//` and simply never match.
+fn rationale_prefix(language: &str) -> &'static str {
+    match language {
+        "Python" | "Shell" | "Ruby" | "Julia" | "R" | "Groovy" | "Elixir" | "Terraform/HCL" => "#",
+        "Lua" | "Luau" | "SQL" | "Haskell" => "--",
+        "Common Lisp" => ";",
+        "VB.NET" => "'",
+        "Fortran" => "!",
+        _ => "//",
     }
 }
 

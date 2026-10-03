@@ -157,6 +157,7 @@ export const diffGraphs = (...args: any[]) => binding().diffGraphs(...args);
 export const graphHistory = (...args: any[]) => binding().graphHistory(...args);
 export const affectedNode = (...args: any[]) => binding().affectedNode(...args);
 export const runMcpServer = (...args: any[]) => binding().runMcpServer(...args);
+export const runMcpHttpServer = (...args: any[]) => binding().runMcpHttpServer(...args);
 export const exportTree = (...args: any[]) => binding().exportTree(...args);
 export const exportWiki = (...args: any[]) => binding().exportWiki(...args);
 export const exportObsidian = (...args: any[]) => binding().exportObsidian(...args);
