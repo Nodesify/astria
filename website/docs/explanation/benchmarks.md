@@ -53,6 +53,31 @@ Honest reading:
 - **Graph density**: ours extracts ~2× the nodes and ~4.8× the edges — `Imports`/`Uses`/`Defines` edges in addition to calls, plus file-aggregate nodes. That yields finer communities (161 vs 45); the original's Leiden clustering merges more aggressively. Denser is not automatically better — it is a different granularity trade-off.
 - **Token reduction**: effectively identical (50.1× vs 51.6×). Each tool measured with its own benchmark implementation (ours follows the same methodology); the absolute corpus-token estimates differ (~87k vs ~158k) because the estimators differ, so the ratio — not the absolute tokens — is the comparable metric.
 
+## Version-to-version A/B (October 2026)
+
+The head-to-head above compares tools; this section compares **astria against itself** across the 3 October 2026 project-review backlog (`d43bc92` → `e12af80`): 36 defects and 6 engineering improvements, then a validation pass that found and fixed 17 incomplete items plus one performance regression. The harness lives in `scripts/bench/ab/` — same corpus, same machine (local Windows box, release builds), interleaved rounds, medians of three after a warmup. Corpus: this repository's own source (1,193 files, ~30 MB).
+
+| Phase (median, ms) | `d43bc92` (before) | `e12af80` (after) | Delta |
+|---|---:|---:|---:|
+| Cold `run` (full build) | 14,833 | 15,279 | +3.0% |
+| No-op `update` | 14,023 | 13,947 | −0.5% |
+| First query (loads graph) | 774 | 609 | −21% |
+| Warm queries 2–5, same process | 264–308 | 181–194 | −29% to −40% |
+| Repo map | 57 | 8.6 | **−85%** |
+| Explain node | 67 | 13 | **−80%** |
+| God nodes | 107 | 90 | −16% |
+| Export JSON | 205 | 194 | −6% |
+| Export HTML | 58 | 62 | +6% (noise) |
+
+Graph output is equivalent: 21,039 edges on both sides, 4,486 vs 4,483 nodes (case-preserving ids keep previously-merged case-twin definitions distinct), 242 vs 245 communities.
+
+Reading:
+
+- **Builds at parity.** The backlog added correctness work (edge provenance, `_meta` in exports, publication generation stamping) but no hot-path overhead; the +3% cold-build figure is within run-to-run noise on this box.
+- **Reads 1.2–7× faster.** The gains come from the publication-generation snapshot cache (R02): graph-loading tools stop paying an O(V+E) reload per call within a process. Repo map ~7×, explain ~5×, repeated queries ~1.4× (scoring, not loading, dominates the rest).
+- **The harness earned its keep.** It caught that no-op updates republished the entire graph on every run: files with no extractor (svg/png) are labeled `media` by the engine and were counted as deferred media waiting on tooling, so the pending-retry set never emptied. Fixed in `e12af80` — deferred extraction now applies only to actionable files (transcribable media, workspace shortcuts).
+- **A pre-existing cost, unchanged by the backlog:** a no-op update takes ~14s in both versions because clustering, analysis, report, and artifact export rerun on every pipeline invocation even when nothing was rebuilt — a future optimization target.
+
 ## Live benchmark snapshot
 
 The table below is **regenerated automatically**: run **Benchmark snapshot → Run workflow** from the [Actions tab](https://github.com/Nodesify/astria/actions/workflows/bench-snapshot.yml), and the workflow runs both tools on a fresh GitHub runner, commits the updated snapshot JSON, and redeploys this site. The snapshot measures the installed release; proposed-source quality is checked separately.
