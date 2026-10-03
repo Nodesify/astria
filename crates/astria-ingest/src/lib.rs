@@ -11,6 +11,7 @@ use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use astria_audio::TranscribeError;
 use astria_core::AstriaError;
 use astria_core::Result;
 use url::Url;
@@ -32,6 +33,7 @@ pub struct IngestOptions {
 /// Classified URL kind, driving the save strategy.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum UrlKind {
+    Media,
     Tweet,
     ArxivAbstract,
     ArxivPdf,
@@ -59,6 +61,17 @@ pub fn classify_url(url: &str) -> UrlKind {
             return UrlKind::Image;
         }
     }
+    if lower.contains("youtube.com/")
+        || lower.contains("youtu.be/")
+        || lower.contains("vimeo.com/")
+        || lower.contains("dailymotion.com/")
+        || lower.contains("twitch.tv/")
+    {
+        return UrlKind::Media;
+    }
+    if astria_core::is_transcribable_extension(&lower) {
+        return UrlKind::Media;
+    }
     UrlKind::Webpage
 }
 
@@ -69,6 +82,22 @@ pub fn ingest_url(url: &str, out_dir: &Path, opts: &IngestOptions) -> Result<Pat
     std::fs::create_dir_all(out_dir)?;
 
     match classify_url(url) {
+        UrlKind::Media => match astria_audio::download_media_to(url, out_dir) {
+            Ok(path) => Ok(path),
+            Err(TranscribeError::Unavailable(notice)) => save_markdown(
+                out_dir,
+                annotated_markdown(
+                    url,
+                    "media",
+                    &format!("Media URL not ingested: {notice}"),
+                    "media-link",
+                    opts,
+                ),
+            ),
+            Err(TranscribeError::Failed(m)) => {
+                Err(AstriaError::Graph(format!("media download failed: {m}")))
+            }
+        },
         UrlKind::Tweet => save_markdown(out_dir, tweet_markdown(url, opts)?),
         UrlKind::ArxivAbstract => save_markdown(out_dir, arxiv_markdown(url, opts)),
         UrlKind::ArxivPdf | UrlKind::Pdf => save_binary(url, out_dir, pdf_name(url)),

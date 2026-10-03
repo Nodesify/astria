@@ -29,6 +29,23 @@ macro_rules! language_registry {
             Verilog, "Verilog/SystemVerilog", &[".v", ".sv", ".svh", ".vh"], verilog::config;
             Metal, "Metal", &[".metal"], metal::config;
             Css, "CSS", &[".css", ".scss"], css::config;
+            Astro, "Astro", &[".astro"], astro::config;
+            CommonLisp, "Common Lisp", &[".lisp", ".cl", ".lsp", ".asd"], commonlisp::config;
+            Dm, "DreamMaker", &[".dm"], dm::config;
+            Fortran, "Fortran", &[".f90", ".f95", ".f03", ".f08", ".f", ".for"], fortran::config;
+            Groovy, "Groovy", &[".groovy", ".gradle"], groovy::config;
+            Julia, "Julia", &[".jl"], julia::config;
+            Luau, "Luau", &[".luau"], luau::config;
+            ObjC, "Objective-C", &[".m", ".mm"], objc::config;
+            Ocaml, "OCaml", &[".ml"], ocaml::config;
+            OcamlInterface, "OCaml Interface", &[".mli"], ocaml_interface::config;
+            R, "R", &[".r"], r::config;
+            Solidity, "Solidity", &[".sol"], solidity::config;
+            Sql, "SQL", &[".sql"], sql::config;
+            VbNet, "VB.NET", &[".vb"], vb_net::config;
+            Pascal, "Pascal/Delphi", &[".pas", ".dpr", ".dpk", ".inc"], pascal::config;
+            Vue, "Vue", &[".vue"], vue::config;
+            Svelte, "Svelte", &[".svelte"], svelte::config;
         }
     };
 }

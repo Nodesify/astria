@@ -49,6 +49,8 @@ const MAX_RETRY_AFTER_SECS: u64 = 30;
 
 // Domain modules split out of lib.rs: shared types/protocol helpers, then
 // one file per extraction backend. The public API surface is unchanged.
+mod backend_azure;
+mod backend_bedrock;
 mod backend_claude;
 mod backend_gemini;
 mod backend_jev;
@@ -56,8 +58,11 @@ mod backend_openai;
 mod chunking;
 mod http;
 mod prompt;
+mod sigv4;
 mod types;
 
+pub use backend_azure::*;
+pub use backend_bedrock::*;
 pub use backend_claude::*;
 pub use backend_gemini::*;
 pub use backend_jev::*;
@@ -90,6 +95,9 @@ pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
         "openai" | "openai-compatible" | "openai_compatible" => {
             Box::new(OpenAiBackend::from_env()?)
         }
+        "kimi" | "moonshot" => Box::new(OpenAiBackend::kimi_from_env()?),
+        "azure" | "azure-openai" | "azure_openai" => Box::new(AzureOpenAiBackend::from_env()?),
+        "bedrock" | "aws" => Box::new(BedrockBackend::from_env()?),
         "gemini" | "google" => Box::new(GeminiBackend::from_env()?),
         "jev" | "typesafe" => {
             return Err(AstriaError::Graph(
@@ -101,12 +109,12 @@ pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
         }
         "" | "none" => {
             return Err(AstriaError::Graph(
-                "semantic enrichment is disabled; select --backend claude|openai|gemini or ASTRIA_LLM_BACKEND explicitly".into(),
+                "semantic enrichment is disabled; select --backend claude|openai|azure|bedrock|kimi|gemini or ASTRIA_LLM_BACKEND explicitly".into(),
             ))
         }
         other => {
             return Err(AstriaError::Graph(format!(
-                "unknown ASTRIA_LLM_BACKEND '{other}' (expected claude, openai, or gemini)"
+                "unknown ASTRIA_LLM_BACKEND '{other}' (expected claude, openai, azure, bedrock, kimi, or gemini)"
             )))
         }
     };
@@ -465,6 +473,76 @@ mod tests {
         };
         assert!(err.to_string().contains("unknown ASTRIA_LLM_BACKEND"));
         std::env::remove_var("ASTRIA_LLM_BACKEND");
+    }
+
+    #[test]
+    fn bedrock_request_body_uses_converse_format() {
+        let backend = BedrockBackend::new(
+            "us-east-1".into(),
+            "anthropic.claude-3-5-sonnet-20241022-v2:0".into(),
+            "AK".into(),
+            "SK".into(),
+            None,
+        );
+        let body = backend.build_request_body("hello", "rust");
+        assert!(body["system"][0]["text"].as_str().unwrap().contains("rust"));
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
+        assert_eq!(body["inferenceConfig"]["maxTokens"], 4096);
+        // Colon-bearing model ids must be percent-encoded for the URL path.
+        assert!(backend.url().contains("/model/anthropic.claude-3-5-sonnet-20241022-v2%3A0/converse"));
+        assert!(!backend.url().contains("AK"), "credentials never appear in the URL");
+    }
+
+    #[test]
+    fn bedrock_image_body_uses_converse_image_block() {
+        let backend = BedrockBackend::new(
+            "eu-west-1".into(),
+            "m".into(),
+            "AK".into(),
+            "SK".into(),
+            Some("TOKEN".into()),
+        );
+        let body = backend.build_image_request_body("QUJD", "image/webp");
+        let block = &body["messages"][0]["content"][0];
+        assert_eq!(block["image"]["format"], "webp");
+        assert_eq!(block["image"]["source"]["bytes"], "QUJD");
+    }
+
+    #[test]
+    fn kimi_resolution_builds_moonshot_backend() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "kimi");
+        std::env::set_var("MOONSHOT_API_KEY", "sk-test");
+        std::env::remove_var("ASTRIA_LLM_MODEL");
+        assert!(backend_from_env().is_ok());
+        std::env::remove_var("ASTRIA_LLM_BACKEND");
+        std::env::remove_var("MOONSHOT_API_KEY");
+    }
+
+    #[test]
+    fn kimi_resolution_without_key_errors_helpfully() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "kimi");
+        for var in ["MOONSHOT_API_KEY", "KIMI_API_KEY", "ASTRIA_LLM_API_KEY", "OPENAI_API_KEY"] {
+            std::env::remove_var(var);
+        }
+        let err = backend_from_env().err().expect("missing key must error");
+        assert!(err.to_string().contains("MOONSHOT_API_KEY"));
+        std::env::remove_var("ASTRIA_LLM_BACKEND");
+    }
+
+    #[test]
+    fn azure_resolution_builds_backend() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_LLM_BACKEND", "azure");
+        std::env::set_var("ASTRIA_AZURE_ENDPOINT", "https://res.openai.azure.com");
+        std::env::set_var("ASTRIA_AZURE_DEPLOYMENT", "gpt4o");
+        std::env::set_var("ASTRIA_AZURE_API_KEY", "key");
+        assert!(backend_from_env().is_ok());
+        for var in ["ASTRIA_LLM_BACKEND", "ASTRIA_AZURE_ENDPOINT", "ASTRIA_AZURE_DEPLOYMENT", "ASTRIA_AZURE_API_KEY"] {
+            std::env::remove_var(var);
+        }
     }
 
     #[test]

@@ -19,10 +19,13 @@ astria run <path> --backend openai --model gpt-4o-mini  # ...with LLM semantic e
 astria run <path> --global --as <tag>  # ...also merge this repo into the cross-repo global graph (see Global graph)
 astria update <path>              # Reuse cached ASTs, reconcile current corpus; regenerate an existing wiki
 astria watch <path> [--debounce 3000]  # Watch for file changes, auto-rebuild
-astria cluster-only <path>        # Re-cluster + analyze + report without re-extracting
+astria cluster-only <path> [--resolution 0.5] [--exclude-hubs]  # Re-cluster + analyze + report without re-extracting
 astria merge <pathA> <pathB> <outPath>  # Merge two graphs
 astria diff <pathA> <pathB>       # Compare two graphs
+astria merge-driver install       # Union-merge .astria/graph.json on parallel-branch commits (see Team serving & CI)
 ```
+
+`cluster-only` accepts two clustering controls: `--resolution <r>` (0.0–1.0, default 0.0 = classic label propagation) requires a minimum share of a node's neighbors to agree on the winning community before the node joins it — higher values produce more, smaller communities — and `--exclude-hubs` keeps high-degree hub nodes out of propagation so they cannot glue every community into one (hubs are attached to their strongest community afterwards, so every node still lands in one).
 
 `run` and `update` accept `--backend <claude|openai|gemini|none>`, `--model <name>`, and `--judge <name>` (per-run LLM enrichment without env vars; `--judge jev` layers the TypeSafe judge over the backend), `--no-dedup` (skip near-duplicate semantic entity merging), `--label-communities` (LLM thematic names for changed communities), and `--deep` (per-file concept linking) — the two LLM features require `--backend` and are described in [Semantic enrichment](../guides/semantic-enrichment). `--judge` requires `--backend`. `update` additionally accepts `--embed` (compute/recompute local embeddings, same as `run --embed`), `--quiet` (suppress progress lines and the token benchmark, used by git hooks), and `--if-stale <minutes>` (skip when the graph was published less than N minutes ago). Code definitions retain their identities even when labels match across classes or files.
 
@@ -33,6 +36,11 @@ Builds also pick up, automatically:
 - **Cargo workspaces** — when a `Cargo.toml` is present, workspace members and internal path dependencies become `crate::*` nodes with `crate_depends_on` edges (honoring `package =` renames and `workspace = true` inheritance). No LLM involved — dependency structure is fact.
 - **MCP configs** — `.mcp.json`, `mcp_servers.json`, and `claude_desktop_config.json` become `mcp_server`/`mcp_command`/`mcp_package` nodes with `requires_env` edges (env **names only** — values are never read).
 - **Video/audio transcription** — `mp4`/`mov`/`webm`/`mkv`/`avi` video and `mp3`/`wav`/`m4a`/`flac`/`ogg`/`opus`/`aac`/`wma` audio files are transcribed during `run`/`update` when [whisper.cpp](https://github.com/ggml-org/whisper.cpp)'s `whisper-cli` is on PATH (video also needs `ffmpeg`); the transcript becomes document and chunk nodes exactly like a markdown file. The model comes from `ASTRIA_WHISPER_MODEL` or the first `*.bin` in `<project>/.astria/models/` or `~/.astria/models/`. Missing binaries or model skip the files with a one-line notice — builds never fail on media.
+- **Media URLs** — `astria add <url>` accepts YouTube/Youtube-music, Vimeo, Dailymotion and Twitch links (plus direct `.mp4`/`.mp3`/… URLs): the audio track is downloaded with [yt-dlp](https://github.com/yt-dlp/yt-dlp) (16 kHz mono WAV when `ffmpeg` is available) and transcribed by the same whisper pipeline as local media. yt-dlp missing degrades to a stub node with the install hint.
+- **Office documents** — `.docx` (headings, paragraphs, lists, tables) and `.xlsx` (one markdown table per sheet, capped at 500 rows / 30 columns) are extracted locally and become document nodes.
+- **Google Workspace** — `.gdoc`/`.gsheet`/`.gslides` Drive shortcut files resolve to a file id and export as text/CSV → markdown through the Drive API; see [Google Workspace env vars](./env-vars.md#google-workspace). Missing credentials skip the file with a one-line notice.
+- **More doc formats** — `.qmd` rides the markdown path; `.html`/`.htm` are tag-stripped (scripts/styles dropped); `.yaml`/`.yml` are chunked as text.
+- **More languages** — 42 registered languages: SQL (tables, views, functions/procedures, triggers incl. `CREATE TRIGGER`), Julia, R, Fortran, Solidity, Groovy, Luau, Objective-C, OCaml (`.ml`) + OCaml Interface (`.mli`), Common Lisp, BYOND DreamMaker, Astro; Vue and Svelte extract their embedded `<script>` TS/JS through the JavaScript/TypeScript grammars; VB.NET and Pascal/Delphi use regex-declaration extraction (no grammar crate exists upstream).
 - **Transcript sidecars** — any `.txt`/`.md` you drop into `.astria/transcripts/` is ingested as document nodes on the next run/update (handy for tools or languages the built-in transcription does not cover). The contract for external transcribers: run any tool you like, write the text there, let the graph index it — or pipe it through the built-in writer: `astria add --transcript <file>` keeps the file's name, `astria add --transcript -` reads piped stdin (e.g. `whisper ... | astria add --transcript -`) and stores it under a timestamped name.
 
 ## Querying
@@ -89,8 +97,10 @@ Every query can also append a JSONL line (ts, kind, question, nodes, duration_ms
 astria export [--graph .] [--out graph.json] [--format json|html|graphml|cypher|svg|falkordb] [--mode standard|large]
 astria tree [--out tree.html] [--max-children 40]   # Collapsible filesystem tree of all symbols (HTML)
 astria wiki [--out .astria/wiki] [--max-nodes 25] [--format markdown|obsidian] [--graph .]  # Wikipedia-style markdown wiki, or an Obsidian vault
-astria prs [20] [--conflicts] [--graph .]           # Map open PRs onto the graph - impact + merge-order risk (requires the gh CLI)
+astria prs [20] [--conflicts] [--triage] [--queue] [--json] [--graph .]  # PR dashboard: CI state, review status, worktree mapping, ranked queue, merge-order risk (requires the gh CLI)
 ```
+
+Every `run`/`update` also writes two machine-readable artifacts next to the report: `.astria/graph.json` (the full graph — nodes, edges, hyperedges, communities; the file the git merge driver union-merges) and `.astria/cost.json` (the run's measured LLM spend — this run plus lifetime totals, with a dollar estimate when `ASTRIA_COST_*_PER_MTOK` are set; see [Environment variables](./env-vars)).
 
 `export --format html` creates a self-contained interactive graph view. The default `--mode standard` accepts graphs of at most 5,000 nodes and fails with an actionable message for larger graphs; `--mode large` lifts the cap. The viewer opens as community bubbles (click to expand into member nodes), supports search over symbols and community names, 1-hop neighborhood focus with relation-labeled links and direction arrows, and a level-of-detail "All nodes" mode that stays responsive on any repo size because positions are precomputed, physics is disabled, and only what is on screen is drawn. The page is a single file that embeds the whole graph, so very large repositories produce proportionally large HTML files.
 
@@ -111,6 +121,8 @@ See [Wiki and exports](../guides/wiki-and-exports) for details.
 astria diagnose [--graph .] [--json]
 astria health [--graph .] [--json]
 astria risk [--graph .] [--staged] [--json]
+astria merge-gate [--max-age-hours 24] [--min-health 60] [--max-risk 70] [--staged] [--json]  # CI merge gate (see Team serving & CI)
+astria digest [--out .astria/digest.md] [--json]  # Engineering digest brief (see Team serving & CI)
 ```
 
 Read-only health report over an existing graph: dangling edge endpoints (stub vs actionable), self-loops, duplicate edges, unclassified files, and zero-cohesion communities. `--json` emits machine-readable output. Never mutates the graph.
@@ -172,12 +184,28 @@ URL fetching is SSRF-guarded: only `http`/`https` schemes are accepted; each hos
 ## Assistant integration
 
 ```bash
-astria mcp [--graph .]              # Run MCP stdio server - query the graph from any AI agent
+astria mcp [--graph .]                    # MCP over stdio (the default)
+astria mcp --http [--port 8620] [--host 127.0.0.1] [--token <t>] [--projects a=./b name2=./c]  # MCP over HTTP, multi-project
 astria install [--platform claude] [--all]  # Skill + MCP registration for one AI platform or all (claude, codex, gemini, cursor, copilot, aider, opencode, kiro, trae, zcode, vscode, windsurf, cline, roo, amp, pi)
-astria uninstall [--platform claude] [--all]  # Remove the install for one platform or all
+astria uninstall [--platform claude] [--all] [--purge]  # Remove the install for one platform or all; --purge deep-cleans everything
 astria hook install|uninstall|status  # Git hook management
 astria hook-guard <mode>            # Editor PreToolUse guard (search | read | gemini) — installed into .claude/settings.json
+astria merge-driver install|uninstall|run  # Gitattributes merge driver for the graph file
 ```
+
+### Team serving & CI {#team-serving}
+
+**MCP over HTTP.** `astria mcp --http` serves one or many project graphs over MCP Streamable HTTP (JSON responses): `POST /mcp` speaks the same JSON-RPC as stdio, `GET /healthz` is a liveness probe. Clients pick a project with the `x-astria-project` header or a `?project=` query parameter (unlisted names 404 — no silent fallback); the `--graph` root is the default project and `--projects name=path` adds more. Requests must carry `--token` (or `ASTRIA_MCP_TOKEN`) as a bearer token whenever the server binds a non-loopback host — unauthenticated remote serving is refused at startup, never allowed.
+
+**Git merge driver for the graph file.** Parallel branches both rebuild and both commit `.astria/graph.json`; `astria merge-driver install` wires a three-way union-merge driver into `.gitattributes` + git config (`merge.astria.*`) so those commits merge instead of conflicting: additions from both sides survive, a side's deletion is respected, community renumbering resolves to whichever side changed (the next `update` re-clusters anyway). `astria/graph_report.md` gets git's built-in `union` driver. `uninstall` removes the wiring.
+
+**Merge gate.** `astria merge-gate` is the CI check the hosted tier enforces on every merge: it fails (exit 1) when the graph is missing, older than `--max-age-hours`, predates the last commit, scores below `--min-health`, or the pending diff's blast radius exceeds `--max-risk`. `--json` gives the pipeline something to parse.
+
+**Engineering digest.** `astria digest` renders a deterministic markdown brief — graph overview, health score, hub concentration, largest communities, LLM spend from `cost.json` — for stdout or `--out <file>`. Schedule it in cron/CI for a weekly cadence.
+
+**Docker.** A Dockerfile ships in the repo root: `docker build -t astria .` produces a slim image running the same CLI — analyze a mounted workspace (`docker run --rm -v "$PWD":/workspace astria run /workspace`) or serve the HTTP MCP on the exposed port 8620. Build with `--build-arg NAPI_FEATURES=--no-default-features` for a smaller image without the local embedding runtime (`--embed` then fails loudly, everything else works).
+
+The hosted tier (app.graphify.com) builds on these same primitives — hosted MCP, merge-gate verification, graph-aware review, and the engineering digest — for teams that do not want to run them.
 
 Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copilot`, `aider`, `opencode`, `kiro`, `trae`, `zcode`, `vscode`, `windsurf`, `cline`, `roo`, `amp`, `pi`. Setup walkthrough in [Agent integration](../guides/mcp-and-agents); the ten MCP tools are documented in the [MCP tools reference](./mcp-tools).
 

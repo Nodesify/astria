@@ -18,6 +18,7 @@ astria-core = { workspace = true }
 astria-paths = { workspace = true }
 rusqlite = { workspace = true }
 petgraph = { workspace = true }
+jieba-rs = { workspace = true }
 strsim = { workspace = true }
 tiktoken-rs = "0.12"
 

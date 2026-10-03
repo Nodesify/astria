@@ -178,6 +178,12 @@ pub fn run_pipeline_with(
         eprintln!("warning: failed to record pipeline status: {}", e);
     }
 
+    // Surface the run's spend as `.astria/cost.json` (this run + lifetime
+    // totals). Best-effort: a report write must never fail the build.
+    if let Err(e) = crate::cost::write_cost_report(&astria_dir, &db, run_id) {
+        eprintln!("warning: failed to write cost report: {}", e);
+    }
+
     result
 }
 

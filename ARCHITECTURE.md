@@ -56,6 +56,10 @@ CLI and MCP queries use the same hybrid retrieval path. Each request loads a fre
 | `astria-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. `--judge jev` wraps the selected engine with a TypeSafe System One judge layer: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking. |
 | `astria-ingest` | URL ingestion (arXiv/tweet/webpage/image) with SSRF protection. |
 | `astria-audio` | Audio/video transcription via the external `whisper-cli` binary (whisper.cpp) and `ffmpeg` demux — transcript markdown feeds the document extractor. |
+| `astria-office` | Office document text extraction: `.docx` (via `word/document.xml`) and `.xlsx` (via calamine) become markdown for the document extractor. |
+| `astria-gws` | Google Workspace shortcut ingestion: `.gdoc`/`.gsheet`/`.gslides` links are exported through the Drive API and become document nodes. Missing credentials degrade to a notice. |
+| `astria-export` | Graph export: JSON, interactive HTML, GraphML, SVG, Neo4j Cypher (with push), FalkorDB openCypher (with Redis push). |
+
 | `astria-pdf` | PDF text extraction. |
 | `astria-napi` | The bridge between Rust and Node.js: pipeline orchestration (semantic enrichment, community labeling, deep linking), query surface, merge/diff, JSON/HTML/GraphML/SVG/tree/Cypher export, live Neo4j push, health and risk reports. |
 | `astria-cli` | The Node.js-based user interface, responsible for argument parsing and installing AI skills. |

@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { installPlatform, uninstallPlatform } from '../install/index';
+import { installPlatform, uninstallPlatform, purgeEverything } from '../install/index';
 import { PLATFORM_NAMES } from '../install/platforms';
 
 export function registerInstallCommand(program: Command) {
@@ -36,11 +36,21 @@ export function registerInstallCommand(program: Command) {
 
   program
     .command('uninstall')
-    .description('Uninstall astria skill for an AI platform')
+    .description('Uninstall astria skill for an AI platform (--purge removes everything: hooks, merge driver, graph data, global store)')
     .option('--platform <name>', `Platform: ${PLATFORM_NAMES.join(', ')}`, 'claude')
     .option('--all', 'Uninstall from every supported platform')
-    .action(async (opts: { platform: string; all?: boolean }) => {
+    .option('--purge', 'Deep clean: uninstall every platform, git hooks, merge driver, .astria/ graph data, and the ~/.astria global store')
+    .action(async (opts: { platform: string; all?: boolean; purge?: boolean }) => {
       try {
+        if (opts.purge) {
+          // The flag is the consent: purge removes graph data and the
+          // global store, which no plain uninstall ever touches.
+          for (const msg of purgeEverything(process.cwd())) {
+            console.log(msg);
+          }
+          console.log('\nastria fully removed from this machine and project.');
+          return;
+        }
         if (opts.all) {
           for (const platform of PLATFORM_NAMES) {
             for (const msg of uninstallPlatform(platform, process.cwd())) {
