@@ -229,6 +229,15 @@ jobs:
           for dir in packages/astria-cli/npm/*/; do
             name=$(node -p "require('./$dir/package.json').name")
             version=$(node -p "require('./$dir/package.json').version")
+            # A platform whose build leg produced no binary (experimental
+            # legs fail open by design) must not publish an empty package:
+            # the tarball would shadow the platform with a 2-file stub, and
+            # an unregistered trusted publisher then aborts the whole run
+            # with ENEEDAUTH (the v1.0.12 musl first run).
+            if ! ls "$dir"*.node > /dev/null 2>&1; then
+              echo "$name@$version: no binary artifact — not published this release"
+              continue
+            fi
             if npm view "$name@$version" version > /dev/null 2>&1; then
               echo "$name@$version already on npm — skipping"
               continue
