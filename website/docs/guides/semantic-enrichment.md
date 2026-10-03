@@ -60,7 +60,8 @@ Every response's usage block is counted across the whole run — extraction, gat
 LLM usage: 17 API calls, 3366 in / 1675 out tokens
 ```
 
-- `ASTRIA_LLM_BUDGET` (total tokens) stops extraction before the cap is exceeded; remaining files fail loudly instead of silently skipping.
+- `ASTRIA_LLM_BUDGET` (total tokens) stops extraction before the cap is exceeded; remaining files fail loudly instead of silently skipping. The cap is enforced with **per-request reservations**: every billable call (each extraction chunk, vision calls, `complete()` passes, judge requests) atomically claims its input estimate plus the full output allowance the wire request permits before it flies, so concurrent workers cannot collectively overshoot the cap. Reservations bound spend conservatively — recorded usage still comes from provider responses — so the budget is an enforced estimate, not a metered invoice.
+- `ASTRIA_LLM_MAX_CHUNKS` (default `8`, clamped 1–64) caps how many chunks one file may cost. Content beyond the cap **fails loudly** — a truncated extraction is never returned or cached as if it covered the whole file. Raise it for oversized generated files (the effective cap participates in the cache fingerprint).
 - `pipeline_runs` records each run's `llm_input_tokens` / `llm_output_tokens` / `llm_api_calls`, so spend is queryable history, not a vibe.
 - Extraction caches include file content plus the effective backend, endpoint, model, and prompt configuration. Matching inputs reuse output; configuration changes invalidate it. Cached and fresh output follow the same merge path.
 - Failed semantic extraction leaves the core graph and successful-file manifest unadvanced, so a later update retries the work. Derived community-label and deep-link stages run after the core commit and can be retried separately on the next run.

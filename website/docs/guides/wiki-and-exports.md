@@ -105,7 +105,8 @@ The first command writes an idempotent openCypher script with load instructions.
 
 Hyperedges are n-ary node groups produced deterministically at build time (no LLM): one per community (`participate_in`, top-degree members) and one per identifier-shaped literal referenced from ≥ 3 distinct files (`shares_reference`). Every export surface shows them:
 
-- `graph.json` carries a `hyperedges` array (shape-compatible with Graphify's consumer)
+- `graph.json` carries a `hyperedges` array (shape-compatible with Graphify's consumer) and a `_meta` object with the build's publication metadata — `graph_generation`, `graph_published_at`, `pipeline_version`, and friends — read from the database in the same snapshot transaction as the graph itself, so an export never mixes two builds. Every edge also carries its evidence provenance (`source_line`, `context`).
+- a `.astria/generation.txt` sidecar records the same generation stamp, and the report footer carries it too — three artifacts (database, `graph.json`, report) of one publication are matchable
 - the HTML viewer shades a convex hull over each hyperedge's member nodes (large mode draws labeled circles)
 - the wiki index lists them; `explain` shows a node's hyperedge memberships
 - the `.astria/graph_report.md` gains a hyperedge section
