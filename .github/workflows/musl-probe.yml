@@ -1,0 +1,54 @@
+# One-shot probe: find the flags that restore the musl cdylib under
+# rustc >= 1.99, which enabled static-PIE on all musl targets — and a
+# static-PIE target cannot emit a cdylib, so the release's linux-x64-musl
+# leg produced no artifact ("dropping unsupported crate type cdylib").
+# Dispatch manually; not part of CI. Delete once the winning flag is baked
+# into release.yml.
+name: musl probe
+on:
+  workflow_dispatch:
+    inputs:
+      rustflags:
+        description: "RUSTFLAGS to test (empty = status quo)"
+        required: false
+        default: "-C target-feature=-crt-static"
+  pull_request:
+    paths:
+      - .github/workflows/musl-probe.yml
+      - .github/workflows/release.yml
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The counter-flag (must succeed) and the status quo (expected to
+        # fail without a cdylib; continue-on-error documents the contrast
+        # without failing the check run).
+        rustflags: ["-C target-feature=-crt-static", ""]
+        include:
+          - rustflags: ""
+            expected-failure: true
+    continue-on-error: ${{ matrix.expected-failure == true }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build (no-default-features, as the release leg does)
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl -p astria-napi --no-default-features
+      - name: Report artifact
+        run: |
+          echo "RUSTFLAGS='${{ matrix.rustflags }}'"
+          ls -la target/x86_64-unknown-linux-musl/release/ | grep -E "libastria|cdylib" || echo "NO CDYLIB ARTIFACT"
+          test -f target/x86_64-unknown-linux-musl/release/libastria_napi.so
+      - name: Smoke-load the .so
+        run: |
+          file target/x86_64-unknown-linux-musl/release/libastria_napi.so
+          readelf -d target/x86_64-unknown-linux-musl/release/libastria_napi.so | head -12
