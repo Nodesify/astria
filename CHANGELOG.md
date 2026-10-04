@@ -513,6 +513,9 @@ See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
 [1.0.6]: https://github.com/Nodesify/astria/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/Nodesify/astria/compare/v1.0.4...v1.0.5
+[1.0.12]: https://github.com/Nodesify/astria/compare/v1.0.11...v1.0.12
+[1.0.11]: https://github.com/Nodesify/astria/compare/v1.0.10...v1.0.11
+[1.0.10]: https://github.com/Nodesify/astria/compare/v1.0.9...v1.0.10
 [1.0.4]: https://github.com/Nodesify/astria/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/Nodesify/astria/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/Nodesify/astria/compare/v1.0.1...v1.0.2
