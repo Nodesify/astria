@@ -24,8 +24,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The candidate counter-flag and the failing status quo, side by side.
+        # The counter-flag (must succeed) and the status quo (expected to
+        # fail without a cdylib; continue-on-error documents the contrast
+        # without failing the check run).
         rustflags: ["-C target-feature=-crt-static", ""]
+        include:
+          - rustflags: ""
+            expected-failure: true
+    continue-on-error: ${{ matrix.expected-failure == true }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
