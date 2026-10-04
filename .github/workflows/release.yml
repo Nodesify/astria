@@ -123,6 +123,12 @@ jobs:
             # graph_stats instead of a runtime surprise.
             setup: sudo apt-get update && sudo apt-get install -y musl-tools
             cargo-flags: --no-default-features
+            # rustc 1.99 enabled static-PIE on all musl targets, and a
+            # static-PIE target cannot emit a cdylib ("dropping unsupported
+            # crate type cdylib" -> no .so -> no artifact). Link against
+            # the shared musl libc (musl-tools ships it) to keep cdylib
+            # support. Validated by the musl-probe workflow on this PR.
+            rustflags: -C target-feature=-crt-static
             experimental: true
           - os: windows-latest
             target: aarch64-pc-windows-msvc
@@ -132,6 +138,9 @@ jobs:
             # validated end to end — graph_stats discloses the capability.
             cargo-flags: --no-default-features
             experimental: true
+    env:
+      # Empty for every leg except musl (see its matrix entry).
+      RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: dtolnay/rust-toolchain@stable # branch ref on purpose: tracks latest stable Rust; not SHA-pinned so updates keep flowing

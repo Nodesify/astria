@@ -12,6 +12,10 @@ on:
         description: "RUSTFLAGS to test (empty = status quo)"
         required: false
         default: "-C target-feature=-crt-static"
+  pull_request:
+    paths:
+      - .github/workflows/musl-probe.yml
+      - .github/workflows/release.yml
 
 jobs:
   probe:
