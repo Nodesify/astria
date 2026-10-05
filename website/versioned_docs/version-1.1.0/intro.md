@@ -1,0 +1,36 @@
+---
+sidebar_position: 1
+title: Introduction
+description: astria turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local embeddings, zero API keys.
+keywords: [knowledge graph, codebase, ast, tree-sitter, rust, agents, mcp]
+---
+
+# Introduction
+
+**astria** turns any folder into a queryable knowledge graph — deterministic AST extraction in Rust, optional local-embedding semantics, zero API keys, everything on your machine.
+
+astria is inspired by the Python [Graphify](https://github.com/safishamsi/graphify) project's core idea — turn a corpus into a queryable knowledge graph — but it is an independent, from-scratch implementation: a deterministic, offline-first Rust/tree-sitter pipeline, not a fork or a port. astria is not affiliated with, sponsored by, or endorsed by the Graphify project or Graphify Labs.
+
+You drop into an unfamiliar repo and need to know: what is load-bearing here, what breaks if I change this, where does auth live, how do these two modules connect. Astria returns a budgeted graph view with source locations and explicit provenance. Historical corpus-to-query token ratios describe output size, while the [paired retrieval validation](./explanation/retrieval-validation) measures file recall, symbol retrieval, response budgets, and latency against pinned corpora.
+
+## Three things a folder full of files can't give you
+
+1. **Structure that survives the session** — hub files, god nodes, communities, and the blast radius of any change, stored in SQLite and refreshed incrementally as code changes.
+2. **An honest audit trail** — every edge is labeled `EXTRACTED` / `RESOLVED` / `INFERRED` / `SEMANTIC` / `AMBIGUOUS` with a numeric confidence score. You always know what was found in the source, uniquely bound, deduced, or judged by an LLM, and `--detail high` filters to only source-declared facts.
+3. **Answers for agents and humans** — query it from the CLI, from any AI agent via MCP, or just read the exported markdown wiki with plain file links.
+
+## Where to go next
+
+- [Getting started](./getting-started) — install and run your first graph
+- [Agent integration](./guides/mcp-and-agents) — wire the graph into Claude Code, Codex, Cursor, …
+- [CLI reference](./reference/cli) — every command and flag
+- [MCP tools reference](./reference/mcp-tools) — the ten tools your agent can call
+- [Wiki and exports](./guides/wiki-and-exports) — markdown wiki, Obsidian vault, HTML viewer, Neo4j
+- [Semantic enrichment](./guides/semantic-enrichment) — local embeddings and LLM backends
+- [Global graph](./guides/global-graph) — one queryable store across repos
+- [Memory and learning](./guides/memory-and-learning) — learned edges and curated Q/A memory
+- [Troubleshooting](./reference/troubleshooting) — when something looks wrong
+- [Benchmarks and evidence](./explanation/benchmarks) — measured numbers, the head-to-head vs the original Graphify, and the retrieval-quality harnesses (recall@k, blind judging, LoCoMo)
+- [Architecture](./explanation/architecture) — how the pipeline works under the hood
+
+Worked examples with honest reviews — the tool run on itself, including what the graph got *wrong* — live in the [`worked/`](https://github.com/Nodesify/astria/tree/main/worked) directory of the repository, alongside a [head-to-head comparison](https://github.com/Nodesify/astria/tree/main/worked/head-to-head) against the Python Graphify project that inspired it, run on the same corpus.
