@@ -51,12 +51,15 @@ const config = {
       ({
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
-          // 1.0.12 is the latest release; website/docs tracks the next one.
-          lastVersion: '1.0.12',
+          // 1.1.0 is the latest release; website/docs tracks the next one.
+          lastVersion: '1.1.0',
           versions: {
             current: {
               label: 'Next',
               banner: 'unreleased',
+            },
+            '1.1.0': {
+              banner: 'none',
             },
             '1.0.12': {
               banner: 'none',
