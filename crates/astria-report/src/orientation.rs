@@ -121,8 +121,7 @@ pub(super) fn escape(text: &str) -> String {
         .replace(']', "\\]")
         .replace('*', "\\*")
         .replace('`', "\\`")
-        .replace('\n', " ")
-        .replace('\r', " ")
+        .replace(['\n', '\r'], " ")
 }
 fn classify(file: &str, kind: &str, id: &str) -> Orientation {
     let normalized = file.replace('\\', "/").to_lowercase();
