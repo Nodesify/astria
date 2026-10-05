@@ -173,6 +173,7 @@ program
   .description('Code-health report: unreachable-symbol candidates, file cycles, hub concentration, staleness (heuristic score)')
   .option('--graph <path>', 'Path to project root', '.')
   .option('--json', 'Emit machine-readable JSON')
+  .option('--min-score <n>', 'Exit non-zero when the health score is below this (CI gate)')
   .action(healthCommand);
 
 program

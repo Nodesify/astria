@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use crate::naming::{file_stem, make_node_id, make_target_id};
+use crate::naming::{file_stem, make_node_id, make_text_id};
 use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};
 use astria_core::AstriaError;
 
@@ -83,7 +83,7 @@ pub(crate) fn extract_markdown_from_string(
             // would make the section id equal the file node's id — a
             // guaranteed duplicate within the extraction.
             let slug = {
-                let s = make_target_id(&title);
+                let s = make_text_id(&title);
                 if s.is_empty() {
                     "section".to_string()
                 } else {
@@ -181,7 +181,7 @@ pub(crate) fn extract_markdown_from_string(
                 .and_then(|s| s.to_str())
                 .unwrap_or("");
             if !target_stem.is_empty() {
-                let target_id = make_target_id(target_stem);
+                let target_id = make_text_id(target_stem);
                 edges.push(ExtractedEdge {
                     source: file_id.clone(),
                     target: target_id,
@@ -623,7 +623,7 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
             let title = trimmed_text.to_string();
             // Same empty-slug guard as the markdown extractor.
             let slug = {
-                let s = make_target_id(&title);
+                let s = make_text_id(&title);
                 if s.is_empty() {
                     "section".to_string()
                 } else {

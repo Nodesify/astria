@@ -167,14 +167,21 @@ fn is_entry_label(raw: &str) -> bool {
 }
 
 /// Test/bench/example files intentionally expose un-referenced helpers.
+///
+/// Markers must cover the shapes real repos use: `/test` catches `tests/`,
+/// `tests/x.rs` and `.test.ts` (the dot), `__tests__/` (the prefix), and
+/// `.spec.ts`/`_test.rs`. Missing `__tests__`/`.test.` silently un-demotes
+/// every JS/TS test hub and re-admits test-only helpers as dead code.
 fn is_test_file(path: &str) -> bool {
     let p = path.to_lowercase().replace('\\', "/");
     ["test", "spec", "example", "fixture", "benchmark"]
         .iter()
         .any(|marker| {
-            p.contains(&format!("/{marker}"))
-                || p.contains(&format!("{marker}s/"))
-                || p.contains(&format!("_{marker}."))
+            p.contains(&format!("/{marker}"))      // /test, /spec, /tests/
+                || p.contains(&format!("{marker}s/")) // tests/, benchmarks/
+                || p.contains(&format!("_{marker}.")) // foo_test.rs
+                || p.contains(&format!(".{marker}.")) // foo.test.ts
+                || p.contains(&format!("__{marker}s__/")) // __tests__/
         })
 }
 
@@ -266,6 +273,7 @@ fn dead_code(db: &Connection) -> astria_core::Result<Vec<DeadCodeCandidate>> {
     let mut stmt = db.prepare(
         "SELECT id, label, source_file FROM nodes
          WHERE file_type = 'code'
+           AND source_file IS NOT NULL AND source_file != ''
          ORDER BY degree_centrality DESC, id ASC",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -308,6 +316,14 @@ fn dead_code(db: &Connection) -> astria_core::Result<Vec<DeadCodeCandidate>> {
 /// like `if !model_cached()` infers `model_cached -> caller`). An 82-file
 /// "cycle" spanning unrelated crates was one such artifact — SCCs must be
 /// claimed only from edges the source actually contains.
+///
+/// `stub` and `reference` endpoints are excluded because they have no real
+/// file locus: a stub is a speculative node for an unresolved global name
+/// (`super`, `rusqlite`, `path`), and a reference is a dependency name. Both
+/// used to inherit an arbitrary file, so a single `import rusqlite` in
+/// health.rs appeared as "health.rs imports dedup.rs" and manufactured a
+/// four-crate cycle that does not exist in the source. A file can only
+/// depend on a file through a node that file actually owns.
 fn file_cycles(db: &Connection) -> astria_core::Result<Vec<FileCycle>> {
     let file_graph: Vec<(String, String)> = {
         let mut stmt = db.prepare(
@@ -316,6 +332,10 @@ fn file_cycles(db: &Connection) -> astria_core::Result<Vec<FileCycle>> {
              JOIN nodes nf ON nf.id = e.source
              JOIN nodes nt ON nt.id = e.target
              WHERE nf.source_file != nt.source_file
+               AND nf.source_file IS NOT NULL AND nf.source_file != ''
+               AND nt.source_file IS NOT NULL AND nt.source_file != ''
+               AND nf.file_type NOT IN ('stub', 'reference')
+               AND nt.file_type NOT IN ('stub', 'reference')
                AND e.relation IN ('calls', 'imports')
                AND e.confidence = 'EXTRACTED'",
         )?;
@@ -375,12 +395,13 @@ fn hub_churn(db: &Connection) -> astria_core::Result<(Vec<HubChurn>, usize, usiz
     };
     let degrees = usage_degrees(db)?;
 
-    let mut stmt = db.prepare("SELECT id, label, source_file, community FROM nodes")?;
+    let mut stmt = db
+        .prepare("SELECT id, label, source_file, community FROM nodes WHERE file_type != 'stub'")?;
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(2)?,
             r.get::<_, Option<i64>>(3)?,
         ))
     })?;
@@ -390,14 +411,20 @@ fn hub_churn(db: &Connection) -> astria_core::Result<(Vec<HubChurn>, usize, usiz
         community: Option<i64>,
         test_file: bool,
     }
+    // `stub` nodes are unresolved global names ("super", "assert", "get")
+    // whose degree counts every unresolvable call site in the corpus. They are
+    // not code anyone owns, so they are never hubs — `god_nodes` has always
+    // excluded them; this list did not, which is how a bare-name stub reached
+    // the top five on a repo whose real hubs are all below it.
     let mut candidates: Vec<Candidate> = rows
         .flatten()
         .map(|(id, label, source_file, community)| Candidate {
             degree: degrees.get(&id).copied().unwrap_or(0),
-            test_file: is_test_file(&source_file),
+            test_file: source_file.as_deref().is_some_and(is_test_file),
             label,
             community,
         })
+        .filter(|c| c.degree > 0)
         .collect();
     candidates.sort_by(|a, b| b.degree.cmp(&a.degree).then_with(|| a.label.cmp(&b.label)));
 
@@ -642,6 +669,106 @@ mod tests {
         assert!(
             report.cycles.is_empty(),
             "an INFERRED-only cycle is not a source-level dependency cycle"
+        );
+    }
+
+    #[test]
+    fn stub_nodes_never_create_file_cycles() {
+        // The measured artifact on astria's own repo: `health.rs` imported the
+        // unresolved module name `rusqlite`, which was stored on an unrelated
+        // file that happened to be built first, so the graph gained a
+        // file-to-file edge and a four-crate "cycle" that does not exist in
+        // the source. A stub has no file locus and cannot join two files.
+        let db = open_db_in_memory().unwrap();
+        seed(
+            &db,
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('a1', 'a()', 'code', 'src/a.rs'), ('b1', 'b()', 'code', 'src/b.rs'),
+                ('rusqlite', 'rusqlite', 'stub', '');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('a1', 'rusqlite', 'imports', 'EXTRACTED', 'src/a.rs'),
+                ('rusqlite', 'b1', 'imports', 'EXTRACTED', 'src/a.rs'),
+                ('b1', 'a1', 'calls', 'EXTRACTED', 'src/b.rs');",
+        );
+        let report = health(&db).unwrap();
+        assert!(
+            report.cycles.is_empty(),
+            "a cycle routed through a stub is not a real dependency cycle: {:?}",
+            report.cycles
+        );
+    }
+
+    #[test]
+    fn reference_nodes_never_create_file_cycles() {
+        // Same shape for `reference` nodes (dependency names, not code).
+        let db = open_db_in_memory().unwrap();
+        seed(
+            &db,
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('a1', 'a()', 'code', 'src/a.rs'), ('b1', 'b()', 'code', 'src/b.rs'),
+                ('dep', 'child_process', 'reference', '');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('a1', 'dep', 'imports', 'EXTRACTED', 'src/a.rs'),
+                ('dep', 'b1', 'imports', 'EXTRACTED', 'src/a.rs'),
+                ('b1', 'a1', 'calls', 'EXTRACTED', 'src/b.rs');",
+        );
+        let report = health(&db).unwrap();
+        assert!(report.cycles.is_empty(), "{:?}", report.cycles);
+    }
+
+    #[test]
+    fn test_files_are_recognized_in_the_shapes_repos_use() {
+        // The measured miss: `__tests__/install.test.ts` and
+        // `src/viewer.test.ts` were scored as production files, so a test
+        // helper (`assert()`, degree 241) was reported as the #3 hub and
+        // `test_hubs_skipped` stayed 0 on a repo full of TS tests.
+        for path in [
+            "packages/astria-cli/src/__tests__/install.test.ts",
+            "src/viewer.test.ts",
+            "src/foo.spec.ts",
+            "tests/unit.py",
+            "crates/astria-napi/tests/pipeline_test.rs",
+            "pkg/foo_test.rs",
+        ] {
+            assert!(is_test_file(path), "should be a test file: {path}");
+        }
+        for path in [
+            "crates/astria-build/src/lib.rs",
+            "src/contest.rs",
+            "src/latest.py",
+            "packages/viewer/src/viewer.ts",
+        ] {
+            assert!(!is_test_file(path), "should NOT be a test file: {path}");
+        }
+    }
+
+    #[test]
+    fn stub_nodes_are_never_reported_as_hubs() {
+        // A stub's degree counts every unresolvable call site in the corpus;
+        // it is not a hub, it is a name collision. `god_nodes` always excluded
+        // them, this list did not.
+        let db = open_db_in_memory().unwrap();
+        // The stub accumulates many callers (its degree would top the list),
+        // and a real symbol also clears the hub degree floor, so the assertion
+        // is about the stub being filtered, not about an empty result.
+        let mut sql = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('real', 'real_hub()', 'code', 'src/a.rs'),
+                ('bare_stub', 'assert()', 'stub', '');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES\n",
+        );
+        for _ in 0..30 {
+            sql.push_str("('real', 'bare_stub', 'calls', 'EXTRACTED', 'src/a.rs'),\n");
+            sql.push_str("('bare_stub', 'real', 'calls', 'EXTRACTED', 'src/a.rs'),\n");
+        }
+        sql.push_str("('real', 'real', 'calls', 'EXTRACTED', 'src/a.rs');");
+        seed(&db, &sql);
+
+        let report = health(&db).unwrap();
+        assert!(
+            report.hub_churn.iter().all(|h| h.label != "assert()"),
+            "stub must not be a hub: {:?}",
+            report.hub_churn
         );
     }
 

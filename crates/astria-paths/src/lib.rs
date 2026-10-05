@@ -18,6 +18,13 @@ pub fn normalize(p: &Path) -> String {
 /// absolute project prefix on every line.
 pub fn relative_display(path: &str, root: &str) -> String {
     let path = path.trim_start_matches("//?/");
+    // A node with no file locus (an unresolved global name, see
+    // `astria-build`'s `ensure_node_exists`) has no display path. Returning
+    // the empty string lets callers render "no source locus" instead of
+    // printing a file that does not own the symbol.
+    if path.is_empty() {
+        return String::new();
+    }
     let root = root.trim_end_matches('/');
     let root = root.trim_start_matches("//?/");
     if root.is_empty() {

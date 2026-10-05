@@ -6,6 +6,13 @@ this file is the per-version summary.
 
 ## [Unreleased]
 
+- Preserve qualified symbol boundaries and import paths when resolving references; ambiguous candidates remain unresolved and inferred bindings retain `RESOLVED` evidence. Extraction cache v15 refreshes previously flattened targets.
+- Prefer exact implementation definitions for code-oriented queries, with scope and source metadata contributing to ranking.
+- Name communities from source modules and packages; reports separately orient production code, documentation, and tests/benchmarks/examples, with source links and explicit relationship evidence.
+- Propagate authoritative database decoding errors in analysis, clustering, hyperedge construction, and reports rather than silently discarding rows.
+- Add 24 reserved questions on pinned Requests and Commander sources, a bounded iterative search baseline, and separate retrieval/build cost and provenance records. The new corpus and methods have not been evaluated.
+- Simplify the README workflow and align architecture documentation with snapshot caching and reference evidence.
+
 ## [1.0.12] — 2026-10-04
 
 

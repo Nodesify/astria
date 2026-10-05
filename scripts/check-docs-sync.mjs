@@ -50,7 +50,7 @@ const countClaims = [
   ['README.md', /Rust workspace with (\d+) crates/, members.length, 'crates'],
   ['ARCHITECTURE.md', /Uses (\d+) registered language configurations/, languageCount, 'registered language configurations'],
   ['website/docs/explanation/architecture.md', /Uses (\d+) registered language configurations/, languageCount, 'registered language configurations'],
-  ['README.md', /\((\d+) languages incl\./, languageCount, 'languages'],
+  ['README.md', /Uses (\d+) registered language configurations/, languageCount, 'registered language configurations'],
   ['ARCHITECTURE.md', /registry currently defines (\d+) language configurations/, languageCount, 'language configurations'],
 ];
 for (const [file, re, expected, label] of countClaims) {
@@ -357,6 +357,20 @@ for (const m of read('crates/astria-mcp/src/lib.rs').matchAll(/"name": "([a-z_]+
     problems.push(`mcp-tools.md: tool \`${m[1]}\` is registered but not documented`);
   }
 }
+
+// Cache/evidence contracts are user-facing guarantees in both architecture pages.
+const storeSource = read('crates/astria-query/src/store.rs');
+const capacity = storeSource.match(/fn clamp_capacity[^]*?const FLOOR: usize = (\d+);[^]*?const CEILING: usize = (\d+);[^]*?const DEFAULT: usize = (\d+);/);
+for (const file of ['ARCHITECTURE.md', 'website/docs/explanation/architecture.md']) {
+  const text = read(file);
+  if (!text.includes('generation-keyed bounded snapshot cache per process') || !text.includes('Unstamped databases bypass the cache')) problems.push(file + ': snapshot-cache contract missing');
+  if (capacity && (!text.includes('defaults to ' + capacity[3] + ' entries') || !text.includes('ASTRIA_SNAPSHOT_CACHE_ENTRIES\` ' + capacity[1] + '..=' + capacity[2]))) problems.push(file + ': snapshot-cache capacity differs from code');
+  if (!text.includes('Name-derived call and import bindings carry \`RESOLVED\`') || !text.includes('only \`EXTRACTED\`/\`DECLARED\` evidence')) problems.push(file + ': resolved-binding/evidence-tier contract missing');
+  if (/no process-global graph cache|Resolved targets are \`EXTRACTED\`|Name-based resolution is still \`INFERRED\`/.test(text)) problems.push(file + ': obsolete cache or evidence claim');
+}
+if (!capacity) problems.push('store.rs: snapshot cache capacity declarations not found');
+if (!read('crates/astria-extract/src/refs.rs').includes('"RESOLVED"')) problems.push('refs.rs: docs claim RESOLVED bindings but source does not');
+if (!read('crates/astria-query/src/lib.rs').includes('"EXTRACTED" | "DECLARED"')) problems.push('query: high-detail evidence contract changed');
 
 if (problems.length) {
   console.error('docs drift detected:');
