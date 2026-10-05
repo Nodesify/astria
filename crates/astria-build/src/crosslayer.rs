@@ -49,6 +49,9 @@ pub struct CrossLayerStats {
     pub entry_points: usize,
     /// Doc → package reference edges added.
     pub doc_refs: usize,
+    /// Speculative nodes whose stale file locus was cleared (see
+    /// `normalize_stub_loci`).
+    pub stub_loci_cleared: usize,
 }
 
 /// Relations this pass emits, in insert order. `scripts/check-docs-sync.mjs`
@@ -62,24 +65,50 @@ impl CrossLayerStats {
     }
 }
 
+/// Speculative nodes (`stub`, `reference`) exist for names the extractors
+/// could not resolve to a definition. They have no owning file by
+/// construction: a stub is created exactly when no file defined the symbol,
+/// and a reference is a dependency NAME rather than code.
+///
+/// Borrowing the referencing file's path gave these nodes a plausible-looking
+/// locus that consumers treat as a real source location, so one
+/// `import rusqlite` produced a `health.rs → <whatever file first mentioned
+/// rusqlite>` file dependency, a four-crate "import cycle", a false `File:`
+/// line in `explain`, and thousands of cross-community "surprising
+/// connections".
+///
+/// Enforced as a total invariant rather than a per-edge rule because a stub
+/// can only ever have an EMPTY locus — the two cannot coexist — which makes
+/// this idempotent and safe to re-run. Runs as a derived pass so an
+/// incremental update heals stubs that older builds stamped, and returns the
+/// number of nodes it cleared.
+pub fn normalize_stub_loci(db: &Connection) -> Result<usize> {
+    let cleared = db.execute(
+        "UPDATE nodes SET source_file = '' WHERE file_type IN ('stub', 'reference') AND source_file != ''",
+        [],
+    )?;
+    Ok(cleared)
+}
+
 pub fn link_cross_layer(db: &Connection) -> Result<CrossLayerStats> {
+    let stub_loci_cleared = normalize_stub_loci(db)?;
     // The passes own this context wholesale: replace, never accumulate.
     db.execute("DELETE FROM edges WHERE context = 'crosslayer'", [])?;
     let stats = CrossLayerStats {
         ffi_bindings: link_napi_ffi(db)?,
         entry_points: link_entry_points(db)?,
         doc_refs: link_doc_package_refs(db)?,
+        stub_loci_cleared,
     };
     Ok(stats)
 }
 
 /// Node id of the file-level node for a stored source path (single-segment
-/// ids are file nodes; definition ids are `file::symbol`). Bare-name stubs
-/// share the file's source_file, so they are excluded — a doc with local
-/// links stubs its link targets under the same path.
+/// ids are file nodes; definition ids are `file::symbol`). Speculative nodes
+/// are excluded: they carry no locus and no identity of their own.
 fn file_node_id(db: &Connection, source_file: &str) -> Option<String> {
     db.query_row(
-        "SELECT id FROM nodes WHERE source_file = ?1 AND id NOT LIKE '%::%' AND file_type != 'stub' LIMIT 1",
+        "SELECT id FROM nodes WHERE source_file = ?1 AND id NOT LIKE '%::%' AND file_type NOT IN ('stub', 'reference') LIMIT 1",
         rusqlite::params![source_file],
         |r| r.get::<_, String>(0),
     )
@@ -189,14 +218,17 @@ fn link_napi_ffi(db: &Connection) -> Result<usize> {
                     _ => continue,
                 };
                 let target = targets[0].clone();
-                // In-file symbol node referencing the import: the stub an
-                // unresolved call created (stubs carry the referencing
-                // file's path), or a real definition with that name.
+                // In-file symbol node referencing the import: a real
+                // definition in this file, or the global stub an unresolved
+                // call created. A stub for an imported binding has no file
+                // locus of its own (it is a name, not a definition), so the
+                // lookup cannot filter on source_file alone — an in-file
+                // definition still wins when one exists.
                 let ident_norm = normalize_id(ident);
                 let mut bound = false;
                 {
                     let mut stmt = db.prepare(
-                        "SELECT id FROM nodes WHERE source_file = ?1 AND (id = ?2 OR id LIKE '%::' || ?2) LIMIT 3",
+                        "SELECT id FROM nodes WHERE (id = ?2 OR id LIKE '%::' || ?2)\r\n                         AND (source_file = ?1 OR source_file = '')\r\n                         ORDER BY (source_file = ?1) DESC LIMIT 3",
                     )?;
                     let rows = stmt.query_map(rusqlite::params![ts_path, ident_norm], |r| {
                         r.get::<_, String>(0)
@@ -436,7 +468,9 @@ mod tests {
         let ts_path = normalize(&ts);
         let db = db();
         node(&db, "src_commands_mcp", "mcp.ts", "code", &ts_path);
-        node(&db, "runmcpserver", "runMcpServer", "stub", &ts_path);
+        // The unresolved binding is a global name; a stub carries no file
+        // locus, which is what `ensure_node_exists` now produces.
+        node(&db, "runmcpserver", "runMcpServer", "stub", "");
         node(
             &db,
             "crates_napi_src_lib::run_mcp_server",
@@ -691,6 +725,36 @@ mod tests {
             !used.is_empty() && used.iter().all(|r| EMITTED_RELATIONS.contains(&r.as_str())),
             "every inserted relation must be declared: {used:?} vs {EMITTED_RELATIONS:?}"
         );
+    }
+
+    #[test]
+    fn stub_loci_are_cleared_and_real_nodes_untouched() {
+        // Legacy graphs stamped a stub with whichever file referenced it first
+        // (the measured `console_error` claimed cli.test.ts). The invariant
+        // pass clears those, leaves real nodes and already-empty stubs alone,
+        // and is idempotent so an incremental update can re-run it safely.
+        let db = db();
+        node(&db, "stale", "console_error", "stub", "src/cli.test.ts");
+        node(&db, "clean", "assert", "stub", "");
+        node(&db, "ref", "child_process", "reference", "src/a.ts");
+        node(&db, "real", "run()", "code", "src/lib.rs");
+
+        assert_eq!(normalize_stub_loci(&db).unwrap(), 2);
+        let locus = |id: &str| -> String {
+            db.query_row("SELECT source_file FROM nodes WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(locus("stale"), "", "a stub must not claim a file");
+        assert_eq!(locus("ref"), "", "a reference must not claim a file");
+        assert_eq!(locus("clean"), "");
+        assert_eq!(
+            locus("real"),
+            "src/lib.rs",
+            "real nodes keep their own file"
+        );
+        assert_eq!(normalize_stub_loci(&db).unwrap(), 0, "idempotent");
     }
 
     #[test]

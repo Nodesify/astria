@@ -158,17 +158,30 @@ pub fn build_in_transaction(
     }
 
     for extraction in extractions {
+        // Ids this extraction actually defines. A target in this set is the
+        // file's own symbol; anything else is an unresolved reference.
+        let defined: HashSet<&str> = extraction.nodes.iter().map(|n| n.id.as_str()).collect();
         for edge in &extraction.edges {
             let target = edge.target.as_str();
-            // Ensure source node exists (stub if missing)
+            // Ensure source node exists (stub if missing). A source is always
+            // this file's own symbol, so the file locus is real.
             ensure_node_exists(
                 tx,
                 &edge.source,
                 &edge.source,
-                &normalize(&edge.source_file),
+                Some(&normalize(&edge.source_file)),
             )?;
-            // Ensure target node exists (stub if missing)
-            ensure_node_exists(tx, target, target, &normalize(&edge.source_file))?;
+            // An unresolved target is a global name ("super", "path"), not a
+            // fact about any one file. Passing None keeps the stub's locus
+            // empty; borrowing this edge's file would invent file-to-file
+            // dependencies that do not exist in the source (a lone
+            // `import rusqlite` became "health.rs imports dedup.rs"), which
+            // file-cycle detection and every source_file consumer then report
+            // as real. The reference pass resolves the rest explicitly.
+            let locus = defined
+                .contains(target)
+                .then(|| normalize(&edge.source_file));
+            ensure_node_exists(tx, target, target, locus.as_deref())?;
 
             tx.execute(
                 "INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file, source_line) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -195,7 +208,18 @@ pub fn build_in_transaction(
 }
 
 /// Ensure a node with the given id exists. If not, insert a stub node.
-fn ensure_node_exists(tx: &Transaction, id: &str, label: &str, source_file: &str) -> Result<()> {
+///
+/// `source_file` is the file locus only when that file really owns the
+/// symbol. Unresolved global names pass `None`, which stores an empty locus
+/// (the column is `NOT NULL`). A stub is created exactly when no file defined
+/// the symbol, so its locus is always empty; `crosslayer::normalize_stub_loci`
+/// enforces that invariant over the whole graph on every pipeline run.
+fn ensure_node_exists(
+    tx: &Transaction,
+    id: &str,
+    label: &str,
+    source_file: Option<&str>,
+) -> Result<()> {
     let exists: bool = tx
         .query_row(
             "SELECT COUNT(*) FROM nodes WHERE id = ?1",
@@ -208,7 +232,7 @@ fn ensure_node_exists(tx: &Transaction, id: &str, label: &str, source_file: &str
     if !exists {
         tx.execute(
             "INSERT OR IGNORE INTO nodes (id, label, file_type, source_file) VALUES (?1, ?2, 'stub', ?3)",
-            rusqlite::params![id, label, source_file],
+            rusqlite::params![id, label, source_file.unwrap_or("")],
         )?;
     }
     Ok(())
@@ -371,6 +395,105 @@ mod tests {
         let result2 = build(&[ext2], &db).unwrap();
         assert_eq!(result2.nodes_added, 0);
         assert_eq!(result2.duplicates_merged, 1);
+    }
+
+    #[test]
+    fn unresolved_targets_get_no_file_locus() {
+        // A bare-name target ("super", "rusqlite") is an unresolved global, not
+        // a fact about this file. Stamping it with the referencing file used to
+        // invent file-to-file dependencies: `health.rs` importing `rusqlite`
+        // appeared as "health.rs -> <whatever file first mentioned rusqlite>",
+        // which manufactured a four-crate import cycle that does not exist.
+        let db = open_db_in_memory().unwrap();
+        let lib = make_extraction_at(
+            "src/lib.rs",
+            vec![("src_lib::run", "run()")],
+            vec![("src_lib::run", "rusqlite", "imports")],
+        );
+        build(&[lib], &db).unwrap();
+
+        let (ft, locus): (String, String) = db
+            .query_row(
+                "SELECT file_type, source_file FROM nodes WHERE id = 'rusqlite'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(ft, "stub");
+        assert!(
+            locus.is_empty(),
+            "an unresolved global must not claim a file, got {locus:?}"
+        );
+    }
+
+    #[test]
+    fn unrelated_files_never_join_through_a_stub() {
+        // The exact phantom-dependency shape: file A imports an unresolved
+        // global that file B also mentions. Before the fix the stub carried
+        // one of the two files and the pair looked like a real file-to-file
+        // dependency (the input to file-cycle detection).
+        let db = open_db_in_memory().unwrap();
+        let a = make_extraction_at(
+            "a.rs",
+            vec![("a::run", "run()")],
+            vec![("a::run", "serde_json", "imports")],
+        );
+        let b = make_extraction_at(
+            "b.rs",
+            vec![("b::go", "go()")],
+            vec![("b::go", "serde_json", "imports")],
+        );
+        build(&[a, b], &db).unwrap();
+
+        let phantom: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM edges e
+                 JOIN nodes nf ON nf.id = e.source
+                 JOIN nodes nt ON nt.id = e.target
+                 WHERE nf.source_file != nt.source_file
+                   AND nt.file_type = 'stub' AND nt.source_file != ''",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(phantom, 0, "a stub must not create a cross-file edge");
+    }
+
+    #[test]
+    fn stub_adopts_its_real_owner_locus() {
+        // Build order is arbitrary: a reference can create the stub first, then
+        // the defining file arrives. The later build must record the owner.
+        let db = open_db_in_memory().unwrap();
+        let caller = make_extraction_at(
+            "caller.rs",
+            vec![("caller::run", "run()")],
+            vec![("caller::run", "src_lib::helper", "calls")],
+        );
+        build(&[caller], &db).unwrap();
+        let (ft, locus): (String, String) = db
+            .query_row(
+                "SELECT file_type, source_file FROM nodes WHERE id = 'src_lib::helper'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(ft, "stub");
+        assert!(locus.is_empty(), "unresolved before definition: {locus:?}");
+
+        let def = make_extraction_at("src/lib.rs", vec![("src_lib::helper", "helper()")], vec![]);
+        build(&[def], &db).unwrap();
+        let (ft, locus): (String, String) = db
+            .query_row(
+                "SELECT file_type, source_file FROM nodes WHERE id = 'src_lib::helper'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_ne!(ft, "stub", "a real definition replaces the stub");
+        assert!(
+            locus.contains("lib.rs"),
+            "the definition records its own file, got {locus:?}"
+        );
     }
 
     #[test]

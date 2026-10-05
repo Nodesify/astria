@@ -3,116 +3,184 @@
 
 use crate::naming::make_target_id;
 use crate::schema::Extraction;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-/// Build a lookup of all known node IDs (lowercased for matching) and try to
-/// resolve INFERRED call edges to real node IDs. This turns stub references
-/// into proper cross-file edges when a match is found.
-///
-/// Bare-name matches (call target "get" → definition "src_x::get") resolve
-/// ONLY when exactly one node shares that bare name. When many definitions
-/// share a name — `get`, `new`, `to_string` — picking one arbitrarily would
-/// concentrate every call edge in the corpus onto a single node and mint a
-/// fake god node.
+/// Resolve names using complete scope suffixes before considering bare names.
+/// Every candidate set stays ambiguous unless file metadata selects one definition.
+/// These are name-derived bindings, never compiler-proven EXTRACTED calls.
 pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
-    // Collect all known node IDs and their labels
-    let mut known_ids: HashMap<String, String> = HashMap::new();
-    let mut label_counts: HashMap<String, usize> = HashMap::new();
-    let mut bare_counts: HashMap<String, usize> = HashMap::new();
-    let mut bare_ids: HashMap<String, String> = HashMap::new();
+    let mut names: HashMap<String, Vec<&crate::schema::ExtractedNode>> = HashMap::new();
+    let known_ids: HashSet<_> = results
+        .iter()
+        .flat_map(|ext| ext.nodes.iter().map(|node| node.id.as_str()))
+        .collect();
+    let mut modules: HashMap<String, Vec<&Extraction>> = HashMap::new();
     for ext in results.iter() {
+        let mut keys = vec![
+            module_path(&ext.file_path),
+            module_path(&ext.file_path.with_extension("")),
+        ];
+        if let Some(stem) = ext.file_path.file_stem().and_then(|s| s.to_str()) {
+            keys.push(stem.to_string());
+        }
+        keys.sort();
+        keys.dedup();
+        for key in keys {
+            modules.entry(key).or_default().push(ext);
+        }
         for node in &ext.nodes {
-            // Use the same canonical spelling as call targets, including
-            // qualified JS bindings such as `response.sendFile()`.
-            let label = make_target_id(node.label.trim_end_matches("()"));
-            known_ids.insert(label.clone(), node.id.clone());
-            *label_counts.entry(label).or_insert(0) += 1;
-            // Also map by the last segment of the ID (e.g. "greet" from "main::Greeter::greet")
-            let parts: Vec<&str> = node.id.split("::").collect();
-            if let Some(last) = parts.last() {
-                let lower = last.to_lowercase().trim_end_matches("()").to_string();
-                *bare_counts.entry(lower.clone()).or_insert(0) += 1;
-                bare_ids.entry(lower).or_insert_with(|| node.id.clone());
+            // Only code definitions can be callees; prose and identifier-shaped
+            // string references are not declarations.
+            if !matches!(node.node_type.as_str(), "function" | "class" | "test") {
+                continue;
             }
-        }
-    }
-
-    // Resolve edges
-    for ext in results.iter_mut() {
-        // A unique definition in the caller's own file takes precedence over
-        // names in unrelated modules. Multiple methods with the same name in
-        // one file remain ambiguous; this is still name inference.
-        let mut local_ids: HashMap<String, Option<String>> = HashMap::new();
-        for node in &ext.nodes {
-            let name = if matches!(ext.language.as_str(), "JavaScript" | "TypeScript") {
-                make_target_id(node.label.trim_end_matches("()"))
-            } else {
-                node.id
-                    .rsplit("::")
-                    .next()
-                    .unwrap_or(&node.id)
-                    .trim_end_matches("()")
-                    .to_lowercase()
-            };
-            local_ids
-                .entry(name)
-                .and_modify(|id| *id = None)
-                .or_insert_with(|| Some(node.id.clone()));
-        }
-        for edge in ext.edges.iter_mut() {
-            if edge.relation == "calls" || edge.relation == "imports" {
-                // Try the full target, then just its last segment — a call
-                // `pipeline::load_graph_db()` targets "pipeline::load_graph_db"
-                // but the definition is "src_pipeline::load_graph_db".
-                let target_lower = edge.target.to_lowercase();
-                let last_segment = edge
-                    .target
-                    .rsplit("::")
-                    .next()
-                    .unwrap_or(&edge.target)
-                    .to_lowercase();
-                let local_id = if !target_lower.contains("::") {
-                    local_ids
-                        .get(target_lower.trim_end_matches("()"))
-                        .and_then(Option::as_ref)
-                } else {
-                    None
-                };
-                let real_id = local_id
-                    .or_else(|| {
-                        known_ids
-                            .get(&target_lower)
-                            .filter(|_| label_counts.get(&target_lower) == Some(&1))
-                    })
-                    .or_else(|| {
-                        // Bare-name resolution only when unambiguous.
-                        if !label_counts.contains_key(&target_lower)
-                            && bare_counts.get(&last_segment) == Some(&1)
-                        {
-                            bare_ids.get(&last_segment)
-                        } else {
-                            None
-                        }
-                    });
-                if let Some(real_id) = real_id {
-                    if real_id != &edge.target {
-                        edge.target = real_id.clone();
-                        // The call expression is extracted from source; the
-                        // unique name match binds it to exactly one
-                        // definition. That is its own evidence tier —
-                        // stronger than the co-occurrence inference behind
-                        // stub-targeted edges, but not compiler-proven
-                        // binding, so it stays below EXTRACTED (and outside
-                        // `--detail high`).
-                        if edge.relation == "calls" && edge.confidence == "INFERRED" {
-                            edge.confidence = "RESOLVED".to_string();
-                            edge.confidence_score = Some(0.85);
-                        }
-                    }
+            let mut keys = vec![make_target_id(node.label.trim_end_matches("()"))];
+            // The first id segment is a path digest, not a lexical scope.
+            let segments: Vec<&str> = node.id.split("::").collect();
+            // Assigned dotted declarations carry their semantic scope in the
+            // label; their flattened structural-id tail is not a bare alias.
+            if !node.label.contains('.') {
+                for start in 1..segments.len() {
+                    keys.push(make_target_id(&segments[start..].join("::")));
                 }
             }
+            keys.sort();
+            keys.dedup();
+            for key in keys {
+                names.entry(key).or_default().push(node);
+            }
         }
     }
+    // Build all rewrites before mutating results so lookup references stay valid.
+    let mut rewrites = Vec::new();
+    for (file_index, ext) in results.iter().enumerate() {
+        let imported_files: Vec<_> = ext
+            .edges
+            .iter()
+            .filter(|edge| edge.relation == "imports")
+            .filter_map(|edge| {
+                let matches = module_candidates(&edge.target, ext, &modules);
+                (matches.len() == 1).then(|| &matches[0].file_path)
+            })
+            .collect();
+        for (edge_index, edge) in ext.edges.iter().enumerate() {
+            if edge.relation != "calls" && edge.relation != "imports" {
+                continue;
+            }
+            // Preserve bindings already pointing to a complete structural id.
+            if known_ids.contains(edge.target.as_str()) {
+                continue;
+            }
+            let target = make_target_id(edge.target.trim_end_matches("()"));
+            let mut candidates = names.get(&target).cloned().unwrap_or_default();
+            if let Some((module, tail)) = target.split_once("::") {
+                // Scope and module interpretations are equally possible. Union
+                // both sets before applying local/import evidence; never let
+                // a lexical scope hide a competing file-module definition.
+                let files = module_candidates(module, ext, &modules);
+                candidates.extend(
+                    names
+                        .get(tail)
+                        .into_iter()
+                        .flatten()
+                        .filter(|node| files.iter().any(|file| node.source_file == file.file_path))
+                        .copied(),
+                );
+            }
+            candidates.sort_by(|a, b| a.id.cmp(&b.id));
+            candidates.dedup_by(|a, b| a.id == b.id);
+            if edge.relation == "imports" {
+                // Module imports name files, not arbitrary same-name functions.
+                candidates.clear();
+                let files = module_candidates(&edge.target, ext, &modules);
+                if files.len() == 1 {
+                    candidates = files[0]
+                        .nodes
+                        .iter()
+                        .filter(|node| node.node_type == "file")
+                        .collect();
+                }
+            }
+            let local: Vec<_> = candidates
+                .iter()
+                .copied()
+                .filter(|node| node.source_file == ext.file_path)
+                .collect();
+            let selected = if !local.is_empty() {
+                unique_candidate(&local)
+            } else if candidates.len() > 1 && target.contains("::") {
+                // Module-only import metadata cannot safely bind bare aliases.
+                let imported: Vec<_> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|node| imported_files.contains(&&node.source_file))
+                    .collect();
+                unique_candidate(&imported)
+            } else {
+                unique_candidate(&candidates)
+            };
+            if let Some(node) = selected {
+                rewrites.push((file_index, edge_index, node.id.clone()));
+            }
+        }
+    }
+    for (file, edge_index, target) in rewrites {
+        let edge = &mut results[file].edges[edge_index];
+        edge.target = target;
+        // The expression is extracted, but its rewritten endpoint is a name
+        // binding. Direct structural-id edges were preserved by the guard above.
+        edge.confidence = "RESOLVED".to_string();
+        edge.confidence_score = Some(0.85);
+    }
+}
+
+/// Lexical path normalization only; no filesystem lookup or alias guessing.
+fn module_path(path: &std::path::Path) -> String {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let mut parts: Vec<&str> = Vec::new();
+    for part in raw.split('/') {
+        match part {
+            "." => {}
+            ".." if parts
+                .last()
+                .is_some_and(|last| *last != ".." && !last.is_empty()) =>
+            {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
+fn module_candidates<'a>(
+    module: &str,
+    caller: &Extraction,
+    modules: &HashMap<String, Vec<&'a Extraction>>,
+) -> Vec<&'a Extraction> {
+    let key = if module.contains(['/', '\\']) {
+        let path = std::path::Path::new(module);
+        if path.is_absolute() {
+            module_path(path)
+        } else {
+            module_path(
+                &caller
+                    .file_path
+                    .parent()
+                    .unwrap_or(std::path::Path::new(""))
+                    .join(path),
+            )
+        }
+    } else {
+        module.to_string()
+    };
+    modules.get(&key).cloned().unwrap_or_default()
+}
+
+fn unique_candidate<'a>(
+    nodes: &[&'a crate::schema::ExtractedNode],
+) -> Option<&'a crate::schema::ExtractedNode> {
+    (nodes.len() == 1).then(|| nodes[0])
 }
 
 #[cfg(test)]
@@ -179,18 +247,6 @@ mod tests {
         resolve_cross_file_references(&mut results);
         assert_eq!(results[1].edges[0].target, "src_x::run");
         assert_eq!(results[1].edges[0].confidence, "RESOLVED");
-    }
-
-    #[test]
-    fn extracted_edges_are_never_relabeled() {
-        // An EXTRACTED import edge that happens to resolve must keep its
-        // tier — only INFERRED calls are upgraded.
-        let mut results = vec![
-            ext(vec![node("src_x::mod", "mod")], vec![]),
-            ext(vec![], vec![edge("caller", "mod", "imports", "EXTRACTED")]),
-        ];
-        resolve_cross_file_references(&mut results);
-        assert_eq!(results[1].edges[0].confidence, "EXTRACTED");
     }
 
     #[test]

@@ -129,6 +129,7 @@ name = "astria-cluster"
 version = "1.0.0"
 dependencies = [
  "astria-core",
+ "astria-paths",
  "petgraph",
  "rusqlite",
 ]

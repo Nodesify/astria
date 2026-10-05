@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "note": "Catalog protects reserved splits even when their filenames do not say reserved. Source inspection during authoring is allowed; any retrieval evaluation consumes reservation.",
+  "golden_files": [
+    "paired/click.reserved-v1.jsonl",
+    "paired/click.doc-intent-v1.jsonl",
+    "external/requests.reserved-v1.jsonl",
+    "external/commander.reserved-v1.jsonl"
+  ]
+}

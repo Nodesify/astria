@@ -1,7 +1,7 @@
 //! Lexical retrieval scoring: tokenization, stemming, corpus mode, entry
 //! intent, and `score_nodes`.
 //!
-//! Split from lib.rs; no behavior change.
+//! Definition, scope, and path evidence are kept separate from prose mentions.
 #![allow(unused_imports)]
 
 use super::*;
@@ -236,33 +236,59 @@ pub(crate) const ENTRY_MIN_IMPORTS: u32 = 3;
 /// label weight, so ubiquitous terms still break ties, just never dominate.
 pub(crate) const IDF_FLOOR: f64 = 0.25;
 
-/// Score complete normalized identifiers above partial component matches.
+/// Normalize compound spelling within a segment while preserving qualifiers.
 pub(crate) fn normalized_identifier(text: &str) -> String {
-    tokenize(text).concat()
+    let clean = text
+        .trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | '?' | '!' | ';'))
+        .trim_end_matches("()");
+    clean
+        .replace("::", ".")
+        .split('.')
+        .map(|segment| tokenize(segment).concat())
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
-/// True when `term` is a qualified name that matches the node id's token
-/// tail or a scope token ("BaseCommand.get_usage" matches
-/// `src_click_core_basecommand::get_usage` via its [basecommand, get,
-/// usage] suffix; "BaseCommand" matches the basecommand scope token).
-/// Same-name symbols share one bare label, so the qualified scope in the
-/// id is the only lexical place the class lives — and the seed reservation
-/// must honor it or the label tie hands the slot to a same-name stranger.
-pub(crate) fn qualified_scope_match(term: &str, id: &str) -> bool {
-    let want = normalized_identifier(term);
-    if want.is_empty() {
+/// Match ordered lexical scope boundaries, excluding the file-id prefix.
+/// A bare class discriminator may match a complete scope segment; a qualified
+/// symbol must match complete trailing scope segments in their written order.
+pub(crate) fn qualified_scope_match(term: &str, id: &str, label: &str) -> bool {
+    if term.contains(['/', '\\']) {
         return false;
     }
-    let tokens = tokenize(id);
-    if tokens.contains(&want) {
-        return true;
+    let want = normalized_identifier(term);
+    let wanted: Vec<_> = want.split("::").collect();
+    if wanted.iter().any(|segment| segment.is_empty()) {
+        return false;
     }
-    for start in 0..tokens.len() {
-        if tokens[start..].concat() == want {
-            return true;
-        }
+    let mut structural: Vec<&str> = id.split("::").skip(1).collect();
+    // JS repeated assignments add an extra numeric segment after the actual
+    // declaration. Duplicate-id disambiguation can append __N to that ordinal.
+    // A genuinely numeric label remains a declaration, not an assignment ordinal.
+    if structural.len() > 1
+        && structural.last().is_some_and(|tail| {
+            let ordinal = tail.split("__").next().unwrap_or(tail);
+            !ordinal.is_empty()
+                && ordinal.bytes().all(|byte| byte.is_ascii_digit())
+                && normalized_identifier(tail) != normalized_identifier(label)
+        })
+    {
+        structural.pop();
     }
-    false
+    // Declaration spelling and qualifiers come from the actual label; only
+    // containing scope segments survive from structural identity metadata.
+    structural.pop();
+    let mut scopes: Vec<String> = structural.into_iter().map(normalized_identifier).collect();
+    scopes.extend(normalized_identifier(label).split("::").map(str::to_string));
+    if wanted.len() == 1 {
+        scopes.iter().any(|scope| scope == wanted[0])
+    } else {
+        wanted.len() <= scopes.len()
+            && scopes[scopes.len() - wanted.len()..]
+                .iter()
+                .zip(wanted)
+                .all(|(actual, wanted)| actual == wanted)
+    }
 }
 
 /// Reservation applies to written identifiers, not ordinary prose terms.
@@ -275,6 +301,59 @@ pub(crate) fn is_explicit_identifier(term: &str) -> bool {
             .chars()
             .zip(text.chars().skip(1))
             .any(|(a, b)| a.is_lowercase() && b.is_uppercase())
+}
+
+/// Match complete path components in order, including partial repository paths.
+pub(crate) fn path_discriminator_match(term: &str, path: &str) -> bool {
+    let clean = term.trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | '?' | '!' | ';'));
+    let wanted: Vec<String> = clean
+        .replace('\\', "/")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(normalized_identifier)
+        .collect();
+    let actual: Vec<String> = path
+        .replace('\\', "/")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(normalized_identifier)
+        .collect();
+    !wanted.is_empty()
+        && wanted.len() <= actual.len()
+        && actual.windows(wanted.len()).any(|window| window == wanted)
+}
+
+/// Qualified module names may be carried by the source path instead of id scopes.
+/// Keep qualifier order and require the final component to name this definition.
+pub(crate) fn definition_identifier_match(term: &str, id: &str, label: &str, path: &str) -> bool {
+    if normalized_identifier(term) == normalized_identifier(label)
+        || qualified_scope_match(term, id, label)
+    {
+        return true;
+    }
+    let clean = term
+        .trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | '?' | '!' | ';'))
+        .trim_end_matches("()");
+    let qualified = clean.replace("::", ".");
+    let parts: Vec<_> = qualified.split('.').map(normalized_identifier).collect();
+    if parts.len() < 2
+        || parts.iter().any(String::is_empty)
+        || parts.last() != Some(&normalized_identifier(label))
+    {
+        return false;
+    }
+    let source = path.replace('\\', "/");
+    let mut modules: Vec<_> = source.split('/').map(normalized_identifier).collect();
+    if let Some(stem) = std::path::Path::new(&source)
+        .file_stem()
+        .and_then(|s| s.to_str())
+    {
+        if let Some(last) = modules.last_mut() {
+            *last = normalized_identifier(stem);
+        }
+    }
+    let scope = &parts[..parts.len() - 1];
+    scope.len() <= modules.len() && modules.ends_with(scope)
 }
 
 pub(crate) fn component_coverage(needle: &[String], haystack: &[String]) -> f64 {
@@ -521,6 +600,67 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         )
     });
     let wants_docs = wants_docs(terms);
+    let code_intent = !wants_docs
+        && (terms.iter().any(|t| is_explicit_identifier(t))
+            || question_tokens.iter().any(|t| {
+                matches!(
+                    t.as_str(),
+                    "implementation"
+                        | "implement"
+                        | "implements"
+                        | "function"
+                        | "method"
+                        | "class"
+                        | "symbol"
+                        | "definition"
+                        | "code"
+                        | "source"
+                )
+            }));
+    let identifiers: Vec<_> = effective
+        .iter()
+        .copied()
+        .filter(|term| is_explicit_identifier(term))
+        .collect();
+    // Plain names need a declaration cue immediately before them. Do not
+    // turn every word in a code-oriented prose question into a symbol request.
+    let bare_symbols: Vec<&String> = if code_intent {
+        terms
+            .iter()
+            .enumerate()
+            .filter_map(|(index, term)| {
+                let clean = term
+                    .trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | '?' | '!' | ';'));
+                if is_explicit_identifier(term)
+                    || clean.len() <= 2
+                    || !clean.chars().all(|c| c.is_alphanumeric())
+                    || STOPWORDS.contains(&clean.to_lowercase().as_str())
+                {
+                    return None;
+                }
+                let mut previous = index.checked_sub(1)?;
+                if matches!(
+                    terms[previous].to_lowercase().as_str(),
+                    "named" | "called" | "of" | "for"
+                ) {
+                    previous = previous.checked_sub(1)?;
+                }
+                matches!(
+                    terms[previous].to_lowercase().as_str(),
+                    "function"
+                        | "method"
+                        | "class"
+                        | "symbol"
+                        | "definition"
+                        | "implementation"
+                        | "implement"
+                )
+                .then_some(term)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let wants_entry = has_entry_intent(&question_tokens);
     let (imports_out, imports_in) = if wants_entry {
         import_degrees(loaded)
@@ -533,6 +673,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
 
     let mut scored: Vec<(f64, NodeIndex)> = Vec::new();
     let mut entry_candidates = HashSet::new();
+    let mut definition_candidates = HashSet::new();
     let debug_scores = debug_scores_enabled();
     // Per-node (matched_terms, salient_hits) in node-index order, for the dump.
     let mut debug_rows: Vec<(usize, usize)> = Vec::new();
@@ -669,13 +810,30 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             // tie falls to degree and a same-name symbol from the wrong
             // class wins the answer slot.
             let id_coverage = component_coverage(&term_tokens, &id_components[i]);
-            let id_score = id_coverage * id_coverage;
+            let scope_match = is_explicit_identifier(term)
+                && definition_identifier_match(term, &node.id, &node.label, &node.source_file);
+            let path_match =
+                is_explicit_identifier(term) && path_discriminator_match(term, &node.source_file);
+            let id_score = if scope_match {
+                4.0
+            } else {
+                let coefficient = if is_explicit_identifier(term) {
+                    0.25
+                } else {
+                    1.0
+                };
+                coefficient * id_coverage * id_coverage
+            };
             // A chunk's body is its content: body evidence there scores at
             // label parity, so label luck (a speaker name in the first line)
             // cannot outrank the chunk that actually answers the question.
             let doc_coeff = if is_chunk { 1.1 } else { 0.35 };
             let doc_score = doc_coeff * doc_coverage * doc_coverage;
-            let path_score = 0.55 * path_coverage * path_coverage;
+            let path_score = if path_match {
+                3.0
+            } else {
+                0.55 * path_coverage * path_coverage
+            };
             let fuzzy_score = if label_score + doc_score + path_score == 0.0
                 && term_tokens.len() == 1
                 && label_tokens
@@ -694,6 +852,26 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             }
             score += (label_score.max(doc_score) + id_score + path_score + fuzzy_score)
                 * idf_weight(term);
+        }
+        // Reserve a ranking tier for actual definitions satisfying every written
+        // discriminator. Prose mentions and wrong-scope same-name methods cannot
+        // enter this tier. Document intent keeps its existing lexical behavior.
+        if code_intent
+            && (!identifiers.is_empty() || !bare_symbols.is_empty())
+            && !is_doc
+            && !is_semantic_type(&node.file_type)
+            && node.file_type != "stub"
+            && !label_is_file(&node.label)
+            && (!is_test || wants_tests)
+            && bare_symbols
+                .iter()
+                .all(|term| normalized_identifier(term) == normalized_identifier(&node.label))
+            && identifiers.iter().all(|term| {
+                definition_identifier_match(term, &node.id, &node.label, &node.source_file)
+                    || path_discriminator_match(term, &node.source_file)
+            })
+        {
+            definition_candidates.insert(idx);
         }
         // Questions are multi-term: a node covering most of them outranks a
         // lexically lucky single-term match ("paint" in a speaker line vs
@@ -726,6 +904,17 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         max_matched_terms = max_matched_terms.max(matched_terms);
         if debug_scores {
             debug_rows.push((matched_terms, salient_hits));
+        }
+    }
+    if !definition_candidates.is_empty() && !wants_entry {
+        let ceiling = scored
+            .iter()
+            .map(|(score, _)| *score)
+            .fold(0.0_f64, f64::max);
+        for (score, idx) in &mut scored {
+            if definition_candidates.contains(idx) {
+                *score += ceiling + 1.0;
+            }
         }
     }
     // Explicit entry intent gives import roots precedence over lexical

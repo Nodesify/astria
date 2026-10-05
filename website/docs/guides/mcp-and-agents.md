@@ -48,6 +48,36 @@ npx skills add Nodesify/astria
 
 The repo's canonical skill - [`skills/astria/SKILL.md`](https://github.com/Nodesify/astria/blob/main/skills/astria/SKILL.md) - is indexed on [skills.sh](https://skills.sh), so any coding agent can pick it up without astria being installed. The skill is self-contained: on first use it checks for the CLI (`astria --version`); if it is missing but `.astria/` exists, it answers from the exported report and wiki as plain files; if there is no graph either, it offers the `npm install -g @nodesify/astria` install before doing any graph work - it never installs unprompted. `astria install` (below) remains the richer path for CLI users since it also wires MCP configs, hooks, and `AGENTS.md` blocks per platform.
 
+## Claude Code plugin
+
+In Claude Code, install the bundled MCP server, graph-first skill, slash commands and architect subagent:
+
+```text
+/plugin marketplace add Nodesify/astria
+/plugin install astria@nodesify
+```
+
+The plugin includes `/astria` and `/astria-risk`; its MCP configuration runs the installed `astria mcp` CLI. See the repository's [plugin manifest](https://github.com/Nodesify/astria/blob/main/.claude-plugin/plugin.json) and [MCP Registry metadata](https://github.com/Nodesify/astria/blob/main/server.json).
+
+## Docker and HTTP MCP
+
+Build the repository's container image, then analyze or query a mounted checkout:
+
+```sh
+docker build -t astria .
+docker run --rm -v "$PWD":/workspace astria run /workspace
+docker run --rm -v "$PWD":/workspace astria query "auth flow" --graph /workspace
+```
+
+To serve MCP over HTTP on port 8620, set `ASTRIA_MCP_TOKEN` to your access token and pass it to the server:
+
+```sh
+docker run --rm -p 8620:8620 -v "$PWD":/workspace \
+  astria mcp --http --host 0.0.0.0 --token "$ASTRIA_MCP_TOKEN" --graph /workspace
+```
+
+Binding a non-loopback address requires a token. Command flags, client authentication and origin settings are documented in the [CLI reference](../reference/cli).
+
 ## Git hooks
 
 ```bash

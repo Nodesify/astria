@@ -7,6 +7,9 @@ import {loadTokenizer} from '../tokenize.mjs';
 const configPath=path.resolve(process.argv[2]||'');
 if(!process.argv[2]) throw Error('Usage: node scripts/bench/paired/run.mjs <config.json>');
 const config=JSON.parse(readFileSync(configPath,'utf8'));
+const reservedCatalog=JSON.parse(readFileSync(new URL('../reserved-corpora.json',import.meta.url),'utf8'));
+const reservedSpec=spec=>String(spec.split||'').startsWith('reserved')||reservedCatalog.golden_files.some(file=>path.basename(file)===path.basename(spec.golden));
+if(config.corpora.some(reservedSpec)&&config.allow_reserved!==true)throw Error('Reserved corpora require allow_reserved: true; first retrieval consumes reservation.');
 const BUDGETS=Array.isArray(config.budgets)&&config.budgets.length>0?config.budgets:[1000,4000];
 const repo=process.cwd(), root=path.resolve(config.output);
 if(existsSync(root)) throw Error('Output must be a new directory: '+root);
@@ -57,6 +60,7 @@ for(const spec of config.corpora){
     if(tool==='astria'){const audit=exec(python,[path.join(repo,'scripts/bench/paired/audit-symbols.py'),cwd]); if(audit.status!==0)throw Error(audit.stderr); retention=JSON.parse(audit.stdout);}
     corpus.builds[tool]={retention,definitions:items.flatMap(item=>(item.definitions||[]).map(d=>({question:item.id,...d,present:g.nodes.some(n=>definitionMatch(n,d,cwd,tool))}))),seconds:r.seconds,nodes:g.nodes.length,edges:(g.edges||g.links).length,stderr:r.stderr};save();console.log(`${tool}: ${g.nodes.length} nodes; ${retention?.preserved??'n/a'} cached definition IDs retained`);
   }
+  if(reservedSpec(spec)){corpus.reserved_exposure={started_at:new Date().toISOString(),status:'reservation-consumed-before-first-query'};save();}
   for(const budget of BUDGETS)for(const [index,item] of items.entries())for(const tool of index%2?['graphify','astria']:['astria','graphify']){
     const cwd=path.join(root,spec.name+'-'+tool);
     const r=tool==='astria'?exec(process.execPath,[cli,'query',item.question,'--budget',String(budget),'--depth','2'],cwd):exec(python,['-m','graphify','query',item.question,'--budget',String(budget),'--graph',path.join(cwd,'graphify-out/graph.json')],cwd);

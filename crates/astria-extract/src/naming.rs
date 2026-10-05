@@ -22,16 +22,28 @@ pub(crate) fn make_node_id(parts: &[&str]) -> String {
         .join("::")
 }
 
-/// Create a target ID for cross-file references (imports, calls).
-/// Qualified names (`pipeline::load_graph_db`, `PathBuf::from`) keep their
-/// `::` segment structure so they can match hierarchical definition ids;
-/// each segment is normalized for fuzzy matching.
+/// Canonical symbol reference: normalize within each qualified segment,
+/// retaining the same boundary for dotted and `::` call spellings.
 pub(crate) fn make_target_id(name: &str) -> String {
+    name.replace("::", ".")
+        .split('.')
+        .map(normalize_id)
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// Document slugs and link stems are text identifiers, not qualified symbols.
+pub(crate) fn make_text_id(name: &str) -> String {
     name.split("::")
         .map(normalize_id)
         .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
         .join("::")
+}
+
+/// Module imports retain relative path and extension evidence for file resolution.
+pub(crate) fn make_module_target_id(name: &str) -> String {
+    name.trim().replace('\\', "/")
 }
 
 /// Short digest (12 hex chars) of the forward-slash relative path — the

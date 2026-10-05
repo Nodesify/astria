@@ -27,8 +27,8 @@ pub struct SurprisingEdge {
     pub relation: String,
     pub source_community: Option<u32>,
     pub target_community: Option<u32>,
-    /// Novelty score: larger, more cohesive communities joined by fewer
-    /// edges score higher. Higher = more surprising.
+    /// Novelty score: smaller community size divided by bridge count.
+    /// Higher = more surprising; this is not relationship confidence.
     pub score: f64,
 }
 
@@ -41,7 +41,8 @@ pub struct AnalysisResult {
 
 pub fn analyze(db: &Connection) -> astria_core::Result<AnalysisResult> {
     let god_nodes = compute_god_nodes(db)?;
-    let surprising = compute_surprising_connections(db)?;
+    let mut surprising = ranked_surprising_connections(db)?;
+    surprising.truncate(MAX_SURPRISING);
     let questions = suggest_questions(db, &god_nodes, &surprising)?;
     Ok(AnalysisResult {
         god_nodes,
@@ -50,7 +51,7 @@ pub fn analyze(db: &Connection) -> astria_core::Result<AnalysisResult> {
     })
 }
 
-/// How many cross-community edges the report shows, ranked by novelty.
+/// Maximum cross-community edges returned by the general analysis API.
 const MAX_SURPRISING: usize = 25;
 /// Communities smaller than this are ignored when scoring surprising
 /// connections — a singleton "community" reaching out is not surprising.
@@ -64,7 +65,8 @@ fn all_degrees(db: &Connection) -> astria_core::Result<HashMap<String, usize>> {
         let rows = stmt.query_map([], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
         })?;
-        for (id, count) in rows.flatten() {
+        for row in rows {
+            let (id, count) = row?;
             *degrees.entry(id).or_insert(0) += count;
         }
     }
@@ -73,7 +75,8 @@ fn all_degrees(db: &Connection) -> astria_core::Result<HashMap<String, usize>> {
         let rows = stmt.query_map([], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
         })?;
-        for (id, count) in rows.flatten() {
+        for row in rows {
+            let (id, count) = row?;
             *degrees.entry(id).or_insert(0) += count;
         }
     }
@@ -90,14 +93,15 @@ fn compute_god_nodes(db: &Connection) -> astria_core::Result<Vec<NodeAnalysis>> 
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<u32>>(2)?,
                 row.get::<_, String>(3)?,
             ))
         })?;
-        for (id, label, community, file_type) in rows.flatten() {
+        for row in rows {
+            let (id, label, community, file_type) = row?;
             nodes.push(NodeAnalysis {
                 degree: degrees.get(&id).copied().unwrap_or(0),
-                community: community.map(|c| c as u32),
+                community,
                 id,
                 label,
                 is_stub: file_type == "stub",
@@ -139,10 +143,11 @@ fn compute_god_nodes(db: &Connection) -> astria_core::Result<Vec<NodeAnalysis>> 
 }
 
 /// Cross-community edges ranked by novelty: bigger communities joined by
-/// fewer edges score higher — two large cohesive communities sharing a
+/// fewer edges score higher — two large communities sharing a
 /// single edge stand out, while a swarm of edges between two communities
-/// is just an interface. Results are capped to MAX_SURPRISING.
-fn compute_surprising_connections(db: &Connection) -> astria_core::Result<Vec<SurprisingEdge>> {
+/// is just an interface. Reports apply separate category budgets to this
+/// complete ranking; `analyze` retains its bounded overall result.
+pub fn ranked_surprising_connections(db: &Connection) -> astria_core::Result<Vec<SurprisingEdge>> {
     // Community sizes come from the node assignments themselves — the
     // authoritative source, valid even when the communities table has not
     // been populated.
@@ -151,14 +156,22 @@ fn compute_surprising_connections(db: &Connection) -> astria_core::Result<Vec<Su
             "SELECT community, COUNT(*) FROM nodes WHERE community IS NOT NULL GROUP BY community",
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
-        rows.filter_map(|r| r.ok()).collect()
+        rows.collect::<rusqlite::Result<_>>()?
     };
 
     let mut stmt = db.prepare(
+        // Speculative nodes are excluded: a `stub` or `reference` is a name the
+        // extractors could not resolve to a definition, so an edge to one is
+        // not a code relationship. Nearly half the cross-community edges on
+        // astria's own graph pointed at bare names (`console_error`, `path`,
+        // minified single letters), which made a list whose whole purpose is
+        // "look here next" mostly noise.
         "SELECT e.source, s.label, e.target, t.label, e.relation, s.community, t.community
          FROM edges e
          JOIN nodes s ON s.id = e.source JOIN nodes t ON t.id = e.target
-         WHERE s.community IS NOT NULL AND t.community IS NOT NULL AND s.community != t.community",
+         WHERE s.community IS NOT NULL AND t.community IS NOT NULL AND s.community != t.community
+           AND s.file_type NOT IN ('stub', 'reference')
+           AND t.file_type NOT IN ('stub', 'reference')",
     )?;
     let edges: Vec<SurprisingEdge> = stmt
         .query_map([], |row| {
@@ -168,13 +181,12 @@ fn compute_surprising_connections(db: &Connection) -> astria_core::Result<Vec<Su
                 target: row.get(2)?,
                 target_label: row.get(3)?,
                 relation: row.get(4)?,
-                source_community: row.get::<_, Option<i64>>(5)?.map(|c| c as u32),
-                target_community: row.get::<_, Option<i64>>(6)?.map(|c| c as u32),
+                source_community: row.get::<_, Option<u32>>(5)?,
+                target_community: row.get::<_, Option<u32>>(6)?,
                 score: 0.0,
             })
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<rusqlite::Result<_>>()?;
     drop(stmt);
 
     if edges.is_empty() {
@@ -223,8 +235,8 @@ fn compute_surprising_connections(db: &Connection) -> astria_core::Result<Vec<Su
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.source.cmp(&b.source))
             .then_with(|| a.target.cmp(&b.target))
+            .then_with(|| a.relation.cmp(&b.relation))
     });
-    scored.truncate(MAX_SURPRISING);
     Ok(scored)
 }
 
@@ -263,9 +275,12 @@ fn suggest_questions(
              UNION \
              SELECT DISTINCT n.source_file FROM nodes n JOIN edges e ON e.target = n.id",
         )?;
-        let files: Vec<String> = all_files.query_map([], |r| r.get(0))?.flatten().collect();
-        let connected: std::collections::HashSet<String> =
-            with_edges.query_map([], |r| r.get(0))?.flatten().collect();
+        let files: Vec<String> = all_files
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let connected: std::collections::HashSet<String> = with_edges
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
         for file in files {
             if !connected.contains(&file) {
                 orphan_files.push(file);
@@ -291,13 +306,11 @@ fn suggest_questions(
         ));
     }
 
-    let community_count: i64 = db
-        .query_row(
-            "SELECT COUNT(DISTINCT community) FROM nodes WHERE community IS NOT NULL",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
+    let community_count: i64 = db.query_row(
+        "SELECT COUNT(DISTINCT community) FROM nodes WHERE community IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
     if community_count > 1 {
         questions.push(format!(
             "What are the responsibilities of the {} communities?",
@@ -454,6 +467,40 @@ mod tests {
         // No communities table rows → sizes unknown → treated as too small
         let result = analyze(&db).unwrap();
         assert!(result.surprising_connections.is_empty());
+    }
+
+    #[test]
+    fn speculative_nodes_never_appear_as_surprising_connections() {
+        // Bare names (a stub) and dependency names (a reference) are not code
+        // relationships. Excluding them is why this list became usable: on
+        // astria's own graph nearly half its entries were unresolved names.
+        let db = open_db_in_memory().unwrap();
+        let mut sql = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file, community) VALUES
+                ('a1','A1()','code','f.py',0),('a2','A2()','code','f.py',0),
+                ('b1','B1()','code','f.py',1),('b2','B2()','code','f.py',1),
+                ('bare','console_error','stub','',2),('dep','child_process','reference','',3);
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('a1','b1','calls','EXTRACTED','f.py'),",
+        );
+        // Pad the communities past the minimum size so the real bridge counts.
+        sql.push_str(
+            "('b1','a2','calls','EXTRACTED','f.py'),('b2','a1','calls','EXTRACTED','f.py'),",
+        );
+        sql.push_str(
+            "('bare','a1','calls','INFERRED','f.py'),('dep','b1','imports','EXTRACTED','f.py');",
+        );
+        db.execute_batch(&sql).unwrap();
+
+        let result = analyze(&db).unwrap();
+        assert!(
+            result
+                .surprising_connections
+                .iter()
+                .all(|e| e.source != "bare" && e.target != "bare" && e.target != "dep"),
+            "speculative nodes must not rank: {:?}",
+            result.surprising_connections
+        );
     }
 
     #[test]

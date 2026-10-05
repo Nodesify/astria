@@ -10,5 +10,6 @@ publish = false
 
 [dependencies]
 astria-core = { workspace = true }
+astria-paths = { workspace = true }
 rusqlite = { workspace = true }
 petgraph = { workspace = true }

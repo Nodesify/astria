@@ -13,7 +13,7 @@ use crate::langs::php::php_route_name;
 use crate::langs::python::python_overload_has_implementation;
 use crate::langs::rust::{is_rust_test_function, rust_doc_comment, rust_is_pub, rust_module_doc};
 use crate::langs::LanguageConfig;
-use crate::naming::{file_stem, make_node_id, make_target_id};
+use crate::naming::{file_stem, make_module_target_id, make_node_id, make_target_id};
 use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};
 use astria_core::AstriaError;
 
@@ -340,7 +340,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
             let import_text = node_text(node, state.source);
             let module_name = extract_import_module(import_text, kind, state.cfg.name);
             if let Some(mod_name) = module_name {
-                let target_id = make_target_id(&mod_name);
+                let target_id = make_module_target_id(&mod_name);
                 state.edges.push(ExtractedEdge {
                     source: state.file_id.clone(),
                     target: target_id,

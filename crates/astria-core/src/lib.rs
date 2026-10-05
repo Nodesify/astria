@@ -30,7 +30,8 @@ pub mod types;
 /// declaration disambiguators, disambiguation-aware edge rewiring); all
 /// previously cached extractions carry the old folded ids and must be
 /// re-extracted.
-pub const EXTRACTION_HASH_VERSION: &str = "v14";
+/// v15: qualified call boundaries and exact import module paths retained.
+pub const EXTRACTION_HASH_VERSION: &str = "v15";
 
 /// Reads `ASTRIA_<name>`. Empty values count as unset. There is no legacy
 /// spelling fallback: pre-1.0 configurations rebuild with current names.

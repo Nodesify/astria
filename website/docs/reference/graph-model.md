@@ -32,7 +32,7 @@ Every node carries a stable `id`, deterministic from the file path and symbol �
 |---|---|---|
 | `calls` | A calls B | RESOLVED when the callee name binds to exactly one definition; INFERRED when it cannot resolve (the call site is extracted either way) |
 | `contains` | File/class contains symbol | EXTRACTED |
-| `imports` | Import/require/use between files | EXTRACTED |
+| `imports` | Import/require/use between files | RESOLVED for name-derived file endpoints; EXTRACTED for already structural-ID endpoints |
 | `uses` | Identifier usage within a body | EXTRACTED |
 | `references` | Node mentions a `reference` literal, or a memory document cites a node (from `save-result`, which inserts the doc as a document node immediately) | EXTRACTED |
 | `depends_on` | Document-level dependency (e.g. memory docs citing files) | EXTRACTED |
@@ -53,7 +53,7 @@ Every node carries a stable `id`, deterministic from the file path and symbol �
 Every edge is labeled with a provenance value, plus a numeric `confidence_score`:
 
 - **EXTRACTED** — found directly in the source (AST match, manifest parse, SCIP index). Declared fact.
-- **RESOLVED** — a call expression extracted from source whose bare name binds to exactly one definition during reference resolution. Trustworthy for impact analysis, but the binding is name inference rather than compiler resolution, so it deliberately sits below EXTRACTED: high-fidelity tiers and EXTRACTED-only checks (like health's file-cycle detection) still exclude it.
+- **RESOLVED** — a call or import endpoint bound using source names, qualified scopes and supported imports. The syntax is extracted, but the endpoint remains name inference rather than compiler resolution. It sits below EXTRACTED: high-fidelity tiers and EXTRACTED-only health checks exclude it. Ambiguous or missing targets remain INFERRED.
 - **INFERRED** — deduced: unresolvable call stubs, embeddings, learned edges, hyperedges, global-graph type matching.
 - **SEMANTIC** — produced by LLM enrichment: concept nodes and their edges extracted by the semantic backend, with relations validated against a fixed allowlist. Retrieval ranks it between INFERRED and AMBIGUOUS when no numeric score is present.
 - **AMBIGUOUS** — plausible but unconfirmed (e.g. a name match that could collide).

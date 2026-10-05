@@ -119,7 +119,7 @@ See [Wiki and exports](../guides/wiki-and-exports) for details.
 
 ```bash
 astria diagnose [--graph .] [--json]
-astria health [--graph .] [--json]
+astria health [--graph .] [--json] [--min-score <n>]
 astria risk [--graph .] [--staged] [--json]
 astria merge-gate [--max-age-hours 24] [--min-health 60] [--max-risk 70] [--staged] [--base <ref> --head <ref>] [--json]  # CI merge gate (see Team serving & CI)
 astria digest [--out .astria/digest.md] [--json]  # Engineering digest brief (see Team serving & CI)
@@ -127,7 +127,7 @@ astria digest [--out .astria/digest.md] [--json]  # Engineering digest brief (se
 
 Read-only health report over an existing graph: dangling edge endpoints (stub vs actionable), self-loops, duplicate edges, unclassified files, and zero-cohesion communities. `--json` emits machine-readable output. Never mutates the graph.
 
-`health` scores code-health heuristics (unreachable-symbol candidates, file cycles, hub concentration, and staleness) from 0 to 100. `risk` maps the current git diff to impacted symbols and communities; use `--staged` to inspect only staged changes, or `--base origin/main --head HEAD` to score a committed PR range (the CI shape — a clean checkout has no working-tree diff). Both support `--json`.
+`health` scores code-health heuristics (unreachable-symbol candidates, file cycles, hub concentration, and staleness) from 0 to 100. `--min-score <n>` exits non-zero when the score falls below `n`, which is the direct CI form (`astria health --min-score 70 || exit 1`); without it the command always exits 0, since a report that only prints is not a gate. `risk` maps the current git diff to impacted symbols and communities; use `--staged` to inspect only staged changes, or `--base origin/main --head HEAD` to score a committed PR range (the CI shape — a clean checkout has no working-tree diff). Both support `--json`.
 
 ## Memory and reflection
 
