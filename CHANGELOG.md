@@ -19,6 +19,13 @@ this file is the per-version summary.
 - **Ranking surfaces ignore non-code nodes.** Hub concentration, `file_cycles`, `report` "Key Files", "surprising connections", and the local embedding layer all exclude speculative nodes, so similarity between two unresolved bare names is no longer presented as structure.
 - Ground-truth note: measured on this repository, the fix removes 743 fabricated file dependencies, 4 false cycles, and 1,302 `similar_to` edges that joined two non-symbols; retrieval quality on the golden set is unchanged by these edits (MRR 0.5979 before and after, byte-identical), so this is a correctness and honesty change, not a ranking change.
 
+- Preserve qualified symbol boundaries and import paths when resolving references; ambiguous candidates remain unresolved and inferred bindings retain `RESOLVED` evidence. Extraction cache v15 refreshes previously flattened targets.
+- Prefer exact implementation definitions for code-oriented queries, with scope and source metadata contributing to ranking.
+- Name communities from source modules and packages; reports separately orient production code, documentation, and tests/benchmarks/examples, with source links and explicit relationship evidence.
+- Propagate authoritative database decoding errors in analysis, clustering, hyperedge construction, and reports rather than silently discarding rows.
+- Add 24 reserved questions on pinned Requests and Commander sources, a bounded iterative search baseline, and separate retrieval/build cost and provenance records. The new corpus and methods have not been evaluated.
+- Simplify the README workflow and align architecture documentation with snapshot caching and reference evidence.
+
 ## [1.0.12] — 2026-10-04
 
 
