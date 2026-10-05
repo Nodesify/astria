@@ -400,20 +400,13 @@ fn query_graph_loaded(
         if !is_explicit_identifier(term) || term.len() <= 2 {
             continue;
         }
-        let parts = tokenize(term);
         if let Some(&(_, idx)) = scored.iter().find(|(_, idx)| {
             let node = &loaded.graph[*idx];
             if node.file_type == "stub" {
                 return false;
             }
-            normalized_identifier(term) == normalized_identifier(&node.label)
-                || (parts.len() > 1 && component_coverage(&parts, &tokenize(&node.label)) == 1.0)
-                || node
-                    .source_file
-                    .replace('\\', "/")
-                    .split('/')
-                    .any(|segment| normalized_identifier(segment) == normalized_identifier(term))
-                || qualified_scope_match(term, &node.id)
+            definition_identifier_match(term, &node.id, &node.label, &node.source_file)
+                || path_discriminator_match(term, &node.source_file)
         }) {
             if !seed_nodes.contains(&idx) {
                 seed_nodes.push(idx);
@@ -3065,25 +3058,29 @@ mod scope_match {
     use super::*;
     #[test]
     fn qualified_names_match_id_scope_tokens_and_tails() {
-        // qualified name -> scope slug + method tail
+        // qualified name -> explicit class scope + method tail
         assert!(qualified_scope_match(
             "BaseCommand.get_usage",
-            "src_click_core_basecommand::get_usage"
+            "src_click_core::BaseCommand::get_usage",
+            "get_usage()"
         ));
         // same-name symbol from the wrong class must not match
         assert!(!qualified_scope_match(
             "BaseCommand.get_usage",
-            "src_click_core_command::get_usage"
+            "src_click_core::Command::get_usage",
+            "get_usage()"
         ));
         // bare class name matches its scope token
         assert!(qualified_scope_match(
             "BaseCommand",
-            "src_click_core_basecommand::invoke"
+            "src_click_core::BaseCommand::invoke",
+            "invoke()"
         ));
         // prose must never match
         assert!(!qualified_scope_match(
             "how the usage works",
-            "src_click_core_basecommand::get_usage"
+            "src_click_core::BaseCommand::get_usage",
+            "get_usage()"
         ));
     }
 }

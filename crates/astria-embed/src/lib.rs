@@ -260,8 +260,15 @@ pub fn rebuild_similarity_edges(
     top_k: usize,
 ) -> astria_core::Result<usize> {
     let vectors: Vec<(String, Vec<f32>)> = {
-        let mut stmt =
-            db.prepare("SELECT node_id, embedding FROM node_embeddings WHERE model = ?1")?;
+        // Speculative nodes are excluded from embedding: a `stub` is an
+        // unresolved name (`super`, `get`, minified single letters) and a
+        // `reference` is a dependency name. Their vectors encode "these two
+        // short bare identifiers look alike", so keeping them produced ~1,300
+        // `similar_to` edges that joined two non-symbols and then pulled them
+        // into the same community — similarity noise presented as structure.
+        let mut stmt = db.prepare(
+            "SELECT ne.node_id, ne.embedding FROM node_embeddings ne\r\n             JOIN nodes n ON n.id = ne.node_id\r\n             WHERE ne.model = ?1 AND n.file_type NOT IN ('stub', 'reference')",
+        )?;
         let rows = stmt.query_map(rusqlite::params![MODEL_NAME], |row| {
             Ok((
                 row.get::<_, String>(0)?,

@@ -16,5 +16,37 @@
     "repository": "https://github.com/BurntSushi/ripgrep",
     "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
     "golden": "ripgrep.jsonl"
+  },
+  {
+    "name": "requests",
+    "repository": "https://github.com/psf/requests",
+    "commit": "0e322af87745eff34caffe4df68456ebc20d9068",
+    "tag": "v2.32.3",
+    "source_sha256": {
+      "src/requests/sessions.py": "ca44c8f145864a5b4e7c7d3b1caa25947ee44c11b0e168620556901a67244f0e",
+      "src/requests/models.py": "938daba17cc2f2efce6a000f422f54e0c91f3bb8b8af615d6aabccaacb4f7a17",
+      "src/requests/adapters.py": "28871e72c72a6a6eab78e097465e03c0fe235fc25c97cb1de7b7edd7b291d9c4"
+    },
+    "golden": "requests.reserved-v1.jsonl",
+    "split": "reserved",
+    "evaluation_status": "unexercised",
+    "questions": 12,
+    "source_hash_basis": "SHA-256 of pinned Git blob bytes, before checkout line-ending conversion"
+  },
+  {
+    "name": "commander",
+    "repository": "https://github.com/tj/commander.js",
+    "commit": "970ecae402b253de691e6a9066fea22f38fe7431",
+    "tag": "v12.1.0",
+    "source_sha256": {
+      "lib/command.js": "f92b14348d67ebab914c56d538da80afaf30e0343acee6eadcc01ca197753e6f",
+      "lib/help.js": "c7d6ad897ebec52adeaf217b230eaf1298e6bc04c800f408c898811616a51b5a",
+      "lib/option.js": "ac502c5edc3a23f1c97c8058255f724ec273794252151f885ae0f68aa1b95dac"
+    },
+    "golden": "commander.reserved-v1.jsonl",
+    "split": "reserved",
+    "evaluation_status": "unexercised",
+    "questions": 12,
+    "source_hash_basis": "SHA-256 of pinned Git blob bytes, before checkout line-ending conversion"
   }
 ]

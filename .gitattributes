@@ -1,0 +1,6 @@
+# Generated, not authored — keep generated bundles out of diffs and language
+# stats. `crates/astria-export/assets/viewer.js` is rebuilt from
+# `packages/viewer` and embedded into the Rust exporter via `include_str!`;
+# `scripts/check-viewer-bundle.mjs` already fails CI on drift, so a stale copy
+# is a build error, not something a reviewer should read in a pull request.
+crates/astria-export/assets/viewer.js linguist-generated=true -diff

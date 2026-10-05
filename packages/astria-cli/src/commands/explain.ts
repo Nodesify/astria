@@ -13,9 +13,16 @@ export async function explainCommand(node: string, opts: { graph: string; json?:
     }
     console.log(`Node: ${result.label}`);
     console.log(`  ID: ${result.id}`);
-    console.log(
-      `  File: ${result.sourceFile}${result.sourceLine != null ? `:${result.sourceLine}` : ''}`
-    );
+    // An unresolved global name (a `stub` node) has no owning file. Printing
+    // whatever file referenced it first would name a file that does not
+    // define the symbol; say so instead.
+    if (result.sourceFile) {
+      console.log(
+        `  File: ${result.sourceFile}${result.sourceLine != null ? `:${result.sourceLine}` : ''}`
+      );
+    } else {
+      console.log('  File: (no source locus — unresolved name, no single owner)');
+    }
     if (result.community !== null && result.community !== undefined) {
       console.log(`  Community: ${result.community}`);
     }
@@ -26,7 +33,11 @@ export async function explainCommand(node: string, opts: { graph: string; json?:
     if (result.neighbors.length > 0) {
       console.log(`\nConnections (${result.neighborCount}):`);
       for (const n of result.neighbors) {
-        const loc = n.neighborLine != null ? ` (${n.neighborFile}:${n.neighborLine})` : '';
+        const loc = n.neighborFile
+          ? n.neighborLine != null
+            ? ` (${n.neighborFile}:${n.neighborLine})`
+            : ` (${n.neighborFile})`
+          : '';
         // Direction is the stored edge's: `-->` this node calls/imports the
         // neighbor; `<--` the neighbor calls/imports this node.
         const arrow = n.outgoing === false ? '<--' : '-->';

@@ -7,28 +7,49 @@ node scripts/bench/quality/run-quality.mjs --check
 node scripts/bench/quality/run-quality.mjs --astria /absolute/checkout/packages/astria-cli/dist/index.js --budget 4000 --min-recall5 50
 ```
 
-Schema v2 scores exact normalized, case-sensitive corpus-relative file paths. `hit@k` means at least one expected file appears in the first k unique files. `recall@k` is the fraction of all expected files retrieved, averaged across questions. MRR uses the first expected file. Symbol matches are diagnostics only. Failed, timed-out, nonzero-exit and empty responses remain in every quality denominator as zero. Source paths from NODE records rank before EDGE-only paths.
+Schema v3 scores exact normalized, case-sensitive corpus-relative file paths. `hit@k` means at least one expected file appears in the first k unique files. `recall@k` is the fraction of all expected files retrieved, averaged across questions. MRR uses the first expected file. Symbol-label matches remain diagnostics. When golden cases include grounded `definitions` (path, one-based declaration line, source anchor), reports add declaration recall@k and MRR separately. Failed cases retain null declaration ranks. Failed, timed-out, nonzero-exit and empty responses remain in every quality denominator as zero. Source paths from NODE records rank before EDGE-only paths.
 
 Reports include CLI version, checkout commit and dirty state, native and entrypoint SHA-256 hashes for local builds, corpus commit and file count, golden SHA-256, runtime, query budget and depth. Local runs require `dist/astria.node` and reject a package-root `astria.node`, which otherwise takes loader precedence. Missing or unloadable native builds fail instead of using the installed platform package. The source commit identifies the harness checkout; a local built artifact must come from that checkout. CI builds it in the same job. Installed binaries may have different source provenance.
 
 Historical v1 scores called any-file-or-symbol hits “recall” and omitted failures. They cannot be compared directly to schema v2. The existing snapshot has not been remeasured by this change.
 
-## External repositories and lexical baseline
+## External repositories and lexical baselines
 
-`../external/corpora.json` pins Click 8.1.8, Express 4.21.2 and ripgrep 14.1.1 to immutable commits. Eight seed questions include upstream evidence links and source anchors, validated before each run. This small, symbol-heavy set checks basic navigation; it does not establish broad architectural reasoning quality. Expand independently authored, multi-file questions before making general quality claims.
+The catalog in `../external/corpora.json` pins five repositories. The original Click/Express/ripgrep cases have already been exercised. Requests 2.32.3 and Commander 12.1.0 add **24 reserved, unexercised questions** (12 each), with one-based declaration locations, production-source evidence anchors and immutable upstream links. These cases were agent-authored from pinned source without viewing retrieval outputs. Source inspection is disclosed; they are not independent human ground truth or blind judging. No new retrieval measurements accompanied this implementation.
 
 ```sh
 npm install --no-save js-tiktoken
-node scripts/bench/external/run.mjs
+# Runs only previously exercised corpora by default. Always choose a new directory.
+node scripts/bench/external/run.mjs --output bench-work/external-next
+# Future first evaluation only: consumes reservation before the first query.
+node scripts/bench/external/run.mjs --output bench-work/external-reserved-first --include-reserved
 ```
 
-Requires git, rg, Node 22, and a locally built CLI/native module. The runner clones source only, never installs or executes upstream packages. It refuses dirty (including untracked source), mismatched or previously graphed corpus directories; generated `.astria` files are the only explicit status exclusion. Use a fresh `bench-work/external` directory for another run. Outputs land in `quality/out` and are not published automatically.
+Requires git, rg, Node 22 and locally built CLI/native artifacts. Source clones are never installed or executed. The runner verifies clean immutable checkouts, exact source anchors and the recorded SHA-256 of pinned Git blob bytes (read without decoding or checkout line-ending conversion), explicitly disables LLM enrichment (`ASTRIA_LLM_BACKEND=none`), builds without embeddings, and refuses an existing output directory. The output contains fresh corpus graphs, per-method query results and `suite.json` with CLI/native hashes, source status and **separate per-corpus graph build elapsed time**. This practical build time includes CLI post-build work; it is not pure extraction time. Baselines need no graph build. Query timing includes process startup; one observation per condition does not establish significance.
 
-Each corpus runs the same questions with requested budgets of 1000 and 4000 tokens for astria and targeted rg plus source reads. The baseline derives search terms solely from the question, collects at most three matching lines per file, ranks by term occurrences (path order breaks ties), and reads a window of 10 lines before and 30 after the first match. Both methods pass through the same o200k_base clipping step before path parsing and quality scoring. Clipping drops any incomplete final line. Reports include delivered tokens, raw tokens and whether clipping occurred. Graph generation also receives the requested CLI budget, but its internal estimate does not govern the final scored context. Golden files and anchors never guide the baseline. The paired suite requires the shared tokenizer and fails if it is unavailable.
+At each 1,000/4,000-token budget and depth 3, compare three separately named conditions:
 
-Token cost counts delivered retrieval context, not filesystem bytes scanned, graph construction, model reasoning, or a complete agent task. The baseline is deterministic, not a claim about expert iterative search. Full-corpus/query ratios are a separate size diagnostic and do not measure savings against targeted search.
+| Method | Search policy | Limits |
+|---|---|---|
+| `astria` | Graph retrieval | Requested budget and shared exact complete-line clipping |
+| `question-rg-single-pass-floor-v2` | Question terms, fixed-string rg, source windows | One round, up to 24 files |
+| `question-rg-iterative-source-v1` | Question terms followed by call/import evidence from read windows; existing relative imports can add candidate files | Up to 3 rounds, 6 unread files per round |
 
-`.github/workflows/quality.yml` gates proposed changes using the local native build and a 50% self-corpus recall@5 floor. External runs remain explicit opt-in; the September 30 astria-vs-baseline comparison over the Click/Express/ripgrep corpora is checked in at [`worked/external-baseline/`](../../../worked/external-baseline/). Blind promptfoo judging remains optional under `promptfoo/` and is separate from deterministic retrieval metrics.
+Both lexical methods accept only question, source root and limits: no expected files, definitions or anchors enter search or refinement. Terms are capped at 20 initially and 12 in refinements, with at most 2,000 considered matches per round, three rg matches per file, a 30-second search timeout, 16 MiB search-output buffer and 256 KiB read cap per file. File ranking counts matched terms; path order breaks ties. Windows contain ten lines before and thirty after the first match. Lexical declaration recognition emits path/line records and can miss multiline or language-specific syntax. Refinement and file ranking are deterministic, bounded lexical heuristics; they do not simulate an expert agent or guarantee complete import resolution.
+
+Search output is sorted by path before applying match caps; ties use codepoint path order. Search and import reads exclude graph/build artifacts, benchmark goldens/results and JSONL files to keep labels outside retrieval. This deliberately narrows lexical eligibility on the self corpus; use the fresh external source corpora for fair source-only comparisons, and disclose eligibility differences on document/data-heavy corpora.
+
+Each query retains per-round terms, match counts, read files/windows, refinements, search/read elapsed time, search-output bytes/tokens, source-read bytes/tokens and failures. These costs count actual bounded reads and captured search output; they do **not** count filesystem bytes scanned by rg or model reasoning. Partial search/read failures remain visible even if the baseline delivers some context, and summaries count these separately. Delivered/raw tokens, clipping, distinct file ranking and exact declaration ranking are scored after the same `o200k_base` complete-line clipping for all three methods. Read cost and search-output tokens are internal work, not delivered LLM context. Expected declaration paths/lines are used only in grounding and scoring.
+
+Historical September 30 outputs use schema v2 and `question-rg-plus-source-windows`: one pass with different regex and formatting behavior. The new floor v2 changes fixed-string search, bounds, line labels and declaration records; do not compare it to the old floor under the same method identity. Those checked-in results remain historical and have not been remeasured. Full-corpus/query ratios remain size diagnostics, not measured savings over targeted search.
+
+## Reserved-set protection
+
+`../reserved-corpora.json` protects reserved files even when filenames omit “reserved,” including Click's documentation-intent split. Quality runs require `--allow-reserved`; the external suite requires `--include-reserved`; paired configs require `allow_reserved: true`. Before first retrieval each runner persists an exposure record (quality: output plus `.reserved-exposure.json`; external: `suite.json`; paired: `results.json`). An interrupted run also consumes reservation. Keep these records, label subsequent runs exercised and never tune against a reserved set before its first evaluation. Static `evaluation_status: unexercised` metadata records authoring status, not a durable lock across machines; exposure records override it. The guard blocks accidental evaluation, not intentional copying/renaming of datasets.
+
+Direct invocation against an already prepared corpus uses `--baseline` for floor v2 or `--iterative-baseline` for iterative v1. `--check` validates schema/source grounding without querying and does not consume reservation. New cases and methods are implementation-only here: no benchmark or tests were run.
+
+The self-corpus recall gate in `.github/workflows/quality.yml` remains separate from opt-in external evaluation and optional blind answer judging.
 
 ## Blind answer-correctness judging
 

@@ -96,6 +96,8 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
     //    - graph AGE (how long since publication, ceiling-configured), and
     //    - source COVERAGE (does the graph represent the current HEAD —
     //      commit identity plus manifest content comparison).
+    //    - extraction RULESET (was the graph built by the current extraction
+    //      code at all — see check 2b).
     //    A graph built after a commit can still fail coverage: it may have
     //    been built from a dirty tree, an older commit, or drifted since.
     // One probe for both coverage and diff-risk.
@@ -111,6 +113,26 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
         detail: ageHours === null
           ? 'graph has no publish timestamp (pre-provenance build) — rebuild with `astria run`'
           : `graph is ${ageHours.toFixed(1)} h old (age limit ${maxAgeHours} h; source coverage is a separate check below)`,
+      });
+
+      // 2b. Extraction ruleset. Age and HEAD coverage both pass for a graph
+      //     the CURRENT build would extract differently: the old cache is
+      //     reused, so the graph reports yesterday's facts with today's
+      //     timestamps. The committed self-graph drifted five commits this
+      //     way (`extraction_hash_version` v12 against code at v14). A version
+      //     mismatch means the recorded facts predate the current extraction
+      //     rules, so nodes and edges may be missing; rebuild before trusting
+      //     a merge decision to them.
+      const builtWith = build?.extractionHashVersion as string | undefined;
+      const currentRules = build?.currentExtractionHashVersion as string | undefined;
+      const extractionCurrent =
+        !!builtWith && !!currentRules && builtWith === currentRules;
+      checks.push({
+        name: 'extraction-current',
+        passed: extractionCurrent,
+        detail: extractionCurrent
+          ? `graph extracted by the current ruleset (${builtWith})`
+          : `graph was extracted with ${builtWith ?? 'an unknown version'} but this build extracts with ${currentRules ?? '?'} — run 'astria update .' to re-extract changed files`,
       });
 
       // Coverage: the HEAD recorded at publication must equal the current

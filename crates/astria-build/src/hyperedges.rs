@@ -134,23 +134,23 @@ struct HyperEdgeRow {
 /// Load all hyperedges with parsed member lists (export/report/wiki/html).
 pub fn load_all(db: &Connection) -> Result<Vec<HyperEdge>> {
     let mut stmt = db.prepare(
-        "SELECT id, label, nodes, relation, confidence, confidence_score FROM hyperedges",
+        "SELECT id, label, nodes, relation, confidence, confidence_score FROM hyperedges ORDER BY id",
     )?;
-    let rows: Vec<HyperEdge> = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, Option<f64>>(5)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .filter_map(|(id, label, nodes_json, relation, confidence, score)| {
-            let nodes = serde_json::from_str::<Vec<String>>(&nodes_json).ok()?;
-            Some(HyperEdge {
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, Option<f64>>(5)?,
+        ))
+    })?;
+    let rows = rows
+        .map(|row| -> Result<HyperEdge> {
+            let (id, label, nodes_json, relation, confidence, score) = row?;
+            let nodes = serde_json::from_str::<Vec<String>>(&nodes_json)?;
+            Ok(HyperEdge {
                 id,
                 label,
                 nodes,
@@ -159,7 +159,7 @@ pub fn load_all(db: &Connection) -> Result<Vec<HyperEdge>> {
                 score,
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     Ok(rows)
 }
 

@@ -1496,13 +1496,13 @@ mod tests {
         let stats = label_communities_stage_with(&db, true, stub_factory)
             .unwrap()
             .unwrap();
-        assert_eq!(stats.labeled, 0, "2-node communities keep hub labels");
+        assert_eq!(stats.labeled, 0, "2-node communities keep source labels");
         assert_eq!(calls(), 0);
         reset_stubs();
     }
 
     #[test]
-    fn labeling_failure_keeps_hub_label() {
+    fn labeling_failure_keeps_source_label() {
         let _guard = TEST_LOCK.lock().unwrap();
         reset_stubs();
         let db = astria_core::db::open_db_in_memory().unwrap();
@@ -1520,10 +1520,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            source, "hub",
+            source, "source",
             "failed naming must not leave provenance 'llm'"
         );
-        assert!(!label.is_empty(), "hub/thematic label survives");
+        assert!(!label.is_empty(), "source module label survives");
         reset_stubs();
     }
 

@@ -27,9 +27,11 @@ The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`.
 7.  **analyze()** (`astria-analyze`): Analyzes the graph to find "god nodes" (call stubs excluded), surprising cross-community connections, blast radius, and generates suggested questions.
 8.  **report()** (`astria-report`): Generates a plain-language `graph_report.md` summarizing the graph's structure and insights.
 
+Default community labels use source module/package paths (`label_source = source`); LLM labels remain when their membership fingerprint still matches. Reports separate production-source orientation from documentation and tests, link findings to source, and show relationship evidence.
+
 ## Update and query consistency
 
-AST parsing is incremental: unchanged source reuses its versioned extraction cache. The extraction reference pass reconciles the complete current corpus, so adding, removing, or renaming a definition also updates callers from unchanged files. Name-based resolution is still `INFERRED`; deterministic execution does not make a guessed target a declared fact.
+AST parsing is incremental: unchanged source reuses its versioned extraction cache. The extraction reference pass reconciles the complete current corpus, so adding, removing or renaming a definition updates references from unchanged files. Name-derived call and import bindings carry `RESOLVED` provenance: the call or import syntax is extracted, but its endpoint is inferred from source names, qualified scopes and supported imports rather than compiler resolution. Ambiguous or missing targets remain `INFERRED`; already structural-ID `EXTRACTED`/`DECLARED` facts retain their provenance. `--detail high` includes only `EXTRACTED`/`DECLARED` evidence, so it excludes `RESOLVED`, `INFERRED` and `SEMANTIC` bindings.
 
 Validated file-owned graph facts, the file manifest, `_meta.graph_published_at`, the covered git HEAD (`_meta.git_head`), and a fresh publication generation (`_meta.graph_generation`) commit in one SQLite transaction — so a core publication can never leave snapshot caches keyed on the previous state, even if a later stage fails. Derived passes run after the core commit and advance the generation immediately after any pass that actually changes content (dedup merges, deep links, embedding edges, learned edges, community memberships, community labels); unchanged runs reuse the previous generation instead of minting a new one. Clustering-only reruns publish through the same workflow (stamped report, `graph.json`, `generation.txt`) as full pipelines. Extraction or semantic extraction errors leave that core graph and manifest unadvanced; derived passes rerun on subsequent updates, so a failed derived pass can be retried.
 
@@ -37,7 +39,7 @@ Merge-gate freshness is commit identity, not timestamps: the gate compares `_met
 
 Semantic caches include source inputs and non-secret effective backend, endpoint, model, judge, and prompt configuration. Cached and fresh semantic results use the same merge path. Community labels and deep links also fingerprint their effective inputs and configuration. Source changes invalidate deep edges; restoring them requires another run with `--deep`, which replays matching cache entries or generates fresh links.
 
-CLI and MCP queries use the same hybrid retrieval path, served from a bounded process-wide snapshot cache: an LRU (default 3 entries, `ASTRIA_SNAPSHOT_CACHE_ENTRIES` 1..=16) keyed by database path AND publication generation (`_meta.graph_generation`). A hit shares an immutable in-memory snapshot — no O(V + E) reload; any generation advance (every committed graph mutation performs one) invalidates the key, and un-stamped databases bypass the cache entirely. The bound trades memory (each entry is a full node+edge snapshot) for multi-project MCP alternation latency. `--detail high` filters on evidence kind (`EXTRACTED`), independent of usage-adjusted scores; learned, name-resolved, and semantic edges remain inferred.
+CLI and MCP queries share a generation-keyed bounded snapshot cache per process. The LRU defaults to 3 entries (`ASTRIA_SNAPSHOT_CACHE_ENTRIES` 1..=16), keyed by database path and publication generation (`_meta.graph_generation`). A hit shares an immutable in-memory snapshot; a generation advance invalidates it. Unstamped databases bypass the cache. Each entry holds a complete node/edge snapshot; separate CLI invocations have separate caches.
 
 ## Crate Responsibilities
 
@@ -52,7 +54,7 @@ CLI and MCP queries use the same hybrid retrieval path, served from a bounded pr
 | `astria-build` | Persistent graph assembly; entity dedup (MinHash/LSH blocking + Jaro-Winkler verify) in `dedup.rs`. |
 | `astria-cluster` | Deterministic community detection (stable labels, cohesion, modularity) using `petgraph`. |
 | `astria-analyze` | God nodes, ranked surprising cross-community connections, blast radius (`affected.rs`, reverse reachability), code-health report (`health.rs`). |
-| `astria-query` | Query engine: BFS/DFS (optionally directed), shortest path, explain, token-based node scoring, fresh SQLite snapshot per request (no process-global graph cache). |
+| `astria-query` | Query engine: BFS/DFS (optionally directed), shortest path, explain, token-based node scoring, generation-keyed bounded snapshot cache shared per process. |
 | `astria-mcp` | MCP stdio server exposing the graph to AI agents. |
 | `astria-report` | Markdown generation for the final user-facing report. |
 | `astria-semantic` | LLM semantic extraction, multi-backend (Claude / OpenAI-compatible / Gemini) with vision, chunking, and output validation. `--judge jev` wraps the selected engine with a TypeSafe System One judge layer: batch file gating before extraction, per-file re-judging of relations/node types with calibrated `confidence_score` on edges, and suggested-question ranking. |
@@ -78,11 +80,13 @@ The column-level schema is generated from `crates/astria-core/src/db.rs` into [w
 
 Relations are stored lowercase — filter `--relation` with exactly these spellings.
 
+Speculative nodes (`stub`, `reference`) represent names the extractors could not resolve to a definition: a `stub` is created exactly when no file defined the symbol, and a `reference` is a dependency name rather than code. Neither owns a file, so both carry an **empty `source_file`** (`crosslayer::normalize_stub_loci` enforces this over the whole graph on every run). Borrowing the referencing file's path gave these nodes a plausible-looking source location, which propagated as file-to-file dependencies that do not exist in the source — a four-crate "import cycle", a false `File:` line in `explain`, and cross-community links to bare names. Consumers must treat an empty locus as "no single owner" rather than substituting one.
+
 Structural (AST extraction):
 
-*   `calls`: Function or method invocation (including Ruby method and singleton-method invocations). Resolved targets are `EXTRACTED`; unresolved name-level targets `INFERRED`.
+*   `calls`: Function or method invocation (including Ruby method and singleton-method invocations). Name-derived endpoints are `RESOLVED`; ambiguous or missing targets are `INFERRED`.
 *   `contains`: File/class/symbol containment (there is no `Defines` relation).
-*   `imports`: Module or file level dependency.
+*   `imports`: Module or file level dependency. Name-derived file endpoints are `RESOLVED`; syntax extraction alone does not establish the endpoint.
 *   `uses`: Variable or type usage.
 *   `references`: Document/markdown links, identifier mentions, and memory documents citing nodes (from `save-result`).
 *   `rationale_for`: A comment rationale linked to the code it explains.
