@@ -17,8 +17,10 @@ permissions:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
-    # Must match what ci.yml requests top-level: called workflows may
-    # downgrade but not elevate the caller's token scopes.
+    # ci.yml defaults to contents:read top-level and elevates checks:write
+    # only on its audit job; called workflows may downgrade but not elevate
+    # the caller's scopes, so this caller must grant checks:write for the
+    # audit step to create its check run.
     permissions:
       contents: read
       checks: write
