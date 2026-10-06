@@ -9,7 +9,7 @@ import BenchmarkSnapshot from '@site/src/components/BenchmarkSnapshot';
 
 # Benchmarks and evidence
 
-For the latest source validation, see [September 2026 retrieval results](./retrieval-validation.md), including symbol diagnostics and performance tradeoffs.
+For the latest source validation, see [retrieval validation](./retrieval-validation.md) — latest paired run October 6, 2026: astria 1.1.0 vs Graphify 0.9.77 — including symbol diagnostics and performance tradeoffs.
 
 The tables below are historical measurements with the methodology and limitations recorded here. This page collects the canonical numbers (v0.8.0), the methodology behind them, and a head-to-head against the Python Graphify project that inspired it.
 
@@ -128,7 +128,7 @@ Cost says the graph is cheap; retrieval quality says whether it answers *well*. 
 
 **Repository retrieval (schema v3)** (`scripts/bench/quality/`) reports exact-file hit@k, true recall@k across all expected files and MRR, plus separate exact-declaration recall/MRR when grounded declaration locations are supplied. All questions remain in the denominator, including failed queries. Historical scores labeled “recall” measured first file-or-symbol hits and omitted errors; they are not schema v2 measurements. Historical September measurements retain their schema-v2 protocol. The new schema-v3 iterative baseline and reserved cases have not been evaluated; see [retrieval validation](./retrieval-validation.md).
 
-**External comparison** (scripts/bench/external/) pins Click, Express, ripgrep, Requests and Commander to immutable commits and supplies source-grounded questions. The 24 new Requests/Commander cases are agent-authored, reserved and unexercised. The external suite compares graph retrieval, a separately versioned single-pass floor and bounded iterative source search at equal budgets. The paired runner compares Astria with the original Graphify at 1000- and 4000-token budgets using the same o200k_base tokenizer and clipping rules. See [September 2026 retrieval results](./retrieval-validation.md) for published results and limitations; these small sets do not establish broad reasoning quality.
+**External comparison** (scripts/bench/external/) pins Click, Express, ripgrep, Requests and Commander to immutable commits and supplies source-grounded questions. The 24 new Requests/Commander cases are agent-authored, reserved and unexercised. The external suite compares graph retrieval, a separately versioned single-pass floor and bounded iterative source search at equal budgets. The paired runner compares Astria with the original Graphify at 1000- and 4000-token budgets using the same o200k_base tokenizer and clipping rules. See [retrieval validation](./retrieval-validation.md) for published results and limitations (latest paired run: astria 1.1.0 vs Graphify 0.9.77, October 6, 2026); these small sets do not establish broad reasoning quality.
 
 Full-corpus/query ratios measure context size, not actual agent token savings. Schema v3 records graph construction separately from retrieval and captures bounded search-output/read costs; filesystem bytes scanned and end-to-end task completion remain unmeasured. See [the harness methodology](https://github.com/Nodesify/astria/tree/main/scripts/bench/quality) for reproduction and limitations.
 
