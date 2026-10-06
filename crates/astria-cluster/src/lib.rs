@@ -184,7 +184,9 @@ pub fn cluster_with(
                     .iter()
                     .max_by_key(|(_, &s)| s)
                     .map(|(l, _)| l)
-                    .unwrap();
+                    // `distinct.len() > 1` above guarantees sub_labels (and
+                    // therefore sub_sizes) is non-empty.
+                    .expect("split candidates always have at least one label");
                 let mut sub_remap: HashMap<u32, u32> = HashMap::new();
                 sub_remap.insert(keep, big);
                 for (pos, member) in members.iter().enumerate() {

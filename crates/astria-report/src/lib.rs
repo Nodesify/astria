@@ -144,10 +144,7 @@ pub fn generate_report(db: &Connection, analysis: &AnalysisResult) -> astria_cor
     let mut membership: HashMap<i64, [usize; 3]> = HashMap::new();
     for node in sources.nodes.values() {
         if let Some(c) = node.community {
-            let index = ORIENTATIONS
-                .iter()
-                .position(|o| *o == node.orientation)
-                .unwrap();
+            let index = node.orientation.index();
             membership.entry(c).or_default()[index] += 1;
         }
     }

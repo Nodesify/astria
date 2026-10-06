@@ -25,6 +25,16 @@ use rusqlite::Connection;
 /// Max bytes of a doc/TS source file the passes will read.
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 
+/// The TS/JS import shapes the FFI pass matches. A static literal compiled
+/// once per process: the per-call `Regex::new(..).unwrap()` this replaces
+/// was both a latent panic site and repeated compilation work.
+static NATIVE_IMPORT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(
+        r#"(?s)(?:import|export)\s*(?:type\s+)?\{(?P<names>[^}]+)\}\s*from\s*['"][^'"]*native['"]"#,
+    )
+    .expect("valid static regex literal")
+});
+
 /// Entry-file conventions per ecosystem, tried in order. Workspace-root
 /// manifests have none of these under them, so they link nothing.
 const ENTRY_SUFFIXES: &[&str] = &[
@@ -185,11 +195,6 @@ fn link_napi_ffi(db: &Connection) -> Result<usize> {
         }
     }
 
-    let import_re = Regex::new(
-        r#"(?s)(?:import|export)\s*(?:type\s+)?\{(?P<names>[^}]+)\}\s*from\s*['"][^'"]*native['"]"#,
-    )
-    .unwrap();
-
     let mut added = 0;
     let mut linked: HashSet<(String, String)> = HashSet::new();
     for ts_path in &importers {
@@ -202,7 +207,7 @@ fn link_napi_ffi(db: &Connection) -> Result<usize> {
         let Some(file_id) = file_node_id(db, ts_path) else {
             continue;
         };
-        for caps in import_re.captures_iter(&text) {
+        for caps in NATIVE_IMPORT_RE.captures_iter(&text) {
             for ident in caps["names"].split(',') {
                 let ident = ident
                     .trim()
@@ -347,7 +352,15 @@ fn link_doc_package_refs(db: &Connection) -> Result<usize> {
     // ("astria-mcp" must not match inside "astria-mcp-server").
     let mut escaped: Vec<String> = names.iter().map(|(l, _)| regex::escape(l)).collect();
     escaped.sort_by_key(|e| std::cmp::Reverse(e.len()));
-    let name_re = Regex::new(&format!(r"(?i)\b({})\b", escaped.join("|"))).unwrap();
+    // Data-dependent pattern: the alternation spans every package label in
+    // the DB, and very large corpora can exceed the regex engine's compiled
+    // size limit. Report it, don't panic.
+    let name_re = Regex::new(&format!(r"(?i)\b({})\b", escaped.join("|"))).map_err(|e| {
+        astria_core::AstriaError::Graph(format!(
+            "package-name regex failed to compile over {n} package labels: {e}",
+            n = names.len()
+        ))
+    })?;
 
     let mut docs: Vec<String> = {
         let mut stmt = db.prepare(

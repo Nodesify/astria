@@ -37,7 +37,7 @@ pub fn safe_rel(relation: &str) -> String {
     while out.contains("__") {
         out = out.replace("__", "_");
     }
-    if out.is_empty() || out.chars().next().unwrap().is_ascii_digit() {
+    if out.is_empty() || out.starts_with(|c: char| c.is_ascii_digit()) {
         out = format!("RELATED_{out}");
     }
     out
@@ -128,10 +128,12 @@ pub fn neo4j_push(db: &Connection, url: &str, user: &str, pass: &str) -> Result<
             let (relation, source, target, confidence) = row;
             let rel_type = safe_rel(&relation);
             if current_rel.as_deref() != Some(rel_type.as_str()) && !batch.is_empty() {
-                client.run(
-                    &unwind_edge(current_rel.as_deref().unwrap()),
-                    rows_param(std::mem::take(&mut batch)),
-                )?;
+                // A non-empty batch implies a relation was already seen, so
+                // the prior relation is always present here.
+                let prior = current_rel
+                    .as_deref()
+                    .expect("non-empty batch implies a current relation");
+                client.run(&unwind_edge(prior), rows_param(std::mem::take(&mut batch)))?;
                 statements += 1;
             }
             current_rel = Some(rel_type);
@@ -142,10 +144,11 @@ pub fn neo4j_push(db: &Connection, url: &str, user: &str, pass: &str) -> Result<
             batch.push(map);
             total += 1;
             if batch.len() == BATCH {
-                client.run(
-                    &unwind_edge(current_rel.as_deref().unwrap()),
-                    rows_param(std::mem::take(&mut batch)),
-                )?;
+                // The row that pushed this batch set `current_rel` first.
+                let prior = current_rel
+                    .as_deref()
+                    .expect("batched rows always set a current relation");
+                client.run(&unwind_edge(prior), rows_param(std::mem::take(&mut batch)))?;
                 statements += 1;
             }
         }

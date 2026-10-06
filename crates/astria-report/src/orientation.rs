@@ -16,6 +16,32 @@ impl Orientation {
             Self::Support => "Tests, Benchmarks and Examples",
         }
     }
+
+    /// Position in `ORIENTATIONS`. Defined on the enum rather than derived
+    /// from a runtime `position()` lookup: an exhaustive match turns "new
+    /// variant not added to the const array" into a compile error instead
+    /// of a report-time panic.
+    pub fn index(self) -> usize {
+        match self {
+            Self::Production => 0,
+            Self::Documentation => 1,
+            Self::Support => 2,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ORIENTATIONS` and `Orientation::index` must agree, or report
+    /// grouping silently bins nodes under the wrong category.
+    #[test]
+    fn orientations_array_matches_index() {
+        for (i, orientation) in ORIENTATIONS.iter().enumerate() {
+            assert_eq!(orientation.index(), i);
+        }
+    }
 }
 pub(super) const ORIENTATIONS: [Orientation; 3] = [
     Orientation::Production,
