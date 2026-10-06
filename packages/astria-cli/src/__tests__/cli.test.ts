@@ -32,15 +32,28 @@ function assert(condition: boolean, message: string) {
 // Importing index.ts registers every command AND loads the native binding,
 // so this test also fails fast when the native module is broken.
 
-// Test 1: every command the CLI ships is registered
-const commandNames = program.commands.map((c: Command) => c.name());
-const allCommands = [
-  'run', 'update', 'watch', 'explain', 'query', 'path', 'map', 'affected',
-  'stats', 'god-nodes', 'communities', 'neighbors', 'export', 'cluster-only', 'merge', 'diff', 'history', 'mcp',
-  'tree', 'wiki', 'prs', 'add', 'status', 'install', 'uninstall', 'hook',
-];
-for (const cmd of allCommands) {
-  assert(commandNames.includes(cmd), `Command "${cmd}" should be registered`);
+// Test 1: every command the CLI ships is registered — and nothing else.
+// Set-equality on purpose: an inclusion-only list drifts silently (it had
+// missed 11 shipped commands, the same drift that let the npm README keep
+// advertising the removed `astria migrate`). When the command surface
+// changes, update this list; a mismatch fails the suite in both directions.
+const expectedCommands: Set<string> = new Set([
+  'add', 'affected', 'callflow', 'cluster-only', 'communities', 'diagnose',
+  'diff', 'digest', 'explain', 'export', 'global', 'god-nodes', 'health',
+  'history', 'hook', 'hook-guard', 'install', 'map', 'mcp', 'merge',
+  'merge-driver', 'merge-gate', 'neighbors', 'path', 'prs', 'query',
+  'reflect', 'risk', 'run', 'save-result', 'stats', 'status', 'tree',
+  'uninstall', 'update', 'watch', 'wiki',
+]);
+const actualCommands = new Set(program.commands.map((c: Command) => c.name()));
+for (const cmd of expectedCommands) {
+  assert(actualCommands.has(cmd), `Command "${cmd}" should be registered`);
+}
+for (const cmd of actualCommands) {
+  assert(
+    expectedCommands.has(cmd),
+    `Command "${cmd}" is registered but missing from the expected set in cli.test.ts`,
+  );
 }
 
 // Test 2: version stays in sync with package.json (the stub test used to
