@@ -169,7 +169,11 @@ pub(crate) fn load_graph(
         .replace('\\', "/");
     let generation = generation_of(db);
     if let Some(generation) = generation.as_ref() {
-        let mut cache = snapshot_cache().lock().unwrap();
+        // Poison recovery: entries are complete Arc snapshots keyed by
+        // (path, generation), so a panicked sibling leaves no broken state.
+        let mut cache = snapshot_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(snapshot) = cache.get(&normalized_path, generation) {
             return Ok(snapshot);
         }
@@ -177,11 +181,10 @@ pub(crate) fn load_graph(
 
     let loaded = std::sync::Arc::new(load_graph_uncached(db, db_path)?);
     if let Some(generation) = generation {
-        snapshot_cache().lock().unwrap().insert(
-            normalized_path,
-            generation,
-            std::sync::Arc::clone(&loaded),
-        );
+        snapshot_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(normalized_path, generation, std::sync::Arc::clone(&loaded));
     }
     Ok(loaded)
 }
