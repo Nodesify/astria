@@ -1,9 +1,9 @@
-# One-shot probe: find the flags that restore the musl cdylib under
-# rustc >= 1.99, which enabled static-PIE on all musl targets — and a
-# static-PIE target cannot emit a cdylib, so the release's linux-x64-musl
-# leg produced no artifact ("dropping unsupported crate type cdylib").
-# Dispatch manually; not part of CI. Delete once the winning flag is baked
-# into release.yml.
+# Probe: keeps validating the musl cdylib story. rustc >= 1.99 enabled
+# static-PIE on all musl targets — and a static-PIE target cannot emit a
+# cdylib, so the release's linux-x64-musl leg produced no artifact
+# ("dropping unsupported crate type cdylib") until -crt-static was baked
+# into release.yml. The matrix below encodes both sides of that condition,
+# so this workflow now acts as the canary on release-workflow changes.
 name: musl probe
 on:
   workflow_dispatch:
@@ -24,14 +24,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The counter-flag (must succeed) and the status quo (expected to
-        # fail without a cdylib; continue-on-error documents the contrast
-        # without failing the check run).
+        # The counter-flag (must succeed) and the status quo (must fail):
+        # the second leg asserts the KNOWN rustc >= 1.99 condition — no
+        # cdylib without -crt-static — so it stays green while that holds
+        # and turns red the day rustc fixes it. That red is the signal to
+        # drop the -crt-static workaround from release.yml. (The previous
+        # continue-on-error approach kept the workflow green but still
+        # reported the check run as FAILURE — red on every PR hides real
+        # failures.)
         rustflags: ["-C target-feature=-crt-static", ""]
         include:
           - rustflags: ""
             expected-failure: true
-    continue-on-error: ${{ matrix.expected-failure == true }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
@@ -47,8 +51,13 @@ jobs:
         run: |
           echo "RUSTFLAGS='${{ matrix.rustflags }}'"
           ls -la target/x86_64-unknown-linux-musl/release/ | grep -E "libastria|cdylib" || echo "NO CDYLIB ARTIFACT"
-          test -f target/x86_64-unknown-linux-musl/release/libastria_napi.so
+          if [ "${{ matrix.expected-failure }}" = "true" ]; then
+            ! test -f target/x86_64-unknown-linux-musl/release/libastria_napi.so
+          else
+            test -f target/x86_64-unknown-linux-musl/release/libastria_napi.so
+          fi
       - name: Smoke-load the .so
+        if: matrix.expected-failure != true
         run: |
           file target/x86_64-unknown-linux-musl/release/libastria_napi.so
           readelf -d target/x86_64-unknown-linux-musl/release/libastria_napi.so | head -12

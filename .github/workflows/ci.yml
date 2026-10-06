@@ -75,7 +75,7 @@ jobs:
         run: cd packages/astria-cli && npm ci
       - name: Build native module
         env:
-          NAPI_RS_CLI_VERSION: '2.18.4'
+          NAPI_RS_CLI_VERSION: '3.10.8'
         run: cargo build --release --locked -p astria-napi
       - name: Copy native module
         shell: bash
