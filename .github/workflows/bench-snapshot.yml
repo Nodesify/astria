@@ -134,9 +134,10 @@ jobs:
       - name: Build the graph over this repo
         run: astria run .
       - name: Retrieval quality (file hit@k, recall@k, MRR)
-        # Blocking with a floor, not a ceiling: recall@5 below 50% fails the
-        # run, so ranking regressions gate the snapshot.
-        run: node scripts/bench/quality/run-quality.mjs --out website/src/data/quality-snapshot.json --min-recall5 50
+        # Blocking with a floor, not a ceiling: the script's default
+        # recall@5 floor (50%) fails the run, so ranking regressions gate
+        # the snapshot. The floor lives in run-quality.mjs, one home.
+        run: node scripts/bench/quality/run-quality.mjs --out website/src/data/quality-snapshot.json
       - name: Commit quality snapshot
         run: |
           git config user.name "github-actions[bot]"

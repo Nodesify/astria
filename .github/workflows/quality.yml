@@ -18,18 +18,17 @@ jobs:
           cache-dependency-path: package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-      - run: npm ci
-        working-directory: packages/astria-cli
-      - run: cargo build --release --locked -p astria-napi
-      - run: mkdir -p packages/astria-cli/dist && cp target/release/libastria_napi.so packages/astria-cli/dist/astria.node
-      - run: npm run build
-        working-directory: packages/astria-cli
+      # Same build/wire-up sequence as ci.yml's cli-test legs, kept in
+      # lockstep by the shared composite action. The recall floor comes
+      # from run-quality.mjs itself (default 50) instead of a duplicated
+      # flag here.
+      - uses: ./.github/actions/build-cli
       - name: Install shared exact tokenizer
         run: npm install --no-save js-tiktoken
       - name: Build source graph and gate retrieval
         run: |
           node packages/astria-cli/dist/index.js run .
-          node scripts/bench/quality/run-quality.mjs --astria "$GITHUB_WORKSPACE/packages/astria-cli/dist/index.js" --min-recall5 50
+          node scripts/bench/quality/run-quality.mjs --astria "$GITHUB_WORKSPACE/packages/astria-cli/dist/index.js"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:

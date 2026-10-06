@@ -1,0 +1,41 @@
+name: 'Build the astria CLI with its native module'
+description: >-
+  npm ci, cargo-build the astria-napi cdylib, wire it into
+  packages/astria-cli/dist/astria.node, compile the TypeScript, and
+  optionally run the CLI test suite. Shared by ci.yml (cli-test legs)
+  and quality.yml so the build/wire-up sequence cannot drift apart.
+inputs:
+  run-tests:
+    description: 'Run the CLI test suite after building'
+    required: false
+    default: 'false'
+runs:
+  using: 'composite'
+  steps:
+    - name: Install dependencies
+      # npm ci is reproducible: the root .npmrc pins install-strategy
+      # and the lockfile encodes the nested tree the napi build expects.
+      shell: bash
+      run: cd packages/astria-cli && npm ci
+    - name: Build native module
+      shell: bash
+      env:
+        NAPI_RS_CLI_VERSION: '3.10.8'
+      run: cargo build --release --locked -p astria-napi
+    - name: Copy native module
+      shell: bash
+      run: |
+        mkdir -p packages/astria-cli/dist
+        for lib in target/release/libastria_napi.so target/release/libastria_napi.dylib target/release/astria_napi.dll; do
+          if [ -f "$lib" ]; then
+            cp "$lib" packages/astria-cli/dist/astria.node
+            break
+          fi
+        done
+    - name: Build CLI
+      shell: bash
+      run: cd packages/astria-cli && npm run build
+    - name: Run CLI tests
+      if: inputs.run-tests == 'true'
+      shell: bash
+      run: cd packages/astria-cli && npm test

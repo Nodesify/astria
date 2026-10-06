@@ -4,7 +4,10 @@ Build the native module and CLI from the checkout, install `js-tiktoken` at the 
 
 ```sh
 node scripts/bench/quality/run-quality.mjs --check
-node scripts/bench/quality/run-quality.mjs --astria /absolute/checkout/packages/astria-cli/dist/index.js --budget 4000 --min-recall5 50
+node scripts/bench/quality/run-quality.mjs --astria /absolute/checkout/packages/astria-cli/dist/index.js --budget 4000
+
+The run gates on recall@5 (default floor 50%, override with `--min-recall5`);
+a local run below the floor exits non-zero, same as CI.
 ```
 
 Schema v3 scores exact normalized, case-sensitive corpus-relative file paths. `hit@k` means at least one expected file appears in the first k unique files. `recall@k` is the fraction of all expected files retrieved, averaged across questions. MRR uses the first expected file. Symbol-label matches remain diagnostics. When golden cases include grounded `definitions` (path, one-based declaration line, source anchor), reports add declaration recall@k and MRR separately. Failed cases retain null declaration ranks. Failed, timed-out, nonzero-exit and empty responses remain in every quality denominator as zero. Source paths from NODE records rank before EDGE-only paths.

@@ -76,28 +76,11 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ hashFiles('**/Cargo.lock') }}
-      - name: Install dependencies
-        # npm ci is reproducible: the root .npmrc pins install-strategy
-        # and the lockfile encodes the nested tree the napi build expects.
-        run: cd packages/astria-cli && npm ci
-      - name: Build native module
-        env:
-          NAPI_RS_CLI_VERSION: '3.10.8'
-        run: cargo build --release --locked -p astria-napi
-      - name: Copy native module
-        shell: bash
-        run: |
-          mkdir -p packages/astria-cli/dist
-          for lib in target/release/libastria_napi.so target/release/libastria_napi.dylib target/release/astria_napi.dll; do
-            if [ -f "$lib" ]; then
-              cp "$lib" packages/astria-cli/dist/astria.node
-              break
-            fi
-          done
-      - name: Build CLI
-        run: cd packages/astria-cli && npm run build
-      - name: Run CLI tests
-        run: cd packages/astria-cli && npm test
+      # Shared build/wire-up/test sequence — quality.yml uses the same
+      # action so the two cannot drift apart.
+      - uses: ./.github/actions/build-cli
+        with:
+          run-tests: 'true'
 
   npm-audit:
     # JS-side dependency audit: cargo has rustsec/audit-check, the CLI's npm

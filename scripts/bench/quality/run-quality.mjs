@@ -10,6 +10,7 @@
 //   node scripts/bench/quality/run-quality.mjs [--root <dir>] [--golden <jsonl>]
 //        [--astria <executable-or-js-entrypoint>] [--budget 4000] [--depth 3] [--k 1,3,5,10]
 //        [--out <path>] [--check] [--baseline | --iterative-baseline] [--allow-reserved]
+//        [--min-recall5 50]  (default 50: the CI gate floor)
 //
 //   --check  validate the golden set only: schema, and that every
 //            expected_files entry matches a real file under --root.
@@ -38,7 +39,11 @@ function parseArgs(argv) {
     baseline: false,
     iterative: false,
     allowReserved: false,
-    min_recall5: 0,
+    // CI gate floor (quality.yml, bench-snapshot.yml). Intentionally a
+    // script default instead of a per-workflow flag so the threshold has
+    // exactly one home and cannot drift between callers; override with
+    // --min-recall5 for experiments.
+    min_recall5: 50,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
