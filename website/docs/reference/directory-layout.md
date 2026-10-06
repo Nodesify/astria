@@ -57,4 +57,4 @@ The database is plain SQLite — open it with any SQLite client. Tables:
 - **Reset** — delete `.astria/` and re-run `astria run .`. Nothing outside the directory is mutated (the global store and embed cache are separate).
 - **Stale?** — `astria status` reports graph freshness and last-build time; `astria update` rebuilds incrementally from the file manifest.
 - **Suspect the data?** — `astria diagnose` is a read-only health check (dangling edges, duplicates, stubs).
-- **Pre-1.0 layout?** — `astria migrate` renames `.graphify/` → `.astria/`, `.graphifyignore` → `.astriaignore`, and moves the old global store.
+- **Pre-1.0 `.graphify/` layout?** — there is no migration command: delete the old directory and run `astria run .` for a fresh `.astria/` (policy: no compatibility paths).
