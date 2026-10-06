@@ -1,12 +1,37 @@
 ---
-title: Retrieval validation (September 2026)
+title: Retrieval validation (September–October 2026)
 description: Paired local retrieval measurements, symbol preservation and performance tradeoffs.
 sidebar_position: 3
 ---
 
-# Retrieval validation (September 2026)
+# Retrieval validation (September–October 2026)
 
-Latest run: September 27 evening, Windows, Ryzen AI 9 HX 370, Node 24, Python 3.12.12. The candidate is the 1.0.6 tree at `cbe8364` (chunked document retrieval, cross-conversation ranking, chunk overlap, introspection commands); Graphify v0.9.69 is pinned to `4139885a1212956cf69a76946fbde0d181ab85e9`. The September 30 targeted-search baseline section below ran separately on CLI 1.0.7 from `b0a9c2e`. Each tool receives fresh archives of the same pinned corpora. Structural extraction only, no LLMs or embeddings, BFS depth 2, exact shared `o200k_base` counting and identical complete-line clipping for scoring. Raw budget overruns are counted before clipping. Each condition has one observation including process startup; timing differences are not statistically established.
+Latest paired run: **October 6, 2026 — astria 1.1.0 vs Graphify 0.9.77** (first section below). The September 27 run compared the 1.0.6 tree at `cbe8364` (chunked document retrieval, cross-conversation ranking, chunk overlap, introspection commands) against Graphify v0.9.69 pinned to `4139885a1212956cf69a76946fbde0d181ab85e9`. The September 30 targeted-search baseline section below ran separately on CLI 1.0.7 from `b0a9c2e`. Machine in both paired runs: Windows, Ryzen AI 9 HX 370, Node 24, Python 3.12.12. Each tool receives fresh archives of the same pinned corpora. Structural extraction only, no LLMs or embeddings, BFS depth 2, exact shared `o200k_base` counting and identical complete-line clipping for scoring. Raw budget overruns are counted before clipping. Each condition has one observation including process startup; timing differences are not statistically established.
+
+## Paired run: astria 1.1.0 vs Graphify 0.9.77 (October 6)
+
+Same protocol and pinned external corpora as the September runs; the self corpus refreshed to the current develop tree (`5e69c63cee176a7addc3b5c4414280bba3d2d815`). Graphify moved 174 commits upstream of the September pin to **v0.9.77** (`5c7b84792f453582676548185aaec3824d51dfe2`, editable install; the venv pins it and the runner verifies the commit). Astria 1.1.0, release profile, build and queries using the identical native binary. Splits: frozen v1, corrected v2, additional-validation v1 — the reserved splits were not used. Raw measurements retained in `bench-work/paired-1.1.0-vs-g0977-20261006` (gitignored), config and full report alongside.
+
+File recall@5 / MRR at the 1,000-token budget (the 4,000 budget scores within a point everywhere; self at 4,000: astria 78.6% / 0.586, Graphify 55.7% / 0.464):
+
+| Corpus / split | Questions | astria | Graphify |
+|---|---:|---:|---:|
+| Astria self (frozen v1) | 35 | **75.7% / 0.570** | 55.7% / 0.464 |
+| Astria self (corrected v2) | 35 | **75.7% / 0.570** | 56.7% / 0.467 |
+| Click (frozen v1) | 3 | **100% / 1.000** | 100% / 0.667 |
+| Click heldout v1 | 2 | **100% / 0.750** | 50% / 0.500 |
+| Express (frozen v1) | 2 | **100% / 1.000** | 100% / 0.625 |
+| Express heldout v1 | 2 | **100% / 0.667** | 50% / 0.500 |
+| ripgrep (frozen v1) | 3 | 100% / 0.778 | 100% / **0.833** |
+| ripgrep heldout v1 | 3 | **100% / 0.667** | 33.3% / 0.333 |
+
+Definition recall@5 (exact declaration inside the top five returned nodes): Click **60% vs 0%**, Click heldout **100% vs 0%**, Express **100% vs 50%**, Express heldout 100% vs 100%, ripgrep heldout **50% vs 0%**. Graphify's misses are concentrated on same-name ambiguity (`invoke` ×4 on Click) — its grounded `Context.invoke` and `BaseCommand.invoke` definitions are present in its graph but never returned.
+
+Budget compliance across all 170 responses per tool: **astria 0 over budget**; Graphify 59 over at 1,000 tokens and 50 over at 4,000 (its self answers averaged ~5,954 raw tokens against the 4,000 request). Mean query latency 0.49 s (astria) vs 0.58 s (Graphify). Symbol preservation stays at 100% of extraction-cache IDs on every corpus (2,642 self, 1,148 Click, 3,263 Express, 3,091 ripgrep), and every grounded definition is present at its implementation line (Click 5/5, Click heldout 2/2, Express 2/2, Express heldout 1/1, ripgrep heldout 4/4).
+
+Extraction and build (single observation each): astria's graph is denser on every corpus — self 6,356 nodes / 22,212 edges vs 3,566 / 7,465; Click 2,278 / 6,177 vs 1,835 / 3,516; Express 4,414 / 12,098 vs **489** / 837; ripgrep 5,107 / 12,965 vs 4,049 / 8,403. Build time flipped on these small corpora: Graphify 0.9.77 is faster on 6 of 8 sets (self 13.6 s vs 15.8 s, ripgrep 8.3 s vs 11.9 s) and markedly faster than the 0.9.69 measured in September; astria is faster only on Click (5.6 s vs 6.5 s). Build pipelines differ, so this is practical elapsed time on small inputs, not an algorithm benchmark — the September large-corpus comparison measured the opposite ordering.
+
+Honest reading: astria's numbers replicate the 1.0.6 run (self recall@5 78.6% at 4,000 tokens in both; MRR 0.586 vs 0.618). Graphify's self recall@5 reads 55.7–56.7% here versus 65.7% in September — a 174-commit upstream delta and run-to-run variance are both in play (its own September runs moved 65.7% ↔ 67.1%), so the drop is recorded, not attributed. The ordering agrees with every prior paired measurement, and the small external sets still do not establish general superiority.
 
 ## Frozen file retrieval
 
