@@ -43,6 +43,25 @@ pub fn config() -> &'static crate::langs::config::LanguageConfig {
     &CONFIG
 }
 
+static VB_CONTAINER_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(
+        r"(?i)^\s*(?:Public|Private|Protected|Friend|Partial|MustInherit|NotInheritable|Shadows|\s)*\b(Class|Module|Interface|Structure)\s+([A-Za-z_]\w*)",
+    )
+    .expect("static regex")
+});
+static VB_MEMBER_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(
+        r"(?i)^\s*(?:Public|Private|Protected|Friend|Shared|Overrides|Overloads|Overridable|MustOverride|NotOverridable|Partial|Default|ReadOnly|WriteOnly|WithEvents|Dim|Const|\s)*\b(Sub|Function)\s+([A-Za-z_]\w*)",
+    )
+    .expect("static regex")
+});
+static VB_IMPORT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*Imports\s+([A-Za-z_][\w.]*)").expect("static regex")
+});
+static VB_END_BLOCK_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*End\s+(Class|Module|Interface|Structure)\b").expect("static regex")
+});
+
 /// Regex-based VB.NET extraction: containers, members, imports.
 pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
     let source = fs::read_to_string(path).map_err(|e| {
@@ -54,18 +73,6 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
 
     let fid = file_stem(naming);
     let file_id = make_node_id(&[&fid]);
-
-    let container_re = Regex::new(
-        r"(?i)^\s*(?:Public|Private|Protected|Friend|Partial|MustInherit|NotInheritable|Shadows|\s)*\b(Class|Module|Interface|Structure)\s+([A-Za-z_]\w*)",
-    )
-    .expect("static regex");
-    let member_re = Regex::new(
-        r"(?i)^\s*(?:Public|Private|Protected|Friend|Shared|Overrides|Overloads|Overridable|MustOverride|NotOverridable|Partial|Default|ReadOnly|WriteOnly|WithEvents|Dim|Const|\s)*\b(Sub|Function)\s+([A-Za-z_]\w*)",
-    )
-    .expect("static regex");
-    let import_re = Regex::new(r"(?i)^\s*Imports\s+([A-Za-z_][\w.]*)").expect("static regex");
-    let end_block_re =
-        Regex::new(r"(?i)^\s*End\s+(Class|Module|Interface|Structure)\b").expect("static regex");
 
     let mut nodes = vec![ExtractedNode {
         id: file_id.clone(),
@@ -92,12 +99,12 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
             continue;
         }
 
-        if end_block_re.is_match(trimmed) {
+        if VB_END_BLOCK_RE.is_match(trimmed) {
             stack.pop();
             continue;
         }
 
-        if let Some(caps) = container_re.captures(trimmed) {
+        if let Some(caps) = VB_CONTAINER_RE.captures(trimmed) {
             let name = caps[2].to_string();
             let parent = stack.last().cloned().unwrap_or_else(|| file_id.clone());
             let id = make_node_id(&[&parent, &name]);
@@ -123,7 +130,7 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
             continue;
         }
 
-        if let Some(caps) = member_re.captures(trimmed) {
+        if let Some(caps) = VB_MEMBER_RE.captures(trimmed) {
             let name = caps[2].to_string();
             let parent = stack.last().cloned().unwrap_or_else(|| file_id.clone());
             let id = make_node_id(&[&parent, &name]);
@@ -148,7 +155,7 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
             continue;
         }
 
-        if let Some(caps) = import_re.captures(trimmed) {
+        if let Some(caps) = VB_IMPORT_RE.captures(trimmed) {
             let target = caps[1].to_string();
             edges.push(ExtractedEdge {
                 source: file_id.clone(),
