@@ -166,7 +166,7 @@ jobs:
         run: cd packages/astria-cli && npm ci
       - name: Build native binary
         env:
-          NAPI_RS_CLI_VERSION: '2.18.4'
+          NAPI_RS_CLI_VERSION: '3.10.8'
         run: cargo build --release --locked --target ${{ matrix.target }} -p astria-napi ${{ matrix.cargo-flags }}
       - name: Copy artifact (Linux/macOS)
         if: runner.os != 'Windows'
@@ -224,7 +224,7 @@ jobs:
           npm config delete //registry.npmjs.org/:_authToken
           unset NODE_AUTH_TOKEN
       - name: Create platform packages
-        run: cd packages/astria-cli && npx napi create-npm-dir -t .
+        run: cd packages/astria-cli && npx napi create-npm-dirs
       - name: Publish platform packages
         # The "Clear token auth" step above only helps the FIRST publish:
         # npm's trusted-publishing exchange caches the package-scoped token it
