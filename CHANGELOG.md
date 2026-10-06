@@ -4,6 +4,15 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.1.1] — 2026-10-06
+
+Maintenance release; no user-facing behavior changes.
+
+- Migrate the native-module packaging toolchain from `@napi-rs/cli` v2 to v3.10.8: the napi config moves from `triples` to flat `targets` (v3 rejects the duplicate target v2's `defaults` expansion produced) and the release workflow switches to the v3-only `create-npm-dirs` command. The generated platform packages were verified locally before the pipeline's first tagged run.
+- TypeScript 7.0.2 (native compiler) across `packages/astria-cli` and `packages/viewer`; typecheck, emit builds, the CLI test suite, and the viewer bundle were all verified on it.
+- Dependency and CI maintenance: `@types/node` 22.20.5, Rust crate and npm devDependency bumps, GitHub Actions pinned updates, and internal planning docs removed with dogfood output ignored.
+- The musl probe workflow now asserts the known rustc ≥ 1.99 condition (no cdylib without `-crt-static`) instead of failing permanently via `continue-on-error`, so its check run is green while the workaround is needed and red the day rustc fixes it.
+
 ## [1.1.0] — 2026-10-06
 
 - Preserve qualified symbol boundaries and import paths when resolving references; ambiguous candidates remain unresolved and inferred bindings retain `RESOLVED` evidence. Extraction cache v15 refreshes previously flattened targets.
@@ -526,6 +535,7 @@ See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
 [1.0.6]: https://github.com/Nodesify/astria/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/Nodesify/astria/compare/v1.0.4...v1.0.5
+[1.1.1]: https://github.com/Nodesify/astria/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Nodesify/astria/compare/v1.0.12...v1.1.0
 [1.0.12]: https://github.com/Nodesify/astria/compare/v1.0.11...v1.0.12
 [1.0.11]: https://github.com/Nodesify/astria/compare/v1.0.10...v1.0.11
