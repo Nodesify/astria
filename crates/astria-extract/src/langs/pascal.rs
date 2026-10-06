@@ -43,6 +43,22 @@ pub fn config() -> &'static crate::langs::config::LanguageConfig {
     &CONFIG
 }
 
+static PASCAL_ROUTINE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*(procedure|function)\s+([A-Za-z_][\w.]*)").expect("static regex")
+});
+static PASCAL_UNIT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*unit\s+([A-Za-z_]\w*)").expect("static regex")
+});
+static PASCAL_PROGRAM_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*program\s+([A-Za-z_]\w*)").expect("static regex")
+});
+static PASCAL_CLASS_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*([A-Za-z_]\w*)\s*=\s*(?:packed\s+)?class\b").expect("static regex")
+});
+static PASCAL_USES_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*uses\s+([A-Za-z_][\w.,\s]*)").expect("static regex")
+});
+
 /// Regex-based Pascal/Delphi extraction.
 pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
     let source = fs::read_to_string(path).map_err(|e| {
@@ -54,14 +70,6 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
 
     let fid = file_stem(naming);
     let file_id = make_node_id(&[&fid]);
-
-    let routine_re =
-        Regex::new(r"(?i)^\s*(procedure|function)\s+([A-Za-z_][\w.]*)").expect("static regex");
-    let unit_re = Regex::new(r"(?i)^\s*unit\s+([A-Za-z_]\w*)").expect("static regex");
-    let program_re = Regex::new(r"(?i)^\s*program\s+([A-Za-z_]\w*)").expect("static regex");
-    let class_re =
-        Regex::new(r"(?i)^\s*([A-Za-z_]\w*)\s*=\s*(?:packed\s+)?class\b").expect("static regex");
-    let uses_re = Regex::new(r"(?i)^\s*uses\s+([A-Za-z_][\w.,\s]*)").expect("static regex");
 
     let mut nodes = vec![ExtractedNode {
         id: file_id.clone(),
@@ -87,14 +95,14 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
 
         let mut matched = false;
 
-        if let Some(caps) = unit_re.captures(trimmed) {
+        if let Some(caps) = PASCAL_UNIT_RE.captures(trimmed) {
             push_class(
                 &mut nodes, &mut edges, path, lineno, &file_id, &caps[1], trimmed,
             );
             matched = true;
         }
         if !matched {
-            if let Some(caps) = program_re.captures(trimmed) {
+            if let Some(caps) = PASCAL_PROGRAM_RE.captures(trimmed) {
                 push_class(
                     &mut nodes, &mut edges, path, lineno, &file_id, &caps[1], trimmed,
                 );
@@ -102,7 +110,7 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
             }
         }
         if !matched {
-            if let Some(caps) = class_re.captures(trimmed) {
+            if let Some(caps) = PASCAL_CLASS_RE.captures(trimmed) {
                 push_class(
                     &mut nodes, &mut edges, path, lineno, &file_id, &caps[1], trimmed,
                 );
@@ -110,7 +118,7 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
             }
         }
         if !matched {
-            if let Some(caps) = routine_re.captures(trimmed) {
+            if let Some(caps) = PASCAL_ROUTINE_RE.captures(trimmed) {
                 let name = caps[2].to_string();
                 let label = name.rsplit('.').next().unwrap_or(&name).to_string();
                 let id = make_node_id(&[&file_id, &name]);
@@ -136,7 +144,7 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
             }
         }
         if !matched {
-            if let Some(caps) = uses_re.captures(trimmed) {
+            if let Some(caps) = PASCAL_USES_RE.captures(trimmed) {
                 for unit in caps[1].split(',') {
                     let unit = unit.trim();
                     if unit.is_empty() {

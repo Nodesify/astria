@@ -16,6 +16,12 @@ pub(crate) fn extract_markdown(path: &Path, naming: &Path) -> Result<Extraction,
     ))
 }
 
+static MD_HEADING_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"^(#{1,6})\s+(.+)$").expect("static regex"));
+static MD_LINK_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").expect("static regex")
+});
+
 /// Extract markdown-style structure from a string. Used for both .md/.mdx files
 /// and PDF files (converted to markdown).
 pub(crate) fn extract_markdown_from_string(
@@ -45,9 +51,6 @@ pub(crate) fn extract_markdown_from_string(
         node_type: "document".to_string(),
     });
 
-    let heading_re = regex::Regex::new(r"^(#{1,6})\s+(.+)$").unwrap();
-    let link_re = regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
-
     // Track heading nesting: stack of (level, id)
     let mut heading_stack: Vec<(usize, String)> = Vec::new();
     // Repeated section titles in one file (e.g. several "## Changes") get
@@ -74,7 +77,7 @@ pub(crate) fn extract_markdown_from_string(
 
     for (line_no, line) in content.lines().enumerate() {
         // Parse headings
-        if let Some(caps) = heading_re.captures(line) {
+        if let Some(caps) = MD_HEADING_RE.captures(line) {
             flush_pending(&mut pending, &mut nodes, &mut edges);
             let hashes = caps.get(1).unwrap().as_str().len();
             let title = caps.get(2).unwrap().as_str().trim().to_string();
@@ -164,7 +167,7 @@ pub(crate) fn extract_markdown_from_string(
         }
 
         // Parse links (only local .md references)
-        for cap in link_re.captures_iter(line) {
+        for cap in MD_LINK_RE.captures_iter(line) {
             let link_target = cap.get(2).unwrap().as_str();
             // Only reference local markdown files
             if link_target.starts_with("http") || link_target.starts_with('#') {

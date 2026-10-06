@@ -132,11 +132,16 @@ struct Segment {
     is_typescript: bool,
 }
 
+static ASTRO_FRONTMATTER_RE: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"(?s)\A---\r?\n(.*?)\r?\n---").expect("static regex"));
+static SCRIPT_SEGMENT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"(?is)<script\b([^>]*)>(.*?)</script>"#).expect("static regex")
+});
+
 fn segments(source: &str, ext: &str) -> Vec<Segment> {
     if ext == "astro" {
         // Astro frontmatter: a `---` fenced TS block at the top of the file.
-        let re = Regex::new(r"(?s)\A---\r?\n(.*?)\r?\n---").expect("static regex");
-        return match re.captures(source) {
+        return match ASTRO_FRONTMATTER_RE.captures(source) {
             Some(caps) => vec![Segment {
                 body: caps[1].to_string(),
                 is_typescript: true,
@@ -148,9 +153,8 @@ fn segments(source: &str, ext: &str) -> Vec<Segment> {
     static TS_LANG_ATTR: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(r##"lang\s*=\s*["']?ts["']?"##).expect("static regex")
     });
-    let re = Regex::new(r#"(?is)<script\b([^>]*)>(.*?)</script>"#).expect("static regex");
     let mut out = Vec::new();
-    for caps in re.captures_iter(source) {
+    for caps in SCRIPT_SEGMENT_RE.captures_iter(source) {
         let attrs = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
         let is_typescript = TS_LANG_ATTR.is_match(attrs);
         out.push(Segment {

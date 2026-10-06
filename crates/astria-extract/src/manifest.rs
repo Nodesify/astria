@@ -517,20 +517,24 @@ fn ingest_package_json(text: &str, b: &mut ManifestBuilder) {
     }
 }
 
-fn ingest_pom(text: &str, b: &mut ManifestBuilder) {
-    let artifact_re = Regex::new(r"<artifactId>\s*([^<]+?)\s*</artifactId>").unwrap();
-    let deps_re = Regex::new(r"(?s)<dependencies>(.*?)</dependencies>").unwrap();
+static POM_ARTIFACT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"<artifactId>\s*([^<]+?)\s*</artifactId>").expect("static regex")
+});
+static POM_DEPS_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?s)<dependencies>(.*?)</dependencies>").expect("static regex")
+});
 
-    let self_name = artifact_re
+fn ingest_pom(text: &str, b: &mut ManifestBuilder) {
+    let self_name = POM_ARTIFACT_RE
         .captures(text)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "unknown-maven-artifact".into());
     let self_id = b.add_package(&self_name, Some("this artifact (pom.xml)"));
 
-    for dep_block in deps_re.captures_iter(text) {
+    for dep_block in POM_DEPS_RE.captures_iter(text) {
         let block = dep_block.get(1).map(|m| m.as_str()).unwrap_or("");
-        for cap in artifact_re.captures_iter(block) {
+        for cap in POM_ARTIFACT_RE.captures_iter(block) {
             if let Some(m) = cap.get(1) {
                 b.add_dependency(&self_id, m.as_str());
             }
