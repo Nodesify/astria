@@ -1,0 +1,66 @@
+# CodeQL static analysis — the SAST layer SECURITY.md's threat model calls
+# for: astria parses untrusted source trees and answers MCP queries over
+# them, so memory-safety and injection-class findings in the Rust core and
+# the TS CLI surface belong in a scanner, not just in review.
+#
+# Cost note: the Rust extractor observes a full build (autobuild), which is
+# why Rust does NOT run per-PR — dependency regressions are already gated
+# per-PR by rustsec/audit-check and npm audit, and per-PR CodeQL would add
+# another ~40-minute build to every PR. Rust runs on pushes to the main
+# branches and weekly; JavaScript/TypeScript is cheap enough to run per-PR.
+name: CodeQL
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Mondays 03:17 UTC, off-peak on purpose.
+    - cron: '17 3 * * 1'
+
+# Least-privilege default; the analysis jobs elevate security-events only.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    # Fast enough to gate every PR.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: github/codeql-action/init@87ef0dc97def48aa960fbf026a2563ee9dbdb470 # v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+      - uses: github/codeql-action/analyze@87ef0dc97def48aa960fbf026a2563ee9dbdb470 # v3
+        with:
+          category: '/language:javascript-typescript'
+
+  rust:
+    # Full-build extraction: pushes and the weekly scan only (see the note
+    # at the top). Findings land in the Security tab as code scanning
+    # alerts either way.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: github/codeql-action/init@87ef0dc97def48aa960fbf026a2563ee9dbdb470 # v3
+        with:
+          languages: rust
+          queries: security-extended
+      - uses: github/codeql-action/autobuild@87ef0dc97def48aa960fbf026a2563ee9dbdb470 # v3
+      - uses: github/codeql-action/analyze@87ef0dc97def48aa960fbf026a2563ee9dbdb470 # v3
+        with:
+          category: '/language:rust'
