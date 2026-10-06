@@ -7,15 +7,15 @@ on:
     branches: [main, develop]
   workflow_call:
 
-# audit-check needs checks:write: when it finds warnings (unmaintained /
-# yanked crates) it creates a check run with annotations, which fails with
-# "Resource not accessible by integration" under a read-only token (#38).
-# Called workflows may downgrade but not elevate the caller's token scopes,
-# so the `ci` job in release.yml grants the same two scopes. Keep them in
-# sync if either side changes.
+# Least-privilege default: jobs that need more declare it explicitly.
+# The audit-check step needs checks:write — when it finds warnings
+# (unmaintained / yanked crates) it creates a check run with annotations,
+# which fails with "Resource not accessible by integration" under a
+# read-only token (#38). Called workflows may downgrade but not elevate
+# the caller's token scopes, so release.yml's `ci` job must still grant
+# checks:write for that step to work when CI is called from a release.
 permissions:
   contents: read
-  checks: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,6 +25,10 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # The audit step is the only thing here that creates check runs.
+    permissions:
+      contents: read
+      checks: write
     strategy:
       matrix:
         os: [ubuntu-24.04, windows-latest, macos-latest]
@@ -63,6 +67,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
+          cache: npm
+          # Root lockfile governs the workspace; the CLI install reads it.
+          cache-dependency-path: package-lock.json
       - name: Check @napi-rs/cli version drift
         run: node scripts/check-napi-version.mjs
       - uses: dtolnay/rust-toolchain@stable # branch ref on purpose: tracks latest stable Rust; not SHA-pinned so updates keep flowing

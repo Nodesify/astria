@@ -17,6 +17,10 @@ on:
       - .github/workflows/musl-probe.yml
       - .github/workflows/release.yml
 
+# Read-only probe: builds and inspects artifacts, never pushes.
+permissions:
+  contents: read
+
 jobs:
   probe:
     runs-on: ubuntu-22.04
@@ -40,7 +44,7 @@ jobs:
       RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable # branch ref on purpose: tracks latest stable Rust; not SHA-pinned so updates keep flowing
         with:
           targets: x86_64-unknown-linux-musl
       - name: musl-tools
