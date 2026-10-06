@@ -4,6 +4,10 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+- **Docs no longer reference the removed `astria migrate` command.** It was removed in [1.0.12] when the compatibility paths were retired, but the npm README and the directory-layout reference kept telling Graphify users to run it — which failed with `unknown command`. Both now state the supported path: there is no migration; delete the old `.graphify/` directory and run `astria run .` for a fresh `.astria/`.
+
 ## [1.1.1] — 2026-10-06
 
 Maintenance release; no user-facing behavior changes.

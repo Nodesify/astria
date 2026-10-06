@@ -10,8 +10,6 @@ npm install -g @nodesify/astria
 
 Requires Node.js >= 22. No Rust toolchain needed — ships prebuilt native binaries for macOS, Linux, and Windows.
 
-> **Migrating from `@nodesify/graphify`?** Run `astria migrate` once (renames `.graphify/` → `.astria/` and the global store), then `astria install` to refresh AI-tool skills and hooks. `GRAPHIFY_*` env vars keep working; `ASTRIA_*` takes precedence.
-
 ## Usage
 
 ```bash
