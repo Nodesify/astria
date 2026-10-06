@@ -50,3 +50,6 @@ graphify-out/
 
 # local-only: OpenRouter judge key for promptfoo smoke runs (never commit)
 .env.local
+
+# local-only: marketing article drafts (never commit)
+medium/
