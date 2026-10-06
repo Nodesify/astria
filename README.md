@@ -14,6 +14,8 @@
 
 [Docs](https://nodesify.github.io/astria/) | [Getting started](https://nodesify.github.io/astria/docs/getting-started) | [CLI Reference](https://nodesify.github.io/astria/docs/reference/cli) | [Architecture](ARCHITECTURE.md) | [Worked examples](worked/) | [Changelog](CHANGELOG.md) | [Release notes](https://nodesify.github.io/astria/blog)
 
+Built by [Nodesify](https://nodesify.com)
+
 </div>
 
 Find an implementation, inspect its relationships, and assess a change before editing. Astria builds a local SQLite knowledge graph with deterministic Rust/tree-sitter extraction. CLI and MCP queries use the same retrieval engine; source locations and evidence classes make results inspectable. Structural analysis needs no API key. Local embeddings and remote semantic enrichment are optional.
