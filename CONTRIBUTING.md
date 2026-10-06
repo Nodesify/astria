@@ -102,7 +102,7 @@ Releases are tagged (`vX.Y.Z`) and published by the `Release` workflow via npm t
 
 ### Platform package prerequisites
 
-Every `@nodesify/astria-<platform>` package publishes through npm OIDC trusted publishing, which requires a **one-time registration per package name** at npmjs.com (Settings → Trusted Publisher → add the repository, workflow `release.yml`, and environment) — publishing a never-registered package fails the OIDC exchange with ENEEDAUTH, which the release workflow degrades to "not published this release" instead of aborting. `linux-x64-musl` and `win32-arm64-msvc` still need this registration (they have never been on npm). The musl leg additionally builds with `RUSTFLAGS=-C target-feature=-crt-static`: rustc ≥ 1.99 enables static-PIE on musl targets, and a static-PIE target cannot emit a cdylib.
+Every `@nodesify/astria-<platform>` package publishes through npm OIDC trusted publishing, which requires a **one-time registration per package name** at npmjs.com (Settings → Trusted Publisher → add the repository, workflow `release.yml`, and environment) — publishing a never-registered package fails the OIDC exchange with ENEEDAUTH, which the release workflow degrades to "not published this release" instead of aborting. All seven platform packages now have registered trusted publishers — musl and win32-arm64-msvc were bootstrapped in October 2026 via a staged first publish plus in-browser approval. The musl leg additionally builds with `RUSTFLAGS=-C target-feature=-crt-static`: rustc ≥ 1.99 enables static-PIE on musl targets, and a static-PIE target cannot emit a cdylib.
 
 ### Versioning policy
 
