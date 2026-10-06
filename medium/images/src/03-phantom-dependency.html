@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><style>*{margin:0;box-sizing:border-box}body{width:1100px;height:690px;background:#101722;font-family:Segoe UI,Arial,sans-serif}svg{display:block}text{font-family:Segoe UI,Arial,sans-serif}</style></head><body>
+<svg width="1100" height="690" viewBox="0 0 1100 690" role="img" aria-labelledby="title desc"><title id="title">A mention is not a definition</title><desc id="desc">Before the fix, an unresolved name borrowing File B's defining location fabricated a dependency from File A to File B. After the fix, both source files reference an unresolved name with no local owner, and there is no basis for the fabricated file dependency.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#a6b9cc"/></marker></defs>
+<text x="50" y="64" fill="#edf3fa" font-size="36" font-weight="650">A mention is not a definition</text>
+<text x="50" y="106" fill="#b8c8d9" font-size="23">Illustrative example of the ownership defect</text>
+<rect x="50" y="144" width="1000" height="229" rx="16" fill="#241f25" stroke="#edacb9"/>
+<text x="75" y="180" fill="#edacb9" font-size="25" font-weight="600">Before: invented ownership</text>
+<rect x="85" y="214" width="160" height="60" rx="10" fill="#1d2836" stroke="#b8c8d9"/><text x="165" y="252" fill="#edf3fa" text-anchor="middle" font-size="25">File A</text>
+<rect x="388" y="200" width="326" height="88" rx="10" fill="#30232b" stroke="#edacb9"/><text x="551" y="235" fill="#edf3fa" text-anchor="middle" font-size="23">Unresolved name</text><text x="551" y="268" fill="#edacb9" text-anchor="middle" font-size="22">incorrect owner: File B</text>
+<rect x="855" y="214" width="160" height="60" rx="10" fill="#1d2836" stroke="#b8c8d9"/><text x="935" y="252" fill="#edf3fa" text-anchor="middle" font-size="25">File B</text>
+<path d="M245 244H384" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/><path d="M855 244H718" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="267" y="229" fill="#b8c8d9" font-size="19">references</text><text x="737" y="229" fill="#b8c8d9" font-size="19">references</text>
+<path d="M165 274V322H935V278" fill="none" stroke="#edacb9" stroke-width="3" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+<text x="360" y="350" fill="#edacb9" font-size="23">Fabricated file dependency: A → B</text>
+<rect x="50" y="394" width="1000" height="228" rx="16" fill="#18251f" stroke="#81d99a"/>
+<text x="75" y="431" fill="#81d99a" font-size="25" font-weight="600">After: preserve the unknown</text>
+<rect x="85" y="477" width="160" height="60" rx="10" fill="#1d2836" stroke="#b8c8d9"/><text x="165" y="515" fill="#edf3fa" text-anchor="middle" font-size="25">File A</text>
+<rect x="388" y="463" width="326" height="88" rx="10" fill="#1d2836" stroke="#81d99a" stroke-dasharray="7 5"/><text x="551" y="498" fill="#edf3fa" text-anchor="middle" font-size="23">Unresolved name</text><text x="551" y="531" fill="#81d99a" text-anchor="middle" font-size="22">no defining file</text>
+<rect x="855" y="477" width="160" height="60" rx="10" fill="#1d2836" stroke="#b8c8d9"/><text x="935" y="515" fill="#edf3fa" text-anchor="middle" font-size="25">File B</text>
+<path d="M245 507H384" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/><path d="M855 507H718" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="267" y="491" fill="#b8c8d9" font-size="19">references</text><text x="737" y="491" fill="#b8c8d9" font-size="19">references</text>
+<text x="260" y="590" fill="#81d99a" font-size="23">References remain; they do not establish A → B.</text>
+<text x="50" y="662" fill="#b8c8d9" font-size="20">Referencing an external name does not make a local file its owner.</text>
+</svg></body></html>

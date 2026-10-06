@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1000px;height:688px;background:#0f1218;font-family:'Cascadia Code',Consolas,Menlo,monospace}
+.tb{height:44px;background:#171b24;display:flex;align-items:center;position:relative}
+.dots{display:flex;margin-left:18px;gap:8px}
+.dot{width:12px;height:12px;border-radius:50%}
+.d1{background:#ff5f56}.d2{background:#ffbd2e}.d3{background:#27c93f}
+.t{position:absolute;left:0;right:0;text-align:center;color:#5b6472;font-size:12.5px;font-family:'Segoe UI',sans-serif}
+.out{padding:20px 26px;font-size:15px;line-height:24px;color:#c9d1d9;white-space:pre}
+.p{color:#7ee787}.c{color:#e6edf3}.o{color:#8b98a9}.b{color:#79c0ff}.f{color:#ffa657}.g{color:#7ee787}.a{color:#e3b341}.bl{color:#5b6472}
+</style></head><body>
+<div class="tb"><div class="dots"><div class="dot d1"></div><div class="dot d2"></div><div class="dot d3"></div></div><div class="t">astria 1.1.0 · formatted output excerpt</div></div>
+<div class="out"><span class="p">$</span> <span class="c">npm install -g @nodesify/astria</span>
+
+<span class="p">$</span> <span class="c">astria run .</span>
+<span class="o">Running astria pipeline on: .</span>
+<span class="o">Nodes added: 0</span>
+<span class="o">Edges added: 0</span>
+<span class="o">Communities: 979</span>
+<span class="o">Report written to: </span><span class="f">.astria\graph_report.md</span>
+
+<span class="o">Token reduction benchmark</span>
+<span class="o">──────────────────────────</span>
+<span class="o">  Corpus:         3.0 MB → ~783149 tokens (naive full read)</span>
+<span class="o">  Graph:          </span><span class="b">7285 nodes, 27952 edges</span><span class="o"></span>
+<span class="o">  Avg query cost: ~3202 tokens</span>
+<span class="o">  Reduction:      </span><span class="g">244.6x</span><span class="o"> (graph query vs naive full read)</span>
+<span class="a">  Estimator:      bytes / 4 heuristic; not exact tokenizer counts</span>
+<span class="a">                  Not a measurement of total agent task savings</span>
+
+<span class="p">$</span> <span class="c">astria stats</span>
+<span class="o">Nodes: </span><span class="b">7285</span>
+<span class="o">Edges: </span><span class="b">27952</span>
+<span class="o">Communities: </span><span class="b">979</span>
+<span class="o">Files tracked: 345</span>
+<span class="o">Embeddings: available</span></div>
+</body></html>

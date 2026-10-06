@@ -4,3 +4,6 @@
 # `scripts/check-viewer-bundle.mjs` already fails CI on drift, so a stale copy
 # is a build error, not something a reviewer should read in a pull request.
 crates/astria-export/assets/viewer.js linguist-generated=true -diff
+
+# Preserve historical evaluation artifacts and their recorded input hashes.
+medium/evidence/2026-10-06/** -text

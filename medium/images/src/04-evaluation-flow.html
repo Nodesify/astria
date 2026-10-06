@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><style>*{margin:0;box-sizing:border-box}body{width:1100px;height:630px;background:#101722;font-family:Segoe UI,Arial,sans-serif}svg{display:block}text{font-family:Segoe UI,Arial,sans-serif}</style></head><body>
+<svg width="1100" height="630" viewBox="0 0 1100 630" role="img" aria-labelledby="title desc"><title id="title">Two measurements, one shared limit</title><desc id="desc">Both tools receive pinned sources and the same questions and requested budgets. Build and query time are recorded separately. Raw responses are checked for budget compliance, then clipped identically for file and exact declaration ranking.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#a6b9cc"/></marker></defs>
+<text x="50" y="66" fill="#edf3fa" font-size="36" font-weight="650">Two measurements, one shared limit</text>
+<text x="50" y="108" fill="#b8c8d9" font-size="23">Compliance and retrieval quality use different response stages.</text>
+<g fill="#1d2836" stroke="#85c8ff" stroke-width="2"><rect x="50" y="168" width="280" height="101" rx="12"/><rect x="409" y="168" width="281" height="101" rx="12"/><rect x="770" y="168" width="280" height="101" rx="12"/></g>
+<g fill="#edf3fa" text-anchor="middle" font-size="25" font-weight="600"><text x="190" y="208">Pinned sources</text><text x="549" y="208">Both tools</text><text x="910" y="208">Raw responses</text></g>
+<g fill="#b8c8d9" text-anchor="middle" font-size="21"><text x="190" y="244">Same questions / budgets</text><text x="549" y="244">Structural extraction only</text><text x="910" y="244">Shared exact tokenizer</text></g>
+<path d="M330 218H405" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/><path d="M690 218H766" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M910 269V320H278V365" fill="none" stroke="#f2cc70" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M910 320V365" stroke="#81d99a" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="50" y="369" width="457" height="116" rx="12" fill="#30291e" stroke="#f2cc70" stroke-width="2"/>
+<text x="278" y="411" text-anchor="middle" fill="#f2cc70" font-size="26" font-weight="600">Budget compliance</text>
+<text x="278" y="451" text-anchor="middle" fill="#edf3fa" font-size="22">Count overruns before clipping</text>
+<rect x="592" y="369" width="458" height="116" rx="12" fill="#18251f" stroke="#81d99a" stroke-width="2"/>
+<text x="821" y="411" text-anchor="middle" fill="#81d99a" font-size="26" font-weight="600">Retrieval scores</text>
+<text x="821" y="451" text-anchor="middle" fill="#edf3fa" font-size="22">Clip identically, then rank results</text>
+<line x1="50" y1="532" x2="1050" y2="532" stroke="#344355"/>
+<text x="50" y="569" fill="#b8c8d9" font-size="22">Record build time and query latency separately.</text>
+<text x="50" y="605" fill="#b8c8d9" font-size="20">This protocol measures retrieval; it does not measure completed agent tasks.</text>
+</svg></body></html>

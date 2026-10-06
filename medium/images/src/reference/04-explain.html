@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1000px;height:496px;background:#0f1218;font-family:'Cascadia Code',Consolas,Menlo,monospace}
+.tb{height:44px;background:#171b24;display:flex;align-items:center;position:relative}
+.dots{display:flex;margin-left:18px;gap:8px}
+.dot{width:12px;height:12px;border-radius:50%}
+.d1{background:#ff5f56}.d2{background:#ffbd2e}.d3{background:#27c93f}
+.t{position:absolute;left:0;right:0;text-align:center;color:#5b6472;font-size:12.5px;font-family:'Segoe UI',sans-serif}
+.out{padding:20px 26px;font-size:14.5px;line-height:23px;color:#c9d1d9;white-space:pre}
+.p{color:#7ee787}.c{color:#e6edf3}.o{color:#8b98a9}.b{color:#79c0ff}.f{color:#ffa657}.g{color:#7ee787}.a{color:#e3b341}.bl{color:#5b6472}
+</style></head><body>
+<div class="tb"><div class="dots"><div class="dot d1"></div><div class="dot d2"></div><div class="dot d3"></div></div><div class="t">astria 1.1.0 · formatted output excerpt</div></div>
+<div class="out"><span class="p">$</span> <span class="c">astria explain crates_astria_napi_src_lib_rs_353b27bf063a::run_mcp_http_server</span>
+
+<span class="o">Node: </span><span class="b">run_mcp_http_server()</span>
+<span class="o">  File: </span><span class="f">crates/astria-napi/src/lib.rs:1656</span>
+<span class="o">  Community: 14</span>
+
+<span class="o">Connections (14):</span>
+<span class="o">  &lt;-- </span><span class="f">lib.rs</span><span class="o"> [contains] [</span><span class="g">EXTRACTED</span><span class="o">] (</span><span class="f">crates/astria-napi/src/lib.rs</span><span class="o">)</span>
+<span class="o">  --&gt; </span><span class="b">run_mcp_server()</span><span class="o"> [similar_to] [</span><span class="a">INFERRED</span><span class="o">] (</span><span class="f">crates/astria-napi/src/lib.rs:1611</span><span class="o">)</span>
+<span class="o">  --&gt; </span><span class="b">astria_mcp::serve_http</span><span class="o"> [calls] [</span><span class="a">INFERRED</span><span class="o">]</span>
+<span class="o">  --&gt; </span><span class="b">std::env::var</span><span class="o"> [calls] [</span><span class="a">INFERRED</span><span class="o">]</span>
+<span class="o">  --&gt; </span><span class="b">map_err</span><span class="o"> [calls] [</span><span class="a">INFERRED</span><span class="o">]</span>
+<span class="o">  --&gt; </span><span class="b">napi::error::from_reason</span><span class="o"> [calls] [</span><span class="a">INFERRED</span><span class="o">]</span>
+<span class="o">  --&gt; </span><span class="b">unwrap_or_default</span><span class="o"> [calls] [</span><span class="a">INFERRED</span><span class="o">]</span>
+
+<span class="bl">… 6 more</span></div>
+</body></html>

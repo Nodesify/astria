@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><style>*{margin:0;box-sizing:border-box}body{width:1100px;height:750px;background:#101722;font-family:Segoe UI,Arial,sans-serif}svg{display:block}text{font-family:Segoe UI,Arial,sans-serif}.code{font-family:Consolas,monospace}</style></head><body>
+<svg width="1100" height="750" viewBox="0 0 1100 750" role="img" aria-labelledby="title desc"><title id="title">One task, two response paths</title><desc id="desc">The live connection handler checks authorization in route_early before reading the request body. Failed authorization returns 401 immediately. Passing the early checks proceeds to body reading and route, which also has an unauthorized response.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#a6b9cc"/></marker></defs>
+<text x="50" y="65" fill="#edf3fa" font-size="36" font-weight="650">One task, two response paths</text>
+<text x="50" y="106" fill="#b8c8d9" font-size="23">Changing only the later response misses the early rejection.</text>
+<rect x="105" y="149" width="480" height="61" rx="12" fill="#1d2836" stroke="#85c8ff" stroke-width="2"/>
+<text x="345" y="187" text-anchor="middle" fill="#edf3fa" font-size="25" class="code">handle_connection()</text>
+<path d="M345 210V252" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="105" y="254" width="480" height="85" rx="12" fill="#1d2836" stroke="#f2cc70" stroke-width="2"/>
+<text x="345" y="288" text-anchor="middle" fill="#edf3fa" font-size="25" class="code">route_early()</text>
+<text x="345" y="320" text-anchor="middle" fill="#b8c8d9" font-size="22">checks authorized()</text>
+<path d="M585 296H717" stroke="#f2cc70" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="625" y="279" fill="#f2cc70" font-size="21">fails</text>
+<rect x="721" y="251" width="320" height="91" rx="12" fill="#30291e" stroke="#f2cc70" stroke-width="2"/>
+<text x="881" y="288" text-anchor="middle" fill="#f2cc70" font-size="26" font-weight="600">Return 401</text>
+<text x="881" y="319" text-anchor="middle" fill="#edf3fa" font-size="21">Stop before reading body</text>
+<path d="M345 339V412" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="365" y="382" fill="#b8c8d9" font-size="21">passes early checks</text>
+<rect x="105" y="414" width="480" height="62" rx="12" fill="#1d2836" stroke="#85c8ff" stroke-width="2"/>
+<text x="345" y="452" text-anchor="middle" fill="#edf3fa" font-size="24">Read request body</text>
+<path d="M345 476V519" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/>
+<rect x="105" y="521" width="480" height="85" rx="12" fill="#1d2836" stroke="#85c8ff" stroke-width="2"/>
+<text x="345" y="555" text-anchor="middle" fill="#edf3fa" font-size="25" class="code">route()</text>
+<text x="345" y="587" text-anchor="middle" fill="#b8c8d9" font-size="22">checks authorized() again</text>
+<path d="M585 563H717" stroke="#a6b9cc" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="625" y="546" fill="#b8c8d9" font-size="21">fails</text>
+<rect x="721" y="520" width="320" height="87" rx="12" fill="#1d2836" stroke="#85c8ff" stroke-width="2"/>
+<text x="881" y="555" text-anchor="middle" fill="#edf3fa" font-size="26">Return 401</text>
+<text x="881" y="586" text-anchor="middle" fill="#b8c8d9" font-size="21">Later response path</text>
+<line x1="50" y1="655" x2="1050" y2="655" stroke="#344355"/>
+<text x="50" y="691" fill="#b8c8d9" font-size="20">Simplified from http.rs · host/origin checks and successful dispatch omitted</text>
+<text x="50" y="724" fill="#b8c8d9" font-size="20">Inspect both paths; verify runtime order in source.</text>
+</svg></body></html>
