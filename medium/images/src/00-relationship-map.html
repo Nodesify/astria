@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0}body{width:1100px;height:630px;background:#101722;color:#edf3fa;font-family:Segoe UI,Arial,sans-serif}svg{display:block}text{font-family:Segoe UI,Arial,sans-serif}.code{font-family:Consolas,monospace}
+</style></head><body><svg width="1100" height="630" viewBox="0 0 1100 630" role="img" aria-labelledby="title desc">
+<title id="title">A map that marks uncertainty</title><desc id="desc">An illustrative file contains a handler. A caller is bound by a resolved name. The handler calls an unresolved external name, which has no defining file.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#a6b9cc"/></marker></defs>
+<text x="54" y="72" fill="#edf3fa" font-size="36" font-weight="650">A map that marks uncertainty</text>
+<text x="54" y="112" fill="#b8c8d9" font-size="23">Find a relationship. Check how the graph knows it.</text>
+<rect x="54" y="178" width="245" height="76" rx="14" fill="#1d2836" stroke="#81d99a" stroke-width="2"/>
+<text x="176" y="225" text-anchor="middle" fill="#edf3fa" font-size="25" class="code">handler.rs</text>
+<rect x="54" y="337" width="245" height="76" rx="14" fill="#1d2836" stroke="#85c8ff" stroke-width="2"/>
+<text x="176" y="384" text-anchor="middle" fill="#edf3fa" font-size="25" class="code">dispatch()</text>
+<rect x="428" y="254" width="235" height="88" rx="14" fill="#1d2836" stroke="#85c8ff" stroke-width="2"/>
+<text x="546" y="307" text-anchor="middle" fill="#edf3fa" font-size="25" class="code">handle()</text>
+<rect x="799" y="254" width="247" height="88" rx="14" fill="#242323" stroke="#f2cc70" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="922" y="292" text-anchor="middle" fill="#edf3fa" font-size="24" class="code">external::send</text>
+<text x="922" y="323" text-anchor="middle" fill="#f2cc70" font-size="20">no defining file</text>
+<path d="M299 216H354V276H428" fill="none" stroke="#81d99a" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="333" y="164" fill="#81d99a" font-size="21">contains</text><text x="333" y="192" fill="#81d99a" font-size="18">EXTRACTED</text>
+<path d="M299 375H354V320H428" fill="none" stroke="#85c8ff" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+<text x="332" y="402" fill="#85c8ff" font-size="21">calls</text><text x="332" y="430" fill="#85c8ff" font-size="18">RESOLVED</text>
+<path d="M663 298H799" fill="none" stroke="#f2cc70" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+<text x="701" y="251" fill="#f2cc70" font-size="21">calls</text><text x="683" y="280" fill="#f2cc70" font-size="18">INFERRED</text>
+<line x1="54" y1="490" x2="1046" y2="490" stroke="#344355"/>
+<text x="54" y="530" fill="#81d99a" font-size="21">Solid: directly extracted</text>
+<text x="442" y="530" fill="#85c8ff" font-size="21">Dashed: name-derived; inspect the label</text>
+<text x="54" y="577" fill="#b8c8d9" font-size="20">Illustrative graph · a unique name binding is not compiler proof</text>
+</svg></body></html>

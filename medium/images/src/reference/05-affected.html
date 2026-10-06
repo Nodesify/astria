@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1000px;height:456px;background:#0f1218;font-family:'Cascadia Code',Consolas,Menlo,monospace}
+.tb{height:44px;background:#171b24;display:flex;align-items:center;position:relative}
+.dots{display:flex;margin-left:18px;gap:8px}
+.dot{width:12px;height:12px;border-radius:50%}
+.d1{background:#ff5f56}.d2{background:#ffbd2e}.d3{background:#27c93f}
+.t{position:absolute;left:0;right:0;text-align:center;color:#5b6472;font-size:12.5px;font-family:'Segoe UI',sans-serif}
+.out{padding:20px 26px;font-size:14.5px;line-height:23px;color:#c9d1d9;white-space:pre}
+.p{color:#7ee787}.c{color:#e6edf3}.o{color:#8b98a9}.b{color:#79c0ff}.f{color:#ffa657}.g{color:#7ee787}.a{color:#e3b341}.bl{color:#5b6472}
+</style></head><body>
+<div class="tb"><div class="dots"><div class="dot d1"></div><div class="dot d2"></div><div class="dot d3"></div></div><div class="t">astria 1.1.0 · formatted output excerpt</div></div>
+<div class="out"><span class="p">$</span> <span class="c">astria affected crates_astria_query_src_lib_rs_6f465ddbae7b::query_graph_loaded</span>
+
+<span class="o">Blast radius of "</span><span class="b">query_graph_loaded()</span><span class="o">" (depth ≤ 2): </span><span class="g">12 node(s)</span>
+
+<span class="o">  depth 1:</span>
+<span class="o">    </span><span class="b">query_graph_with_metadata()</span><span class="o"> (calls </span><span class="g">RESOLVED</span><span class="o">)  [</span><span class="f">crates/astria-query/src/lib.rs</span><span class="o">]</span>
+<span class="o">    </span><span class="b">query_graph_with_semantic()</span><span class="o"> (calls </span><span class="g">RESOLVED</span><span class="o">)  [</span><span class="f">crates/astria-query/src/lib.rs</span><span class="o">]</span>
+<span class="o">    </span><span class="b">stale_graph_discloses_changed_files()</span><span class="o"> (calls </span><span class="g">RESOLVED</span><span class="o">)  [</span><span class="f">…/lib.rs</span><span class="o">]</span>
+<span class="o">    </span><span class="b">salient_evidence_traverses_despite_weak_scores()</span><span class="o"> (calls </span><span class="g">RESOLVED</span><span class="o">)  [</span><span class="f">…/lib.rs</span><span class="o">]</span>
+<span class="o">    </span><span class="b">semantic_only_candidate_reserves_a_seed_slot()</span><span class="o"> (calls </span><span class="g">RESOLVED</span><span class="o">)  [</span><span class="f">…/lib.rs</span><span class="o">]</span>
+<span class="bl">    … 4 more callers</span>
+
+<span class="o">  depth 2:</span>
+<span class="o">    </span><span class="b">query_graph()</span><span class="o"> (calls </span><span class="g">RESOLVED</span><span class="o">)  [</span><span class="f">crates/astria-query/src/lib.rs</span><span class="o">]</span>
+<span class="o">    </span><span class="b">semantic_seeds_match_without_string_overlap()</span><span class="o"> (calls </span><span class="g">RESOLVED</span><span class="o">)  [</span><span class="f">…/lib.rs</span><span class="o">]</span>
+<span class="bl">    … 1 more</span></div>
+</body></html>
