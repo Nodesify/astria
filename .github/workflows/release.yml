@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  # Dispatch = rehearsal: runs ci + verify + the full build matrix +
+  # rehearse-pack (npm publish --dry-run). Nothing is published — the
+  # publish job only runs on v* tag pushes, so a stray click can never
+  # publish from a branch.
+  workflow_dispatch:
 
 # Least-privilege default: jobs that need more declare it explicitly.
 permissions:
@@ -26,6 +31,9 @@ jobs:
       - name: Verify tag matches package version
         # Fail before the 5-leg build matrix spends 30+ minutes on a tag
         # that cannot publish (the v0.8.0 re-tag churn, #46).
+        # Tag-gated: a workflow_dispatch rehearsal runs from a branch, where
+        # the ref name is not a tag.
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           pkg_version=$(node -p "require('./packages/astria-cli/package.json').version")
           tag_version="${GITHUB_REF_NAME#v}"
@@ -38,6 +46,8 @@ jobs:
         # never promoted to a dated "## [X.Y.Z]" heading would publish a
         # release without curated notes. The publish job feeds the extracted
         # section to the GitHub Release body.
+        # Tag-gated for the same reason as the tag/version check above.
+        if: startsWith(github.ref, 'refs/tags/v')
         run: node scripts/extract-changelog.mjs "${GITHUB_REF_NAME#v}" --check
       - name: Verify MCP Registry server.json matches the tag
         # The official MCP Registry requires server.json, package.json and the
@@ -182,6 +192,10 @@ jobs:
           path: packages/astria-cli/dist/astria.node
 
   publish:
+    # Tag pushes only (workflow_dispatch runs are rehearsals — see `on:`),
+    # so a manual run started from a branch can never reach the publish
+    # steps, even with the environment approved.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: build
@@ -215,8 +229,12 @@ jobs:
       - name: Build CLI
         run: cd packages/astria-cli && npm run build
       - name: Upgrade npm for OIDC
+        # Pinned exact: a floating dist-tag inside the OIDC-scoped publish
+        # job lets an npm release change publish behavior under a tag push.
+        # 11.21.0 is the latest 11.x line (npm 12 exists; this OIDC path is
+        # validated on 11.x — re-pin deliberately, never by drift).
         run: |
-          npm install -g npm@11
+          npm install -g npm@11.21.0
           hash -r
           npm --version
       - name: Clear token auth for OIDC
@@ -314,6 +332,20 @@ jobs:
             sleep 5
           done
           npm view "@nodesify/astria@$version" version > /dev/null
+      - name: Prepare Homebrew formula update
+        # The tap (Nodesify/homebrew-tap) is a separate public repo this
+        # workflow cannot push to, so the formula update stays manual (see
+        # packaging/homebrew/README.md). Print the exact three lines to
+        # paste — hand-deriving them is how the tap lagged releases.
+        run: |
+          version=$(node -p "require('./packages/astria-cli/package.json').version")
+          url="https://registry.npmjs.org/@nodesify/astria/-/astria-${version}.tgz"
+          sha=$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1)
+          echo "Paste into Nodesify/homebrew-tap Formula/astria.rb:"
+          echo "  version \"${version}\""
+          echo "  url \"${url}\""
+          echo "  sha256 \"${sha}\""
+          echo "Verify with: brew install --build-from-source nodesify/tap/astria"
       - name: Debug npm auth failure
         if: failure()
         run: |
@@ -360,3 +392,56 @@ jobs:
           tar xzf mcp-publisher.tar.gz mcp-publisher
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
+
+  # Rehearsal counterpart of `publish` for workflow_dispatch runs: assembles
+  # the exact npm packages a release would publish and packs each with
+  # `npm publish --dry-run`. No OIDC token, no environment approval, and
+  # nothing leaves the runner. This exists so the expensive failure modes
+  # (empty platform packages, malformed generated package.json) surface
+  # before a tag burns an immutable npm version — the v1.0.0 single-package
+  # publish and the v1.0.12 empty-musl-package archaeology in `publish`.
+  rehearse-pack:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: build
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.14.0'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+          pattern: 'astria-*'
+      - name: Move artifacts
+        run: |
+          mkdir -p packages/astria-cli/npm
+          for dir in artifacts/astria-*/; do
+            platform=$(basename "$dir" | sed 's/astria-//')
+            mkdir -p "packages/astria-cli/npm/$platform"
+            cp "$dir"*.node "packages/astria-cli/npm/$platform/astria.$platform.node"
+          done
+      - name: Install dependencies
+        run: cd packages/astria-cli && npm ci
+      - name: Build CLI
+        run: cd packages/astria-cli && npm run build
+      - name: Create platform packages
+        run: cd packages/astria-cli && npx napi create-npm-dirs
+      - name: Pack rehearsal (npm publish --dry-run)
+        run: |
+          set -e
+          for dir in packages/astria-cli/npm/*/; do
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if ! ls "$dir"*.node > /dev/null 2>&1; then
+              echo "$name@$version: no binary artifact — would be skipped"
+              continue
+            fi
+            echo "Rehearsing $name@$version"
+            (cd "$dir" && npm publish --dry-run --ignore-scripts --access public > /dev/null)
+          done
+          cd packages/astria-cli
+          echo "Rehearsing main package"
+          npm publish --dry-run --ignore-scripts --access public > /dev/null
+          echo "Rehearsal complete: every package packs cleanly; nothing was published."
