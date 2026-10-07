@@ -717,7 +717,10 @@ function testProjectScopeIsolation() {
     assert(results.some(r => r.includes('Scope: project')), 'Project scope: scope reported');
 
     // Uninstall removes the legacy file too (recreate, then uninstall).
+    // Deliberate recreate of a test fixture in test-owned temp space, not
+    // shared state; no other process touches this path.
     fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    // codeql[js/file-system-race]
     fs.writeFileSync(legacy, 'name: graphify\n');
     installPlatform('codex', project);
     const { uninstallPlatform } = require('../install') as typeof import('../install');
