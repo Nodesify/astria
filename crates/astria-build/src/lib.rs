@@ -2,6 +2,7 @@
 
 pub mod crosslayer;
 pub mod dedup;
+pub mod external;
 pub mod hyperedges;
 pub mod minhash;
 pub mod validate;
@@ -59,6 +60,15 @@ pub fn build_in_transaction(
                 reference.execute([&edge.source])?;
                 reference.execute([&edge.target])?;
             }
+        }
+        let has_external_facts: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_node_facts')",
+            [], |row| row.get(0),
+        )?;
+        if has_external_facts {
+            // An imported index owns these symbols independently of whichever
+            // ordinary source file provides the current canonical citation.
+            tx.execute("INSERT OR REPLACE INTO astria_build_live_nodes SELECT node_id,1 FROM external_node_facts", [])?;
         }
     }
 

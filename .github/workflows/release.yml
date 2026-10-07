@@ -89,11 +89,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     needs: [ci, verify]
-    # New/less-proven targets mark `experimental: true`: a red experimental
-    # leg degrades to "that platform package is not published this release"
-    # instead of blocking the five proven legs from publishing. Flip to hard
-    # once a release has gone out green.
-    continue-on-error: ${{ matrix.experimental == true }}
+    # Every advertised platform must produce an artifact.
     strategy:
       fail-fast: false
       matrix:
@@ -141,7 +137,6 @@ jobs:
             # the shared musl libc (musl-tools ships it) to keep cdylib
             # support. Validated by the musl-probe workflow on this PR.
             rustflags: -C target-feature=-crt-static
-            experimental: true
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             platform: win32-arm64-msvc
@@ -149,7 +144,6 @@ jobs:
             # No embed until ONNX Runtime's windows-arm64 prebuilts are
             # validated end to end — graph_stats discloses the capability.
             cargo-flags: --no-default-features
-            experimental: true
     env:
       # Empty for every leg except musl (see its matrix entry).
       RUSTFLAGS: ${{ matrix.rustflags }}
@@ -188,10 +182,55 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: mkdir -p packages/astria-cli/dist && cp target/${{ matrix.target }}/release/${{ matrix.lib }} packages/astria-cli/dist/astria.node
+      - name: Collect Windows embedding runtime
+        if: matrix.platform == 'win32-x64-msvc'
+        run: node scripts/copy-native-runtime.mjs target/${{ matrix.target }}/release/build packages/astria-cli/dist
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: astria-${{ matrix.platform }}
-          path: packages/astria-cli/dist/astria.node
+          path: |
+            packages/astria-cli/dist/astria.node
+            packages/astria-cli/dist/*.dll
+
+  packed-install:
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, platform: linux-x64-gnu }
+          - { os: ubuntu-24.04-arm, platform: linux-arm64-gnu }
+          - { os: windows-latest, platform: win32-x64-msvc }
+          - { os: windows-11-arm, platform: win32-arm64-msvc }
+          - { os: macos-latest, platform: darwin-arm64 }
+          - { os: macos-15-intel, platform: darwin-x64 }
+          - { os: ubuntu-24.04, platform: linux-x64-musl, alpine: true }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: astria-${{ matrix.platform }}
+          path: packages/astria-cli/npm/${{ matrix.platform }}
+      - name: Assemble package
+        shell: bash
+        run: |
+          npm ci
+          npm run build --workspace @nodesify/astria
+          mv packages/astria-cli/npm/${{ matrix.platform }}/astria.node packages/astria-cli/npm/${{ matrix.platform }}/astria.${{ matrix.platform }}.node
+          cd packages/astria-cli
+          npx napi create-npm-dirs
+          node ../../scripts/include-native-runtime.mjs
+      - name: Verify packed installation on target OS
+        if: matrix.alpine != true
+        run: node scripts/check-packed-install.mjs ${{ matrix.platform }}
+      - name: Verify packed installation on musl
+        if: matrix.alpine == true
+        run: docker run --rm -v "$PWD:/work" -w /work node:22-alpine node scripts/check-packed-install.mjs linux-x64-musl
 
   publish:
     # Tag pushes only (workflow_dispatch runs are rehearsals — see `on:`),
@@ -200,9 +239,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    needs: build
+    needs: [build, packed-install]
     # Must match the Environment field of the npm Trusted Publisher bindings
-    # (all six @nodesify packages bind this repo + release.yml + env `prod`).
+    # All eight packages (CLI + seven native targets) require this binding.
     # npm rejects OIDC publishes whose token carries a different/absent
     # environment claim.
     environment: prod
@@ -225,6 +264,9 @@ jobs:
             platform=$(basename "$dir" | sed 's/astria-//')
             mkdir -p "packages/astria-cli/npm/$platform"
             cp "$dir"*.node "packages/astria-cli/npm/$platform/astria.$platform.node"
+            for runtime in "$dir"*.dll; do
+              [ ! -f "$runtime" ] || cp "$runtime" "packages/astria-cli/npm/$platform/"
+            done
           done
       - name: Install dependencies
         run: cd packages/astria-cli && npm ci
@@ -244,7 +286,7 @@ jobs:
           npm config delete //registry.npmjs.org/:_authToken
           unset NODE_AUTH_TOKEN
       - name: Create platform packages
-        run: cd packages/astria-cli && npx napi create-npm-dirs
+        run: cd packages/astria-cli && npx napi create-npm-dirs && node ../../scripts/include-native-runtime.mjs
       - name: Publish platform packages
         # The "Clear token auth" step above only helps the FIRST publish:
         # npm's trusted-publishing exchange caches the package-scoped token it
@@ -258,14 +300,10 @@ jobs:
           for dir in packages/astria-cli/npm/*/; do
             name=$(node -p "require('./$dir/package.json').name")
             version=$(node -p "require('./$dir/package.json').version")
-            # A platform whose build leg produced no binary (experimental
-            # legs fail open by design) must not publish an empty package:
-            # the tarball would shadow the platform with a 2-file stub, and
-            # an unregistered trusted publisher then aborts the whole run
-            # with ENEEDAUTH (the v1.0.12 musl first run).
+            # All advertised targets are mandatory; reject empty packages.
             if ! ls "$dir"*.node > /dev/null 2>&1; then
-              echo "$name@$version: no binary artifact — not published this release"
-              continue
+              echo "$name@$version: no binary artifact — release blocked"
+              exit 1
             fi
             if npm view "$name@$version" version > /dev/null 2>&1; then
               echo "$name@$version already on npm — skipping"
@@ -277,16 +315,6 @@ jobs:
             npm publish --ignore-scripts --access public --provenance 2>publish.log || {
               if grep -q "previously published" publish.log; then
                 echo "already published — skipping"
-              elif grep -q "ENEEDAUTH" publish.log && ! npm view "$name" version > /dev/null 2>&1; then
-                # A package that has never existed on npm failing the OIDC
-                # exchange has no trusted-publisher binding registered at
-                # npmjs.com (the v1.0.12 musl and win32-arm64 legs). Treat
-                # as "not published this release" instead of aborting the
-                # remaining platforms and the main package; registration is
-                # a manual npmjs.com step. Auth failures for packages that
-                # DO exist remain hard errors.
-                echo "$name: OIDC exchange refused — no npm trusted-publisher binding for a never-published package; register it at npmjs.com (Settings > Trusted Publisher). Not published this release."
-                cat publish.log
               else
                 cat publish.log
                 exit 1
@@ -406,7 +434,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    needs: build
+    needs: [build, packed-install]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -429,7 +457,7 @@ jobs:
       - name: Build CLI
         run: cd packages/astria-cli && npm run build
       - name: Create platform packages
-        run: cd packages/astria-cli && npx napi create-npm-dirs
+        run: cd packages/astria-cli && npx napi create-npm-dirs && node ../../scripts/include-native-runtime.mjs
       - name: Pack rehearsal (npm publish --dry-run)
         run: |
           set -e
@@ -437,8 +465,8 @@ jobs:
             name=$(node -p "require('./$dir/package.json').name")
             version=$(node -p "require('./$dir/package.json').version")
             if ! ls "$dir"*.node > /dev/null 2>&1; then
-              echo "$name@$version: no binary artifact — would be skipped"
-              continue
+              echo "$name@$version: no binary artifact — rehearsal failed"
+              exit 1
             fi
             echo "Rehearsing $name@$version"
             (cd "$dir" && npm publish --dry-run --ignore-scripts --access public > /dev/null)

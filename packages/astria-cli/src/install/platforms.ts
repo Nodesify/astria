@@ -1,12 +1,10 @@
 import * as path from 'path';
-import * as os from 'os';
 import type { McpFlavor } from './settings-inject';
 
 export interface PlatformConfig {
   skillFile: string;
   skillDst: string;
-  /** Where skillDst is rooted: the user's home dir (default) or the
-   * project directory (Copilot reads repo-scoped .github/skills/). */
+  /** Platforms whose skills can only be installed in project scope. */
   skillScope?: 'home' | 'project';
   claudeMd: boolean;
   agentsMd: boolean;
@@ -15,7 +13,7 @@ export interface PlatformConfig {
   copilotMd?: boolean;
   settingsHook: 'claude' | 'codex' | 'gemini' | 'opencode' | 'pi' | 'none';
   /** Register the astria MCP server in this platform's config ('codex' is
-   * user-global TOML; the JSON flavors are project-scoped). */
+   * TOML; the JSON flavors are project-scoped). */
   mcp?: McpFlavor;
 }
 
@@ -40,9 +38,7 @@ export const PLATFORMS: Record<string, PlatformConfig> = {
   },
   gemini: {
     skillFile: 'skill-gemini.md',
-    skillDst: os.platform() === 'win32'
-      ? path.join('.agents', 'skills', 'astria', 'SKILL.md')
-      : path.join('.gemini', 'skills', 'astria', 'SKILL.md'),
+    skillDst: path.join('.gemini', 'skills', 'astria', 'SKILL.md'),
     claudeMd: false,
     agentsMd: false,
     geminiMd: true,

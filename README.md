@@ -85,3 +85,5 @@ Requires Rust 1.88+ (declared as `rust-version` in the workspace) and Node.js >=
 MIT — see [LICENSE](LICENSE).
 
 Contributions are welcome and accepted under the [Contributor License Agreement](CLA.md) — see [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+
+Installation defaults to project scope: `astria install --platform codex --scope project`. Use `--scope user` explicitly for user-wide integrations. Run `astria doctor` after setup or upgrades. See the [installation lifecycle guide](https://nodesify.github.io/astria/docs/guides/installation-lifecycle) for supported platforms, upgrade, backup/restore and complete removal.

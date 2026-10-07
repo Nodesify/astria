@@ -61,7 +61,9 @@ fn timestamp() -> String {
 mod export;
 #[path = "graph_update.rs"]
 mod graph_update;
+mod profile;
 mod publish;
+pub(crate) use profile::run_pipeline_using_profile_locked;
 #[path = "semantic_pass.rs"]
 mod semantic_pass;
 mod stages;
@@ -87,6 +89,59 @@ pub fn run_pipeline_with(
     label_communities: bool,
     deep: bool,
     cli_version: Option<&str>,
+) -> astria_core::Result<PipelineResult> {
+    let root = root.canonicalize()?;
+    let guard = astria_core::writer_lock::WriterLock::acquire(&root)?;
+    run_pipeline_with_locked(
+        &root,
+        dedup,
+        embed,
+        label_communities,
+        deep,
+        cli_version,
+        &guard,
+    )
+}
+
+// Backend configuration and usage accounting are process-global. Keep their
+// entire lifetime serialized, after acquiring the project's writer guard.
+static PIPELINE_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) fn lock_pipeline_state() -> std::sync::MutexGuard<'static, ()> {
+    PIPELINE_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The caller holds the writer guard across ingestion and publication.
+pub fn run_pipeline_with_locked(
+    root: &Path,
+    dedup: bool,
+    embed: bool,
+    label_communities: bool,
+    deep: bool,
+    cli_version: Option<&str>,
+    _guard: &astria_core::writer_lock::WriterLock,
+) -> astria_core::Result<PipelineResult> {
+    let _state = lock_pipeline_state();
+    run_pipeline_under_state_lock(
+        root,
+        dedup,
+        embed,
+        label_communities,
+        deep,
+        cli_version,
+        _guard,
+    )
+}
+
+fn run_pipeline_under_state_lock(
+    root: &Path,
+    dedup: bool,
+    embed: bool,
+    label_communities: bool,
+    deep: bool,
+    cli_version: Option<&str>,
+    _guard: &astria_core::writer_lock::WriterLock,
 ) -> astria_core::Result<PipelineResult> {
     let root = if root.exists() {
         root.canonicalize().map_err(astria_core::AstriaError::Io)?
@@ -140,13 +195,6 @@ pub fn run_pipeline_with(
         }
     }
 
-    // Record pipeline start (root is now canonicalized)
-    let run_id: i64 = db.query_row(
-        "INSERT INTO pipeline_runs (started_at, status) VALUES (?1, 'running') RETURNING id",
-        rusqlite::params![timestamp()],
-        |row| row.get(0),
-    )?;
-
     let options = PipelineOptions {
         dedup,
         embed,
@@ -154,6 +202,16 @@ pub fn run_pipeline_with(
         deep,
         cli_version,
     };
+    let indexing_profile = profile::IndexingProfile::capture(&options)?;
+    indexing_profile.validate_change(&root)?;
+
+    // Record pipeline start (root is now canonicalized)
+    let run_id: i64 = db.query_row(
+        "INSERT INTO pipeline_runs (started_at, status) VALUES (?1, 'running') RETURNING id",
+        rusqlite::params![timestamp()],
+        |row| row.get(0),
+    )?;
+
     let result = run_pipeline_inner(&root, &db, &astria_dir, &options);
 
     // Record pipeline completion, including this run's measured LLM spend.
@@ -190,14 +248,11 @@ pub fn run_pipeline_with(
         eprintln!("warning: failed to write cost report: {}", e);
     }
 
+    if result.is_ok() {
+        indexing_profile.save(&root)?;
+    }
     result
 }
-
-/// Semantic similarity stage: embed nodes missing vectors, then regenerate
-/// `similar_to` edges. Runs when explicitly requested, or as a silent
-/// incremental refresh when embeddings already exist and the model cache is
-/// present (never downloads on its own). Explicit requests fail loudly.
-///
 
 /// Options threaded from the napi bindings into the pipeline driver; kept
 /// in one place so the driver never grows a long positional signature.
@@ -390,8 +445,10 @@ fn run_pipeline_inner(
 
     // Semantic similarity pass (local embeddings, no API key): embed new
     // nodes and regenerate similar_to edges BEFORE clustering so they shape
-    // communities and analysis. Explicit --embed fails loudly; the silent
-    // auto-refresh path never triggers a model download.
+    // communities and analysis. The effective indexing policy controls this
+    // stage; disabled embeddings also retract their vectors and relationships.
+    let embeddings_before: i64 =
+        db.query_row("SELECT COUNT(*) FROM node_embeddings", [], |r| r.get(0))?;
     let similar_before: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM edges WHERE relation = 'similar_to'",
@@ -407,7 +464,9 @@ fn run_pipeline_inner(
             |r| r.get(0),
         )
         .unwrap_or(0);
-    if similar_after != similar_before {
+    let embeddings_after: i64 =
+        db.query_row("SELECT COUNT(*) FROM node_embeddings", [], |r| r.get(0))?;
+    if similar_after != similar_before || embeddings_after != embeddings_before {
         graph_mutated = true;
         advance_generation(db)?;
     }

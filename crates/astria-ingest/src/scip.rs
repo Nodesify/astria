@@ -1,214 +1,325 @@
-// scip: ingest a simplified SCIP-style JSON index (documents[] / symbols[]
-// / relationships[] — the same shape upstream astria accepts, not the full
-// protobuf) into an Extraction. Fully local, stdlib JSON only. Symbols from
-// rust-analyzer/SCIP-producing toolchains join the graph with scip_impl /
-// scip_typed / scip_def / scip_ref edges; unresolved targets become stubs.
-
-use std::path::Path;
-
-use sha2::Digest;
-
-use astria_core::ids::normalize_id;
-use astria_core::AstriaError;
-use astria_core::Result;
+//! Standard SCIP ingestion. `Extraction.file_path` owns the index; node and
+//! edge source paths are document citations, independent of update ownership.
+use astria_core::{AstriaError, Result};
 use astria_extract::{ExtractedEdge, ExtractedNode, Extraction};
+use protobuf::Message;
+use scip::types::{occurrence::Typed_range, Index, Occurrence, SymbolInformation};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
-/// Deterministic node id for a (scip file, symbol) pair, mirroring upstream's
-/// `scip_{suffix}_{hash[:12]}` shape (SHA-256 via the shared sha2 crate).
-fn scip_node_id(doc_name: &str, symbol: &str) -> String {
-    let doc_suffix = normalize_id(
-        Path::new(doc_name)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("doc"),
-    );
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(doc_name.as_bytes());
-    hasher.update([0u8]);
-    hasher.update(symbol.as_bytes());
-    let digest = hasher.finalize();
-    let mut id = format!("scip_{doc_suffix}_");
-    for b in &digest[..6] {
-        id.push_str(&format!("{b:02x}"));
+fn error(path: &Path, message: impl Into<String>) -> AstriaError {
+    AstriaError::Parse {
+        file: path.display().to_string(),
+        message: message.into(),
     }
-    id
 }
 
-/// Parse a simplified SCIP JSON file into an Extraction keyed to a virtual
-/// source file (the scip path itself), so rebuilds replace cleanly.
-pub fn parse_scip(scip_path: &Path, text: &str) -> Result<Extraction> {
-    let doc: serde_json::Value = serde_json::from_str(text).map_err(|e| AstriaError::Parse {
-        file: scip_path.display().to_string(),
-        message: format!("invalid SCIP JSON: {e}"),
-    })?;
+fn symbol_id(document: &Path, symbol: &str) -> String {
+    let mut hash = Sha256::new();
+    // Global SCIP symbols already contain package/version identity. Only
+    // local symbols require document scope.
+    if scip::symbol::is_local_symbol(symbol) {
+        hash.update(document.to_string_lossy().replace('\\', "/").as_bytes());
+        hash.update([0]);
+    }
+    hash.update(symbol.as_bytes());
+    format!("scip_{:x}", hash.finalize())
+}
 
-    let documents = doc
-        .get("documents")
-        .and_then(|d| d.as_array())
-        .ok_or_else(|| AstriaError::Parse {
-            file: scip_path.display().to_string(),
-            message: "missing `documents` array".into(),
-        })?;
+fn validate_symbol(path: &Path, symbol: &str) -> Result<()> {
+    if scip::symbol::is_local_symbol(symbol) {
+        scip::symbol::try_parse_local_symbol(symbol)
+            .map_err(|e| error(path, format!("invalid SCIP symbol: {e:?}")))?;
+    } else {
+        scip::symbol::parse_symbol(symbol)
+            .map_err(|e| error(path, format!("invalid SCIP symbol: {e:?}")))?;
+    }
+    Ok(())
+}
 
-    let mut nodes: Vec<ExtractedNode> = Vec::new();
-    let mut edges: Vec<ExtractedEdge> = Vec::new();
-    let virtual_file = scip_path.to_path_buf();
+fn occurrence_line(path: &Path, occurrence: &Occurrence) -> Result<u32> {
+    let (line, start, end_line, end) = match &occurrence.typed_range {
+        Some(Typed_range::SingleLineRange(r)) => {
+            (r.line, r.start_character, r.line, r.end_character)
+        }
+        Some(Typed_range::MultiLineRange(r)) => {
+            (r.start_line, r.start_character, r.end_line, r.end_character)
+        }
+        None => match occurrence.range.as_slice() {
+            [line, start, end] => (*line, *start, *line, *end),
+            [line, start, end_line, end] => (*line, *start, *end_line, *end),
+            _ => {
+                return Err(error(
+                    path,
+                    "invalid SCIP occurrence range: expected 3 or 4 elements",
+                ))
+            }
+        },
+        _ => return Err(error(path, "unsupported SCIP occurrence range")),
+    };
+    if line < 0 || start < 0 || end_line < line || end < 0 || (line == end_line && end < start) {
+        return Err(error(path, "invalid SCIP occurrence range bounds"));
+    }
+    Ok(line as u32 + 1)
+}
 
-    let empty: Vec<serde_json::Value> = Vec::new();
+fn edge(
+    source: String,
+    target: String,
+    relation: &str,
+    path: &Path,
+    line: Option<u32>,
+) -> ExtractedEdge {
+    ExtractedEdge {
+        source,
+        target,
+        relation: relation.into(),
+        confidence: "EXTRACTED".into(),
+        confidence_score: Some(1.0),
+        source_file: path.to_path_buf(),
+        source_line: line,
+    }
+}
 
-    for document in documents {
-        let doc_name = document
-            .get("path")
-            .and_then(|p| p.as_str())
-            .unwrap_or("unknown.scip")
-            .to_string();
-        let symbols = document
-            .get("symbols")
-            .and_then(|s| s.as_array())
-            .unwrap_or(&empty);
-        for symbol in symbols {
-            let symbol_id = symbol
-                .get("symbol")
-                .and_then(|s| s.as_str())
-                .unwrap_or_default()
-                .to_string();
-            if symbol_id.is_empty() {
+fn symbol_node(
+    id: String,
+    symbol: &str,
+    info: Option<&SymbolInformation>,
+    definition: Option<&(PathBuf, u32)>,
+) -> ExtractedNode {
+    use scip::types::symbol_information::Kind;
+    ExtractedNode {
+        id,
+        label: info
+            .filter(|i| !i.display_name.is_empty())
+            .map(|i| i.display_name.clone())
+            .unwrap_or_else(|| symbol.to_string()),
+        // External definitions without an occurrence have no invented citation.
+        source_file: definition.map(|(p, _)| p.clone()).unwrap_or_default(),
+        source_line: definition.map(|(_, l)| *l),
+        docstring: info
+            .filter(|i| !i.documentation.is_empty())
+            .map(|i| i.documentation.join("\n\n")),
+        signature: info
+            .and_then(|i| i.signature_documentation.as_ref())
+            .filter(|s| !s.text.is_empty())
+            .map(|s| s.text.clone()),
+        node_type: info
+            .map(|i| match i.kind.enum_value_or_default() {
+                Kind::Function | Kind::Method | Kind::StaticMethod => "function",
+                Kind::Class | Kind::Struct | Kind::Interface | Kind::Trait => "class",
+                _ => "code",
+            })
+            .unwrap_or("reference")
+            .into(),
+    }
+}
+
+/// Parse native SCIP protobuf or standard protobuf JSON (no custom JSON shape).
+pub fn parse_scip(scip_path: &Path, bytes: impl AsRef<[u8]>) -> Result<Extraction> {
+    let bytes = bytes.as_ref();
+    let index: Index = if bytes.iter().copied().find(|b| !b.is_ascii_whitespace()) == Some(b'{') {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|e| error(scip_path, format!("invalid SCIP JSON encoding: {e}")))?;
+        protobuf_json_mapping::parse_from_str(text)
+            .map_err(|e| error(scip_path, format!("invalid SCIP protobuf JSON: {e}")))?
+    } else {
+        Index::parse_from_bytes(bytes)
+            .map_err(|e| error(scip_path, format!("invalid SCIP protobuf: {e}")))?
+    };
+    let metadata = index
+        .metadata
+        .as_ref()
+        .ok_or_else(|| error(scip_path, "missing SCIP metadata"))?;
+    let root = url::Url::parse(&metadata.project_root)
+        .map_err(|e| error(scip_path, format!("invalid SCIP project_root URI: {e}")))?
+        .to_file_path()
+        .map_err(|_| error(scip_path, "SCIP project_root must be an absolute file URI"))?;
+    if !root.is_absolute() {
+        return Err(error(scip_path, "SCIP project_root must be absolute"));
+    }
+    let mut documents = Vec::new();
+    let mut definitions = HashMap::new();
+    let mut seen_paths = HashSet::new();
+    for document in &index.documents {
+        let relative = &document.relative_path;
+        if relative.is_empty()
+            || relative.contains(['\\', ':'])
+            || relative.split('/').any(|p| matches!(p, "" | "." | ".."))
+        {
+            return Err(error(
+                scip_path,
+                format!("invalid SCIP relative_path: {relative}"),
+            ));
+        }
+        if !seen_paths.insert(relative) {
+            return Err(error(
+                scip_path,
+                format!("duplicate SCIP document: {relative}"),
+            ));
+        }
+        let path = root.join(relative);
+        let file_id = format!(
+            "scip_document_{:x}",
+            Sha256::digest(path.to_string_lossy().replace('\\', "/").as_bytes())
+        );
+        for occurrence in &document.occurrences {
+            let line = occurrence_line(scip_path, occurrence)?;
+            if occurrence.symbol.is_empty() {
                 continue;
             }
-            let display = symbol
-                .get("display_name")
-                .and_then(|s| s.as_str())
-                .unwrap_or_else(|| symbol_id.rsplit('/').next().unwrap_or(&symbol_id))
-                .to_string();
-            let id = scip_node_id(&doc_name, &symbol_id);
-            if !nodes.iter().any(|n| n.id == id) {
-                nodes.push(ExtractedNode {
-                    id: id.clone(),
-                    label: display,
-                    source_file: virtual_file.clone(),
-                    source_line: Some(1),
-                    docstring: None,
-                    signature: None,
-                    node_type: "code".to_string(),
-                });
+            validate_symbol(scip_path, &occurrence.symbol)?;
+            if occurrence.symbol_roles & 1 != 0 {
+                definitions
+                    .entry(symbol_id(&path, &occurrence.symbol))
+                    .or_insert((path.clone(), line));
             }
-
-            let rels = symbol
-                .get("relationships")
-                .and_then(|r| r.as_array())
-                .unwrap_or(&empty);
-            for rel in rels {
-                let target_symbol = rel
-                    .get("symbol")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or_default();
-                if target_symbol.is_empty() || target_symbol == symbol_id {
-                    continue;
+        }
+        documents.push((document, path, file_id));
+    }
+    let mut nodes = BTreeMap::new();
+    let mut edges = Vec::new();
+    for (document, path, file_id) in &documents {
+        nodes.insert(
+            file_id.clone(),
+            ExtractedNode {
+                id: file_id.clone(),
+                label: document.relative_path.clone(),
+                source_file: path.clone(),
+                source_line: None,
+                docstring: None,
+                signature: None,
+                node_type: "file".into(),
+            },
+        );
+        for info in &document.symbols {
+            validate_symbol(scip_path, &info.symbol)?;
+            let id = symbol_id(path, &info.symbol);
+            nodes.insert(
+                id.clone(),
+                symbol_node(id.clone(), &info.symbol, Some(info), definitions.get(&id)),
+            );
+            for relationship in &info.relationships {
+                validate_symbol(scip_path, &relationship.symbol)?;
+                let target = symbol_id(path, &relationship.symbol);
+                for (flag, relation) in [
+                    (relationship.is_implementation, "scip_impl"),
+                    (relationship.is_type_definition, "scip_typed"),
+                    (relationship.is_reference, "scip_ref"),
+                    (relationship.is_definition, "scip_def"),
+                ] {
+                    if flag {
+                        edges.push(edge(
+                            id.clone(),
+                            target.clone(),
+                            relation,
+                            path,
+                            definitions
+                                .get(&id)
+                                .filter(|(p, _)| p == path)
+                                .map(|(_, l)| *l),
+                        ));
+                    }
                 }
-                let target_id = scip_node_id(&doc_name, target_symbol);
-                let relation = if rel.get("is_implementation").and_then(|b| b.as_bool())
-                    == Some(true)
-                {
-                    "scip_impl"
-                } else if rel.get("is_type_definition").and_then(|b| b.as_bool()) == Some(true) {
-                    "scip_typed"
-                } else if rel.get("is_reference").and_then(|b| b.as_bool()) == Some(true) {
-                    "scip_ref"
-                } else {
-                    "scip_def"
-                };
-                edges.push(ExtractedEdge {
-                    source: id.clone(),
-                    target: target_id,
-                    relation: relation.to_string(),
-                    confidence: "EXTRACTED".to_string(),
-                    confidence_score: Some(1.0),
-                    source_file: virtual_file.clone(),
-                    source_line: Some(1),
+                nodes.entry(target.clone()).or_insert_with(|| {
+                    symbol_node(
+                        target.clone(),
+                        &relationship.symbol,
+                        None,
+                        definitions.get(&target),
+                    )
                 });
             }
         }
+        for occurrence in &document.occurrences {
+            if occurrence.symbol.is_empty() {
+                continue;
+            }
+            let id = symbol_id(path, &occurrence.symbol);
+            nodes.entry(id.clone()).or_insert_with(|| {
+                symbol_node(id.clone(), &occurrence.symbol, None, definitions.get(&id))
+            });
+            edges.push(edge(
+                file_id.clone(),
+                id,
+                if occurrence.symbol_roles & 1 != 0 {
+                    "scip_def"
+                } else {
+                    "scip_ref"
+                },
+                path,
+                Some(occurrence_line(scip_path, occurrence)?),
+            ));
+        }
     }
-
-    if nodes.is_empty() {
-        return Err(AstriaError::Parse {
-            file: scip_path.display().to_string(),
-            message: "no symbols found in SCIP JSON".into(),
-        });
+    for info in &index.external_symbols {
+        if scip::symbol::is_local_symbol(&info.symbol) {
+            return Err(error(scip_path, "external SCIP symbol must be global"));
+        }
+        validate_symbol(scip_path, &info.symbol)?;
+        let id = symbol_id(&root, &info.symbol);
+        let external = symbol_node(id.clone(), &info.symbol, Some(info), definitions.get(&id));
+        if nodes.get(&id).is_none_or(|n| n.node_type == "reference") {
+            nodes.insert(id.clone(), external);
+        }
+        for relationship in &info.relationships {
+            if scip::symbol::is_local_symbol(&relationship.symbol) {
+                return Err(error(
+                    scip_path,
+                    "external SCIP relationship must target a global symbol",
+                ));
+            }
+            validate_symbol(scip_path, &relationship.symbol)?;
+            let target = symbol_id(&root, &relationship.symbol);
+            let (source_path, line) = definitions
+                .get(&id)
+                .map(|(p, l)| (p.as_path(), Some(*l)))
+                .unwrap_or((Path::new(""), None));
+            for (flag, relation) in [
+                (relationship.is_implementation, "scip_impl"),
+                (relationship.is_type_definition, "scip_typed"),
+                (relationship.is_reference, "scip_ref"),
+                (relationship.is_definition, "scip_def"),
+            ] {
+                if flag {
+                    edges.push(edge(
+                        id.clone(),
+                        target.clone(),
+                        relation,
+                        source_path,
+                        line,
+                    ));
+                }
+            }
+            nodes.entry(target.clone()).or_insert_with(|| {
+                symbol_node(
+                    target.clone(),
+                    &relationship.symbol,
+                    None,
+                    definitions.get(&target),
+                )
+            });
+        }
     }
-
+    if documents.is_empty() {
+        return Err(error(scip_path, "SCIP index has no documents"));
+    }
     Ok(Extraction {
-        file_path: virtual_file,
-        language: "SCIP".to_string(),
-        nodes,
+        file_path: scip_path.to_path_buf(),
+        language: "SCIP".into(),
+        nodes: nodes.into_values().collect(),
         edges,
     })
 }
 
-/// Parse a SCIP index file from disk.
 pub fn parse_scip_file(scip_path: &Path) -> Result<Extraction> {
-    let text = std::fs::read_to_string(scip_path).map_err(|e| AstriaError::Parse {
-        file: scip_path.display().to_string(),
-        message: format!("read failed: {e}"),
-    })?;
-    parse_scip(scip_path, &text)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scip_round_trips_symbols_and_relationships() {
-        let json = r#"{
-            "documents": [{
-                "path": "src/lib.rs",
-                "language": "rust",
-                "symbols": [
-                    {"symbol": "astria::Graph", "display_name": "Graph", "kind": "Class",
-                     "relationships": [
-                        {"symbol": "astria::GraphLike", "is_implementation": true},
-                        {"symbol": "astria::Node", "is_type_definition": true}
-                     ]},
-                    {"symbol": "astria::GraphLike", "display_name": "GraphLike"}
-                ]
-            }]
-        }"#;
-        let ext = parse_scip(Path::new("index.scip.json"), json).unwrap();
-        // Two symbol entries; astria::Node only appears as a relationship
-        // target and materializes as a stub during build.
-        assert_eq!(ext.nodes.len(), 2);
-        assert!(ext.nodes.iter().any(|n| n.label == "Graph"));
-        // Both relationship targets resolve to the SAME id for the same
-        // symbol (deterministic hash), so impl + typed edges point at
-        // astria::GraphLike's node.
-        let impl_edge = ext
-            .edges
-            .iter()
-            .find(|e| e.relation == "scip_impl")
-            .unwrap();
-        let typed_edge = ext
-            .edges
-            .iter()
-            .find(|e| e.relation == "scip_typed")
-            .unwrap();
-        assert_ne!(impl_edge.target, impl_edge.source);
-        // scip_typed points at astria::Node — a different symbol, so a
-        // different id from the impl target.
-        assert_ne!(typed_edge.target, impl_edge.target);
-        assert_ne!(typed_edge.target, typed_edge.source);
-        // Stable ids across parses.
-        let again = parse_scip(Path::new("index.scip.json"), json).unwrap();
-        for (a, b) in ext.nodes.iter().zip(again.nodes.iter()) {
-            assert_eq!(a.id, b.id, "node ids diverged: {} vs {}", a.label, b.label);
-            assert_eq!(a.label, b.label);
-        }
-        assert_eq!(ext.nodes.len(), again.nodes.len());
-    }
-
-    #[test]
-    fn scip_rejects_garbage() {
-        assert!(parse_scip(Path::new("x.json"), "not json").is_err());
-        assert!(parse_scip(Path::new("x.json"), r#"{"foo": 1}"#).is_err());
-    }
+    // Ownership must identify the index itself, independent of whether callers
+    // spell its path relatively, absolutely, or through a filesystem alias.
+    let canonical = scip_path
+        .canonicalize()
+        .map_err(|e| error(scip_path, format!("resolve index path failed: {e}")))?;
+    let bytes =
+        std::fs::read(&canonical).map_err(|e| error(scip_path, format!("read failed: {e}")))?;
+    parse_scip(&canonical, bytes)
 }

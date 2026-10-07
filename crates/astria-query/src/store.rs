@@ -51,6 +51,8 @@ pub(crate) struct LoadedGraph {
     /// Project root derived from the DB path (`root/.astria/db.sqlite`),
     /// used to shorten stored absolute paths in agent-facing output.
     pub(crate) root: Option<String>,
+    /// Immutable lexical corpus index, built once for this generation.
+    pub(crate) lexical: std::sync::OnceLock<LexicalIndex>,
 }
 
 impl LoadedGraph {
@@ -293,6 +295,7 @@ fn load_graph_uncached(db: &Connection, db_path: &str) -> astria_core::Result<Lo
         graph,
         id_to_idx,
         root,
+        lexical: std::sync::OnceLock::new(),
     })
 }
 

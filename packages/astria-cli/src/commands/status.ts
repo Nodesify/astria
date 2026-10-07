@@ -92,6 +92,7 @@ export async function statusCommand(opts: { graph: string; json?: boolean }) {
           extractionHashVersion: build?.extractionHashVersion ?? null,
           currentExtractionHashVersion: build?.currentExtractionHashVersion ?? null,
           extractionOutdated,
+          staleExternalIndexes: build?.staleExternalIndexes ?? [],
         },
         null,
         2,
@@ -105,6 +106,9 @@ export async function statusCommand(opts: { graph: string; json?: boolean }) {
   console.log(`Edges: ${stats.edgeCount}`);
   console.log(`Communities: ${stats.communityCount}`);
   console.log(`Files tracked: ${stats.fileCount}`);
+  if (build?.staleExternalIndexes?.length) {
+    console.log(`Compiler indexes need reimport: ${build.staleExternalIndexes.join(', ')}`);
+  }
   if (build?.graphPublishedAt) {
     // Stored as unix seconds; render ISO so humans can read it.
     const when = new Date(Number(build.graphPublishedAt) * 1000);

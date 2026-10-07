@@ -1,3 +1,9 @@
+---
+status: resolved
+resolution: Findings implemented; retained as historical evidence. See project-review-2026-10-07.md for the current reliability implementation.
+superseded_by: project-review-2026-10-07.md
+---
+
 # Project review and fix backlog — 3 October 2026
 
 This review found **36 source-backed defects or implementation gaps**, followed by **6 engineering improvements**. The highest priorities are protecting secrets and exported HTML, correcting risk scoring, preventing graph identity/data-loss problems, and repairing build distribution.

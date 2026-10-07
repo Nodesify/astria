@@ -55,14 +55,8 @@ pub fn diagnose_graph(root: String) -> napi::Result<DiagnoseReportJs> {
 
 #[napi(object)]
 pub struct RiskReportJs {
-    pub score: i64,
-    pub level: String,
-    pub changed_files: Vec<String>,
-    pub files_with_symbols: i64,
-    pub impacted: i64,
-    pub by_depth: Vec<String>,
-    pub communities: Vec<String>,
-    pub entries: Vec<String>,
+    /// The complete, versioned source-review record (camelCase keys).
+    pub report_json: String,
     pub text: String,
 }
 
@@ -74,14 +68,11 @@ pub fn risk_report(
     head: Option<String>,
 ) -> napi::Result<RiskReportJs> {
     let root_pb = PathBuf::from(&root);
-    let root_canon = root_pb
-        .canonicalize()
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let (db, _) = pipeline::load_graph_db_flexible(&root_pb)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    // Range mode scores a committed diff (base...head) — the CI/PR shape,
-    // where a clean checkout has no working-tree changes to diff. Without
-    // both refs, the working tree or index is scored for local use.
+    if staged.unwrap_or(false) && base.is_some() {
+        return Err(napi::Error::from_reason(
+            "--staged cannot be combined with a commit range",
+        ));
+    }
     let scope = match (&base, &head) {
         (Some(base), Some(head)) => risk::DiffScope::Range {
             base: base.clone(),
@@ -100,40 +91,12 @@ pub fn risk_report(
             ))
         }
     };
-    let changed = risk::git_changed_files(&root_canon, &scope)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let outcome = risk::compute_risk(&db, &changed, Some(&root_canon))
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let project_root = Some(
-        root_canon
-            .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "/"),
-    );
-    let entries = outcome
-        .entries
-        .iter()
-        .map(|e| {
-            format!(
-                "{} (depth {}) via {} from {}",
-                e.label, e.depth, e.relation, e.via_file
-            )
-        })
-        .collect();
-    let by_depth = outcome
-        .by_depth
-        .iter()
-        .map(|(d, c)| format!("depth {d}: {c}"))
-        .collect();
-    let text = risk::render(&outcome, project_root.as_deref());
+    let outcome =
+        risk::review(&root_pb, &scope).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let text = risk::render(&outcome);
     Ok(RiskReportJs {
-        score: outcome.score as i64,
-        level: risk::level_of(outcome.score).to_string(),
-        changed_files: outcome.changed_files.clone(),
-        files_with_symbols: outcome.files_with_symbols as i64,
-        impacted: outcome.impacted as i64,
-        by_depth,
-        communities: outcome.communities.clone(),
-        entries,
+        report_json: serde_json::to_string(&outcome)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?,
         text,
     })
 }
@@ -294,8 +257,13 @@ pub fn save_query_result(
     let dir = astria_dir.ok_or_else(|| {
         napi::Error::from_reason("save-result needs a repo graph (not a bare db file)".to_string())
     })?;
+    let _writer = astria_core::writer_lock::WriterLock::acquire_in(&dir)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let saved = feedback::save_result(
-        &db,
+        &tx,
         &dir,
         &question,
         &answer,
@@ -304,6 +272,10 @@ pub fn save_query_result(
         source_nodes.as_deref().unwrap_or(&[]),
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    pipeline::advance_generation(&tx).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    tx.commit()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    publish_import(&db, &dir)?;
     Ok(SavedResultJs {
         memory_path: astria_paths::normalize(&saved.memory_path),
         node_id: saved.node_id,
@@ -318,6 +290,8 @@ pub fn reflect(root: String) -> napi::Result<String> {
     let dir = astria_dir.ok_or_else(|| {
         napi::Error::from_reason("reflect needs a repo graph (not a bare db file)".to_string())
     })?;
+    let _writer = astria_core::writer_lock::WriterLock::acquire_in(&dir)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     feedback::reflect(&dir).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
@@ -358,6 +332,11 @@ pub struct GlobalListEntryJs {
     pub tag: String,
     pub nodes: i64,
     pub edges: i64,
+    pub root: String,
+    pub source_commit: Option<String>,
+    pub graph_generation: Option<String>,
+    pub graph_built_at: Option<String>,
+    pub state: String,
 }
 
 #[napi]
@@ -370,6 +349,11 @@ pub fn global_list() -> napi::Result<Vec<GlobalListEntryJs>> {
             tag: e.tag,
             nodes: e.nodes as i64,
             edges: e.edges as i64,
+            root: e.root,
+            source_commit: e.source_commit,
+            graph_generation: e.graph_generation,
+            graph_built_at: e.graph_built_at,
+            state: e.state,
         })
         .collect())
 }
@@ -381,7 +365,7 @@ pub fn global_path(source: String, target: String) -> napi::Result<Option<String
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
-/// Ingest a simplified SCIP JSON index into the repo graph.
+/// Ingest a standard SCIP protobuf or protobuf-JSON index into the repo graph.
 #[napi(object)]
 pub struct IngestCountsJs {
     pub nodes_added: i64,
@@ -398,12 +382,15 @@ pub fn ingest_scip(root: String, scip_path: String) -> napi::Result<IngestCounts
             astria_dir.display()
         )));
     }
+    let _writer = astria_core::writer_lock::WriterLock::acquire(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let db = astria_core::db::open_db(&astria_dir.join("db.sqlite"))
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let extraction = astria_ingest::scip::parse_scip_file(&PathBuf::from(&scip_path))
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let result = astria_build::build(std::slice::from_ref(&extraction), &db)
+    let result = astria_build::external::replace(&extraction, &db)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    publish_import(&db, &astria_dir)?;
     Ok(IngestCountsJs {
         nodes_added: result.nodes_added as i64,
         edges_added: result.edges_added as i64,
@@ -422,16 +409,29 @@ pub fn ingest_postgres(root: String, dsn: String) -> napi::Result<IngestCountsJs
             astria_dir.display()
         )));
     }
+    let _writer = astria_core::writer_lock::WriterLock::acquire(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let db = astria_core::db::open_db(&astria_dir.join("db.sqlite"))
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let extraction = astria_ingest::postgres::ingest_postgres(&dsn)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let result = astria_build::build(std::slice::from_ref(&extraction), &db)
+    let result = astria_build::external::replace(&extraction, &db)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    publish_import(&db, &astria_dir)?;
     Ok(IngestCountsJs {
         nodes_added: result.nodes_added as i64,
         edges_added: result.edges_added as i64,
     })
+}
+
+fn publish_import(db: &rusqlite::Connection, directory: &Path) -> napi::Result<()> {
+    let analysis =
+        astria_analyze::analyze(db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let report = astria_report::generate_report(db, &analysis)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    pipeline::publish_artifacts(db, directory, &report, false)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(())
 }
 
 use astria_export::export_svg;
@@ -505,6 +505,7 @@ pub struct GraphBuildInfoJs {
     /// Extraction rules version compiled into this binary; a graph whose
     /// `extraction_hash_version` differs predates current rules.
     pub current_extraction_hash_version: String,
+    pub stale_external_indexes: Vec<String>,
 }
 
 /// One hub node from `astria god-nodes` (MCP `god_nodes` parity).
@@ -793,6 +794,9 @@ pub fn graph_build_info(root: String) -> napi::Result<GraphBuildInfoJs> {
         extraction_hash_version: meta_value(&db, "extraction_hash_version"),
         build_configuration: meta_value(&db, "build_configuration"),
         current_extraction_hash_version: astria_core::EXTRACTION_HASH_VERSION.to_string(),
+        stale_external_indexes: meta_value(&db, "external_indexes_stale")
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -1487,6 +1491,8 @@ pub fn ingest_url(
             root_pb.display()
         )));
     }
+    let writer = astria_core::writer_lock::WriterLock::acquire(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     let opts = astria_ingest::IngestOptions {
         author,
@@ -1497,7 +1503,7 @@ pub fn ingest_url(
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     // Incremental update picks the new file up (hash manifest sees it as new)
-    pipeline::run_pipeline_with(&root_pb, true, false, false, false, None)
+    pipeline::run_pipeline_using_profile_locked(&root_pb, None, &writer)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(IngestResultJs {
@@ -1591,15 +1597,17 @@ pub fn save_transcript(
         ));
     }
     let dir = root_pb.join(".astria").join("transcripts");
+    let writer = astria_core::writer_lock::WriterLock::acquire(&root_pb)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| napi::Error::from_reason(format!("cannot create {}: {e}", dir.display())))?;
     let saved = dir.join(&name);
-    std::fs::write(&saved, &text)
+    astria_core::writer_lock::write_atomic(&saved, text.as_bytes())
         .map_err(|e| napi::Error::from_reason(format!("cannot write {}: {e}", saved.display())))?;
 
     // Incremental update picks the sidecar up as a document (the detect
     // walk covers .astria/transcripts explicitly).
-    pipeline::run_pipeline_with(&root_pb, true, false, false, false, None)
+    pipeline::run_pipeline_using_profile_locked(&root_pb, None, &writer)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(IngestResultJs {
@@ -1697,6 +1705,8 @@ pub fn cluster_only(
     let root_pb = PathBuf::from(&root);
     let root_pb = root_pb
         .canonicalize()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let _writer = astria_core::writer_lock::WriterLock::acquire(&root_pb)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let db =
         pipeline::load_graph_db(&root_pb).map_err(|e| napi::Error::from_reason(e.to_string()))?;

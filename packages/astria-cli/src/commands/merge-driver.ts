@@ -1,3 +1,4 @@
+import { withInstallLock, writeTextAtomic } from '../install/atomic';
 // Git merge driver for the knowledge graph artifact. Parallel branches both
 // rebuild the graph and both commit `.astria/graph.json` — plain git sees
 // JSON line noise and conflicts. This driver performs a 3-way union merge
@@ -146,7 +147,7 @@ function gitConfigGet(key: string): string | null {
 }
 
 /// Idempotent install: .gitattributes entry + git config driver definition.
-export function mergeDriverInstall(projectDir: string): string[] {
+function mergeDriverInstallRaw(projectDir: string): string[] {
   const messages: string[] = [];
   const attributesPath = join(projectDir, '.gitattributes');
   const graphEntry = `${GRAPH_JSON_PATH} merge=astria`;
@@ -161,7 +162,7 @@ export function mergeDriverInstall(projectDir: string): string[] {
       messages.push(`.gitattributes: ${entry}`);
     }
   }
-  if (changed) writeFileSync(attributesPath, attributes);
+  if (changed) writeTextAtomic(attributesPath, attributes);
 
   execFileSync('git', ['config', 'merge.astria.name', 'astria knowledge graph union-merge'], { cwd: projectDir });
   execFileSync(
@@ -174,8 +175,14 @@ export function mergeDriverInstall(projectDir: string): string[] {
   return messages;
 }
 
-export function mergeDriverUninstall(projectDir: string): string[] {
+function mergeDriverUninstallRaw(projectDir: string): string[] {
   const messages: string[] = [];
+  try {
+    execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: projectDir, stdio: 'pipe', env: { ...process.env, LC_ALL: 'C' } });
+  } catch (error: any) {
+    if (String(error.stderr).includes('not a git repository')) return ['Merge driver: not a git repository'];
+    throw error;
+  }
   const attributesPath = join(projectDir, '.gitattributes');
   if (existsSync(attributesPath)) {
     const kept = readFileSync(attributesPath, 'utf-8')
@@ -184,16 +191,19 @@ export function mergeDriverUninstall(projectDir: string): string[] {
         const t = line.trim();
         return t !== `${GRAPH_JSON_PATH} merge=astria` && t !== `${REPORT_PATH} merge=union` && t !== '';
       });
-    writeFileSync(attributesPath, kept.length ? kept.join('\n') + '\n' : '');
+    writeTextAtomic(attributesPath, kept.length ? kept.join('\n') + '\n' : '');
     messages.push('.gitattributes: astria merge entries removed');
   }
   for (const key of ['merge.astria.name', 'merge.astria.driver']) {
     try {
       execFileSync('git', ['config', '--unset', key], { cwd: projectDir, stdio: 'pipe' });
       messages.push(`git config: ${key} removed`);
-    } catch {
-      // never set — fine
+    } catch (error: any) {
+      if (error.status !== 5) throw error; // git's documented absent-key result
     }
   }
   return messages;
 }
+
+export function mergeDriverInstall(projectDir: string): string[] { return withInstallLock(() => mergeDriverInstallRaw(projectDir)); }
+export function mergeDriverUninstall(projectDir: string): string[] { return withInstallLock(() => mergeDriverUninstallRaw(projectDir)); }

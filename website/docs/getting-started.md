@@ -13,7 +13,7 @@ keywords: [install, npm, getting started, quickstart, astria]
 npm install -g @nodesify/astria
 ```
 
-Requires no Rust toolchain — ships prebuilt native binaries via napi-rs. Node.js >= 22.
+Requires no Rust toolchain on supported platforms — ships prebuilt native binaries via napi-rs. Node.js >= 22. Keep optional dependencies enabled. See [installation lifecycle](./guides/installation-lifecycle) for supported targets, upgrades and removal.
 
 ## Build your first graph
 
@@ -61,7 +61,8 @@ See the [CLI reference](./reference/cli) for every command and flag.
 
 ```bash
 astria mcp          # Run MCP stdio server - query the graph from any AI agent
-astria install      # Install skill files for AI coding assistants
+astria install --scope project  # Install integrations in this project
+astria doctor                   # Verify runtime and setup
 ```
 
 `mcp` exposes the graph over the Model Context Protocol, so any MCP-capable agent (Claude Code, Codex, Cursor, …) can query it — see the [MCP tools reference](./reference/mcp-tools) for the tool list. `install` writes skill files for your assistant of choice; the full setup (platforms, git hooks, the editor guard) is on [Agent integration](./guides/mcp-and-agents).

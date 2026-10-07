@@ -197,7 +197,7 @@ function testOpenCodePlugin() {
   injectOpenCodePlugin(dir2);
   assert(!fs.existsSync(path.join(dir2, '.opencode', 'plugin', 'astria.js')), 'OpenCode: legacy singular plugin file removed');
   const upgraded = readJson(path.join(dir2, '.opencode', 'opencode.json'));
-  assert(!upgraded.plugins, 'OpenCode: invalid plugins key stripped on upgrade');
+  assert(upgraded.plugins?.[0] === './plugin/astria.js', 'OpenCode: unrelated configuration preserved');
   assert(upgraded.theme === 'dark', 'OpenCode: unrelated config preserved on upgrade');
   assert(fs.existsSync(path.join(dir2, '.opencode', 'plugins', 'astria.js')), 'OpenCode: plugin placed in plugins/');
   fs.rmSync(dir2, { recursive: true, force: true });
@@ -695,7 +695,7 @@ function testMarkdownInject() {
 
 // ---- Legacy (pre-1.0 nodesify-graphify) migration ----
 
-function testLegacySkillDirCleanup() {
+function testProjectScopeIsolation() {
   const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-home-'));
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-proj-'));
   const prevUserProfile = process.env.USERPROFILE;
@@ -709,12 +709,12 @@ function testLegacySkillDirCleanup() {
     fs.writeFileSync(legacy, 'name: graphify\n');
 
     const results = installPlatform('codex', project);
-    assert(!fs.existsSync(legacy), 'Legacy skill: old codex skill removed by install');
+    assert(fs.existsSync(legacy), 'Project scope: user skill untouched by install');
     assert(
-      fs.existsSync(path.join(fakeHome, '.agents', 'skills', 'astria', 'SKILL.md')),
-      'Legacy skill: new codex skill installed'
+      fs.existsSync(path.join(project, '.agents', 'skills', 'astria', 'SKILL.md')),
+      'Project scope: codex skill installed in project'
     );
-    assert(results.some((r) => r.includes('Legacy skill file removed')), 'Legacy skill: removal reported');
+    assert(results.some(r => r.includes('Scope: project')), 'Project scope: scope reported');
 
     // Uninstall removes the legacy file too (recreate, then uninstall).
     fs.mkdirSync(path.dirname(legacy), { recursive: true });
@@ -722,7 +722,7 @@ function testLegacySkillDirCleanup() {
     installPlatform('codex', project);
     const { uninstallPlatform } = require('../install') as typeof import('../install');
     uninstallPlatform('codex', project);
-    assert(!fs.existsSync(legacy), 'Legacy skill: uninstall removes the old skill file');
+    assert(fs.existsSync(legacy), 'Project scope: uninstall leaves user skill untouched');
 
     fs.rmSync(path.join(fakeHome, '.agents'), { recursive: true, force: true });
   } finally {
@@ -813,7 +813,7 @@ function testLegacyMigration() {
   assert(!fs.existsSync(path.join(ocDir, '.opencode', 'plugins', 'graphify.js')), 'Legacy OpenCode: legacy plugin file removed');
   assert(fs.existsSync(path.join(ocDir, '.opencode', 'plugins', 'astria.js')), 'Legacy OpenCode: astria plugin written to plugins/');
   const ocConfig = readJson(path.join(ocDir, '.opencode', 'opencode.json'));
-  assert(!ocConfig.plugins, 'Legacy OpenCode: invalid plugins key stripped');
+  assert(ocConfig.plugins, 'OpenCode: unrelated configuration preserved');
   // uninstall removes both eras
   assert(removeOpenCodePlugin(ocDir) === true, 'Legacy OpenCode: remove works');
   fs.rmSync(ocDir, { recursive: true, force: true });
@@ -898,7 +898,7 @@ function testCopilotInstructions() {
       fs.existsSync(path.join(project, '.github', 'skills', 'astria', 'SKILL.md')),
       'Copilot: skill file installed'
     );
-    assert(!fs.existsSync(staleHomeSkill), 'Copilot: stale home-dir skill copy removed');
+    assert(fs.existsSync(staleHomeSkill), 'Copilot: user-scope copy untouched');
     // AGENTS.md gets the managed section...
     assert(
       fs.readFileSync(path.join(project, 'AGENTS.md'), 'utf-8').includes('## astria'),
@@ -966,7 +966,7 @@ function testFileStemSkillLayouts() {
     for (const platform of ['cline', 'roo']) {
       installPlatform(platform, project);
       const cfg = PLATFORMS[platform];
-      const dst = path.join(fakeHome, cfg.skillDst);
+      const dst = path.join(project, cfg.skillDst);
       assert(fs.existsSync(dst), platform + ': skill file survives its own install');
     }
   } finally {
@@ -1151,7 +1151,7 @@ testPiExtension();
 testFileStemSkillLayouts();
 testMarkdownInject();
 testLegacyMigration();
-testLegacySkillDirCleanup();
+testProjectScopeIsolation();
 testCopilotInstructions();
 testAuditFixes();
 

@@ -12,6 +12,8 @@ publish = false
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
+tempfile = "3"
+url = { workspace = true }
 napi = { version = "3", features = ["tokio_rt"] }
 napi-derive = "3"
 astria-bolt = { workspace = true }

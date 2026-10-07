@@ -11,7 +11,8 @@
 import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { graphBuildInfo, healthReport, riskReport, verifySourceCommit } from '../native';
+import { graphBuildInfo, healthReport, verifySourceCommit } from '../native';
+import { changeReview, ChangeReview } from './change-review';
 
 const BOLD = '\x1b[1m';
 const GREEN = '\x1b[32m';
@@ -76,6 +77,7 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
     }
 
     const checks: Check[] = [];
+    let review: ChangeReview | null = null;
     const dbPath = join(opts.graph, '.astria', 'db.sqlite');
 
     // 1. The graph exists and carries build provenance.
@@ -196,20 +198,14 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
         });
       } else {
         try {
-          const useRange = opts.base !== undefined;
-          const risk = riskReport(
-            opts.graph,
-            opts.staged === true && !useRange,
-            useRange ? (opts.base as string) : undefined,
-            useRange ? (opts.head ?? 'HEAD') : undefined,
-          );
-          const riskPassed = risk.score <= maxRisk;
+          review = changeReview(opts);
+          const riskPassed = review.coverageComplete && review.score !== null && review.score <= maxRisk;
           checks.push({
             name: 'diff-risk',
             passed: riskPassed,
-            detail: useRange
-              ? `diff risk ${risk.score}/100 for ${opts.base}...${opts.head ?? 'HEAD'} (ceiling ${maxRisk}), ${risk.impacted} symbols impacted across ${risk.changedFiles.length} changed file(s)`
-              : `diff risk ${risk.score}/100 (ceiling ${maxRisk}), ${risk.impacted} symbols impacted across ${risk.changedFiles.length} changed file(s)`,
+            detail: review.coverageComplete
+              ? `change risk ${review.score}/100 (ceiling ${maxRisk}); ${review.impacted} surviving consumers, ${review.directConsumers} direct, ${review.testConsumers} tests; base ${review.baseCommit}, head ${review.headCommit ?? review.afterIdentity}`
+              : `coverage incomplete — risk is unknown: ${review.coverageIssues.slice(0, 5).join('; ')}`,
           });
         } catch (e: any) {
           checks.push({
@@ -224,13 +220,14 @@ export async function mergeGateCommand(opts: MergeGateOptions) {
     const passed = checks.every((c) => c.passed);
 
     if (opts.json) {
-      console.log(JSON.stringify({ passed, checks }, null, 2));
+      console.log(JSON.stringify({ passed, checks, review }, null, 2));
     } else {
       console.log(`${BOLD}Merge gate — ${passed ? 'PASSED ✓' : 'FAILED ✗'}${RESET}\n`);
       for (const check of checks) {
         const mark = check.passed ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
         console.log(` ${mark} ${check.name}: ${check.detail}`);
       }
+      if (review) console.log(`\n${review.text}`);
       if (!passed) {
         console.log(`\n${DIM}Fix the failing checks or adjust the thresholds — this gate is what the hosted tier enforces on every merge.${RESET}`);
       }
