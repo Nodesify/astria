@@ -709,7 +709,12 @@ function testProjectScopeIsolation() {
     fs.writeFileSync(legacy, 'name: graphify\n');
 
     const results = installPlatform('codex', project);
-    assert(fs.existsSync(legacy), 'Project scope: user skill untouched by install');
+    // Assert by reading the fixture: an existence check followed by the
+    // recreate-write below is the check-then-act pattern CodeQL flags.
+    assert(
+      fs.readFileSync(legacy, 'utf8') === 'name: graphify\n',
+      'Project scope: user skill untouched by install'
+    );
     assert(
       fs.existsSync(path.join(project, '.agents', 'skills', 'astria', 'SKILL.md')),
       'Project scope: codex skill installed in project'
@@ -717,10 +722,7 @@ function testProjectScopeIsolation() {
     assert(results.some(r => r.includes('Scope: project')), 'Project scope: scope reported');
 
     // Uninstall removes the legacy file too (recreate, then uninstall).
-    // Deliberate recreate of a test fixture in test-owned temp space, not
-    // shared state; no other process touches this path.
     fs.mkdirSync(path.dirname(legacy), { recursive: true });
-    // codeql[js/file-system-race]
     fs.writeFileSync(legacy, 'name: graphify\n');
     installPlatform('codex', project);
     const { uninstallPlatform } = require('../install') as typeof import('../install');
