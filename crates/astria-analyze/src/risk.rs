@@ -1,478 +1,368 @@
-// risk: the PR gate — blast radius of the current git diff. Changed files
-// are mapped to graph nodes, `affected` runs reverse reachability per
-// seed, and the union is scored so a reviewer (or CI) can triage without
-// reading the whole diff. Read-only: this never mutates the graph.
+//! Source-grounded change review. Both revisions are extracted in memory;
+//! deleted APIs retain their old consumers without altering the checkout.
+mod impact;
+mod snapshot;
 
-use rusqlite::Connection;
-use std::collections::BTreeMap;
+use astria_core::Result;
+use serde::Serialize;
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::time::Instant;
 
-/// Changed files that map to no graph node cost nothing — renames of
-/// untracked assets, docs-only edits — but they are still listed.
-pub struct RiskOutcome {
-    pub score: u32,
-    pub changed_files: Vec<String>,
-    /// Files that actually contain graph symbols.
-    pub files_with_symbols: usize,
-    pub impacted: usize,
-    pub by_depth: BTreeMap<u32, usize>,
-    pub communities: Vec<String>,
-    pub entries: Vec<RiskEntry>,
-}
-
-pub struct RiskEntry {
-    pub label: String,
-    pub depth: u32,
-    pub relation: String,
-    pub via_file: String,
-}
-
-/// Heuristic score: each changed file carrying graph symbols is a standing
-/// risk, each impacted symbol adds reach, and cross-community reach costs
-/// most. Documented here and in the rendered report — it is a triage
-/// signal, not a proof.
-fn score_outcome(files_with_symbols: usize, impacted: usize, communities: usize) -> u32 {
-    let raw = 8 * files_with_symbols + 2 * impacted + 6 * communities;
-    raw.min(100) as u32
-}
-
-fn risk_level(score: u32) -> &'static str {
-    match score {
-        0..=29 => "low",
-        30..=59 => "medium",
-        _ => "high",
-    }
-}
-
-/// Which diff a risk run scores.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffScope {
-    /// Working tree vs HEAD (local edits).
     WorkingTree,
-    /// Index vs HEAD (`--cached`).
     Staged,
-    /// Commit range `base...head` (merge-base diff). This is the CI/PR
-    /// mode: a clean checkout of a PR has no working-tree or index
-    /// changes, so the committed diff is only visible through an explicit
-    /// range.
     Range { base: String, head: String },
 }
 
-/// Refuse ref-looking arguments that could parse as git flags.
-fn valid_ref(name: &str) -> astria_core::Result<()> {
-    if name.is_empty() || name.starts_with('-') || name.contains("..:") {
-        return Err(astria_core::AstriaError::Graph(format!(
-            "invalid git ref: {name:?}"
-        )));
-    }
-    Ok(())
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedFile {
+    pub status: String,
+    pub old_path: Option<String>,
+    pub new_path: Option<String>,
 }
 
-/// `git diff --name-only` in NUL-separated form (so quoted
-/// Unicode/space-containing filenames are not misinterpreted by Git's
-/// default C-quoting) over the working tree, the index, or an explicit
-/// commit range. Untracked files are invisible to `git diff` — documented
-/// in the rendered report.
-pub fn git_changed_files(root: &Path, scope: &DiffScope) -> astria_core::Result<Vec<String>> {
-    let mut cmd = std::process::Command::new("git");
-    cmd.arg("-C")
-        .arg(root)
-        .arg("diff")
-        .arg("--name-only")
-        .arg("-z");
-    match scope {
-        DiffScope::WorkingTree => {
-            cmd.arg("HEAD");
-        }
-        DiffScope::Staged => {
-            cmd.arg("--cached");
-        }
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedDeclaration {
+    pub id: String,
+    pub label: String,
+    pub file: String,
+    pub line: u32,
+    pub end_line: u32,
+    pub kind: String,
+    pub snapshot: String,
+    pub change: String,
+    pub owners: Vec<String>,
+    pub owner_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceStep {
+    pub from: String,
+    pub to: String,
+    pub relation: String,
+    pub evidence: String,
+    pub file: String,
+    pub line: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Consumer {
+    pub id: String,
+    pub label: String,
+    pub file: String,
+    pub line: Option<u32>,
+    pub snapshot: String,
+    pub changed_id: String,
+    pub depth: u32,
+    pub evidence: String,
+    pub still_present: bool,
+    pub is_test: bool,
+    pub owners: Vec<String>,
+    pub owner_source: Option<String>,
+    pub path: Vec<EvidenceStep>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewReport {
+    pub schema_version: u32,
+    /// Missing coverage has no numeric score: unknown is never zero.
+    pub score: Option<u32>,
+    pub level: String,
+    pub scope: String,
+    pub base_commit: String,
+    pub requested_base_commit: String,
+    pub head_commit: Option<String>,
+    pub before_identity: String,
+    pub after_identity: String,
+    pub changed_files: Vec<ChangedFile>,
+    pub declarations: Vec<ChangedDeclaration>,
+    pub consumers: Vec<Consumer>,
+    pub impacted: usize,
+    pub direct_consumers: usize,
+    pub inferred_consumers: usize,
+    pub test_consumers: usize,
+    pub coverage_complete: bool,
+    pub coverage_issues: Vec<String>,
+    pub unresolved_before: usize,
+    pub unresolved_after: usize,
+    pub files_indexed_before: usize,
+    pub files_indexed_after: usize,
+    pub indexing_ms: u64,
+}
+
+pub fn review(root: &Path, scope: &DiffScope) -> Result<ReviewReport> {
+    let started = Instant::now();
+    let provided_root = root.canonicalize()?;
+    let root_output = snapshot::git(&provided_root, &["rev-parse", "--show-toplevel"])?;
+    let root_text = std::str::from_utf8(&root_output)
+        .map_err(|_| astria_core::AstriaError::Graph("repository root is not UTF-8".into()))?;
+    let root = Path::new(root_text.trim_end_matches(['\r', '\n'])).canonicalize()?;
+    let head_now = snapshot::resolve_commit(&root, "HEAD")?;
+    let (requested_base, base, head) = match scope {
         DiffScope::Range { base, head } => {
-            valid_ref(base)?;
-            valid_ref(head)?;
-            cmd.arg(format!("{base}...{head}"));
+            let base = snapshot::resolve_commit(&root, base)?;
+            let head = snapshot::resolve_commit(&root, head)?;
+            let common = snapshot::merge_base(&root, &base, &head)?;
+            (base, common, head)
         }
-    }
-    let out = cmd.output().map_err(astria_core::AstriaError::Io)?;
-    if !out.status.success() {
-        return Err(astria_core::AstriaError::Graph(format!(
-            "git diff failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .split('\0')
-        .map(|l| l.trim().replace('\\', "/"))
-        .filter(|l| !l.is_empty())
-        .collect())
-}
-
-/// Represent a changed path exactly as persistence stores `source_file`:
-/// normalized absolute forward-slash paths. Git reports repository-relative
-/// paths, so relative inputs are joined onto the canonical project root;
-/// absolute inputs are normalized directly.
-fn stored_path(file: &str, root: Option<&Path>) -> String {
-    match root {
-        Some(root) => {
-            let p = Path::new(file);
-            if p.is_absolute() {
-                astria_paths::normalize(p)
-            } else {
-                astria_paths::normalize(&root.join(p))
+        _ => (head_now.clone(), head_now.clone(), head_now.clone()),
+    };
+    let changes = snapshot::changes(&root, scope, &base, &head)?;
+    let before_sources = snapshot::load(&root, snapshot::Revision::Commit(&base))?;
+    let after_revision = || match scope {
+        DiffScope::Range { .. } => snapshot::Revision::Commit(&head),
+        DiffScope::Staged => snapshot::Revision::Index,
+        DiffScope::WorkingTree => snapshot::Revision::WorkingTree,
+    };
+    let after_sources = snapshot::load(&root, after_revision())?;
+    let before = impact::build(before_sources);
+    let after = impact::build(after_sources);
+    let mut issues = Vec::new();
+    issues.extend(before.issues.iter().map(|s| format!("before: {s}")));
+    issues.extend(after.issues.iter().map(|s| format!("after: {s}")));
+    let mut declarations = Vec::new();
+    let mut old_seeds = BTreeSet::new();
+    let mut new_seeds = BTreeSet::new();
+    for change in &changes {
+        let (old_hunks, new_hunks) = snapshot::hunks(&root, scope, &base, &head, change)?;
+        let no_hunks = old_hunks.is_empty() && new_hunks.is_empty();
+        let moved = change.old_path != change.new_path;
+        for (graph, path, hunks, seeds, version, other) in [
+            (
+                &before,
+                &change.old_path,
+                &old_hunks,
+                &mut old_seeds,
+                "before",
+                &after,
+            ),
+            (
+                &after,
+                &change.new_path,
+                &new_hunks,
+                &mut new_seeds,
+                "after",
+                &before,
+            ),
+        ] {
+            let Some(path) = path else { continue };
+            if !snapshot::is_code(path) {
+                issues.push(format!(
+                    "{version}: {path}: change has no structural dependency model"
+                ));
+                continue;
             }
-        }
-        None => file.to_string(),
-    }
-}
-
-/// Union the reverse reachability of every node defined in the changed
-/// files. Duplicate hits keep their minimum depth (closest cause wins).
-/// `root` is the canonical project root; when present, Git's
-/// repository-relative paths are normalized to the absolute representation
-/// the graph stores.
-pub fn compute_risk(
-    db: &Connection,
-    changed_files: &[String],
-    root: Option<&Path>,
-) -> astria_core::Result<RiskOutcome> {
-    let mut impacted_ids: std::collections::HashMap<String, (u32, String, String)> =
-        std::collections::HashMap::new();
-    let mut seed_ids: Vec<String> = Vec::new();
-    let mut files_with_symbols = 0usize;
-    let communities: Vec<String>;
-
-    for file in changed_files {
-        let stored = stored_path(file, root);
-        let seeds: Vec<(String, String)> = {
-            let mut stmt = db.prepare(
-                "SELECT id, label FROM nodes WHERE source_file = ?1 AND file_type = 'code'",
-            )?;
-            let rows = stmt.query_map(rusqlite::params![stored], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?;
-            rows.collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        if seeds.is_empty() {
-            continue;
-        }
-        files_with_symbols += 1;
-        for (seed_id, _label) in &seeds {
-            seed_ids.push(seed_id.clone());
-            // Traversal failures are real errors (the seeds were just read
-            // from this database — "no longer resolves" is not a legitimate
-            // case here) and must surface, not silently shrink the blast
-            // radius a merge decision relies on.
-            let result = crate::affected::affected(db, seed_id, 2, None)?;
-            for hit in &result.hits {
-                impacted_ids.entry(hit.id.clone()).or_insert((
-                    hit.depth,
-                    hit.relation.clone(),
-                    hit.via_file.clone(),
+            let selected = graph.select(path, hunks, moved || change.status == "untracked");
+            if selected.is_empty()
+                && change.old_path == change.new_path
+                && no_hunks
+                && change.status != "untracked"
+            {
+                // Includes mode-only and binary changes: not represented by line
+                // hunks and therefore outside the declaration impact model.
+                issues.push(format!(
+                    "{version}: {path}: metadata/binary change has no declaration hunks"
                 ));
             }
-        }
-    }
-
-    // Communities touched: the changed files' own communities count too —
-    // editing auth.rs means touching Auth even when nothing else breaks.
-    // One parameterized batch query per 500 ids keeps the SQL variable
-    // limit far away.
-    let mut touched: std::collections::BTreeMap<i64, String> = Default::default();
-    {
-        let mut query_ids: Vec<String> = impacted_ids.keys().cloned().collect();
-        query_ids.extend(seed_ids.iter().cloned());
-        let ids: Vec<&String> = query_ids.iter().collect();
-        for chunk in ids.chunks(500) {
-            let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let sql = format!(
-                "SELECT DISTINCT community, (SELECT label FROM communities c WHERE c.id = n.community)
-                 FROM nodes n WHERE n.community IS NOT NULL AND n.id IN ({placeholders})"
-            );
-            let mut stmt = db.prepare(&sql)?;
-            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
-            })?;
-            for row in rows {
-                let (community, label) = row?;
-                touched
-                    .entry(community)
-                    .or_insert_with(|| label.unwrap_or_else(|| format!("community {community}")));
+            if selected.is_empty() && (moved || !hunks.is_empty()) {
+                issues.push(format!(
+                    "{version}: {path}: changed source could not be mapped to declarations"
+                ));
+            }
+            for id in selected {
+                let action = if change.status.starts_with('R') {
+                    "renamed"
+                } else if other.nodes.contains_key(&id) {
+                    "modified"
+                } else if version == "before" {
+                    "removed"
+                } else {
+                    "added"
+                };
+                declarations.push(graph.declaration(&id, version, action));
+                seeds.insert(id);
             }
         }
-        communities = touched.into_values().collect();
     }
-
-    let mut by_depth: BTreeMap<u32, usize> = Default::default();
-    let mut entries: Vec<RiskEntry> = Vec::new();
-    for (id, (depth, relation, via_file)) in &impacted_ids {
-        *by_depth.entry(*depth).or_insert(0) += 1;
-        if entries.len() < 10 {
-            let label = node_label(db, id);
-            entries.push(RiskEntry {
-                label,
-                depth: *depth,
-                relation: relation.clone(),
-                via_file: via_file.clone(),
-            });
+    let mut consumers = before.consumers(&old_seeds, "before", &after);
+    consumers.extend(after.consumers(&new_seeds, "after", &after));
+    consumers.sort_by(|a, b| {
+        a.depth
+            .cmp(&b.depth)
+            .then_with(|| a.file.cmp(&b.file))
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.snapshot.cmp(&b.snapshot))
+            .then_with(|| a.changed_id.cmp(&b.changed_id))
+    });
+    declarations.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.snapshot.cmp(&b.snapshot))
+    });
+    // Detect concurrent source/index changes rather than certify a mixed snapshot.
+    if !matches!(scope, DiffScope::Range { .. }) {
+        let verified = snapshot::load(&root, after_revision())?;
+        if verified.identity != after.identity
+            || snapshot::resolve_commit(&root, "HEAD")? != head_now
+        {
+            issues.push(
+                "source/index or HEAD changed during review; rerun on a stable snapshot".into(),
+            );
         }
+        issues.extend(
+            verified
+                .issues
+                .into_iter()
+                .map(|s| format!("verification: {s}")),
+        );
     }
-    entries.sort_by_key(|e| e.depth);
-
-    let score = score_outcome(files_with_symbols, impacted_ids.len(), communities.len());
-    Ok(RiskOutcome {
+    issues.sort();
+    issues.dedup();
+    let unique_count = |predicate: &dyn Fn(&Consumer) -> bool| {
+        consumers
+            .iter()
+            .filter(|c| c.still_present && predicate(c))
+            .map(|c| &c.id)
+            .collect::<BTreeSet<_>>()
+            .len()
+    };
+    let impacted = unique_count(&|_| true);
+    let direct = unique_count(&|c| c.depth == 1);
+    let inferred = unique_count(&|c| c.evidence == "INFERRED");
+    let tests = unique_count(&|c| c.is_test);
+    let complete = issues.is_empty();
+    let changed_count = declarations
+        .iter()
+        .map(|d| (&d.file, &d.id))
+        .collect::<BTreeSet<_>>()
+        .len();
+    let score = complete.then(|| (changed_count.saturating_mul(2) + impacted).min(100) as u32);
+    Ok(ReviewReport {
+        schema_version: 1,
         score,
-        changed_files: changed_files.to_vec(),
-        files_with_symbols,
-        impacted: impacted_ids.len(),
-        by_depth,
-        communities,
-        entries,
+        level: score
+            .map_or("unknown", |v| {
+                if v < 30 {
+                    "low"
+                } else if v < 60 {
+                    "medium"
+                } else {
+                    "high"
+                }
+            })
+            .into(),
+        scope: match scope {
+            DiffScope::WorkingTree => "working-tree",
+            DiffScope::Staged => "staged",
+            DiffScope::Range { .. } => "commit-range",
+        }
+        .into(),
+        base_commit: base,
+        requested_base_commit: requested_base,
+        head_commit: matches!(scope, DiffScope::Range { .. }).then_some(head),
+        before_identity: before.identity,
+        after_identity: after.identity,
+        changed_files: changes,
+        declarations,
+        consumers,
+        impacted,
+        direct_consumers: direct,
+        inferred_consumers: inferred,
+        test_consumers: tests,
+        coverage_complete: complete,
+        coverage_issues: issues,
+        unresolved_before: before.unresolved_edges,
+        unresolved_after: after.unresolved_edges,
+        files_indexed_before: before.files_indexed,
+        files_indexed_after: after.files_indexed,
+        indexing_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
     })
 }
 
-fn node_label(db: &Connection, id: &str) -> String {
-    db.query_row(
-        "SELECT label FROM nodes WHERE id = ?1",
-        rusqlite::params![id],
-        |r| r.get::<_, String>(0),
-    )
-    .unwrap_or_else(|_| id.to_string())
-}
-
-pub fn level_of(score: u32) -> &'static str {
-    risk_level(score)
-}
-
-/// Markdown rendering, shaped to paste straight into a PR description.
-pub fn render(outcome: &RiskOutcome, root: Option<&str>) -> String {
-    let rel = |path: &str| -> String {
-        match root {
-            Some(r) => astria_paths::relative_display(path, r),
-            None => path.to_string(),
-        }
-    };
-    let mut out = String::new();
-    out.push_str(&format!(
-        "# Change Risk Report\n\n**Score: {}/100 ({})** — heuristic: 8 per changed file with graph symbols, 2 per impacted symbol, 6 per community touched. A triage signal, not a proof.\n\n",
-        outcome.score,
-        risk_level(outcome.score)
-    ));
-    out.push_str(&format!(
-        "## Changed files ({} tracked, {} with graph symbols)\n\n",
-        outcome.changed_files.len(),
-        outcome.files_with_symbols
-    ));
-    for f in &outcome.changed_files {
-        out.push_str(&format!("- {}\n", rel(f)));
-    }
-    out.push('\n');
-
-    out.push_str(&format!("## Impacted symbols ({})\n\n", outcome.impacted));
-    if outcome.by_depth.is_empty() {
-        out.push_str("None — the diff touches no graph-connected code.\n\n");
-    } else {
-        for (depth, count) in &outcome.by_depth {
-            out.push_str(&format!("- depth {depth}: {count} symbol(s)\n"));
-        }
-        out.push('\n');
-    }
-
-    if !outcome.communities.is_empty() {
+pub fn render(report: &ReviewReport) -> String {
+    let score = report
+        .score
+        .map(|s| format!("{s}/100 ({})", report.level))
+        .unwrap_or_else(|| "unknown — incomplete coverage".into());
+    let mut out = format!("# Change review\n\nCoverage: {}.\n\n{} changed file(s), {} declaration records, {} observed surviving consumers ({} direct, {} inferred, {} test consumers).\n\nBase: {}\nHead: {}\nScope: {}\n\n",
+        if report.coverage_complete { "all supported source analyzed" } else { "incomplete — missing evidence is unknown, not zero impact" },
+        report.changed_files.len(), report.declarations.len(), report.impacted, report.direct_consumers, report.inferred_consumers, report.test_consumers,
+        report.base_commit, report.head_commit.as_deref().unwrap_or(&report.after_identity), report.scope);
+    out.push_str("## Changed declarations\n\n");
+    for declaration in &report.declarations {
         out.push_str(&format!(
-            "## Communities touched ({})\n\n",
-            outcome.communities.len()
+            "- {} {} [{}] at {}:{}–{} ({})",
+            declaration.change,
+            declaration.label,
+            declaration.snapshot,
+            declaration.file,
+            declaration.line,
+            declaration.end_line,
+            declaration.kind
         ));
-        for c in &outcome.communities {
-            out.push_str(&format!("- {c}\n"));
-        }
-        out.push('\n');
-    }
-
-    if !outcome.entries.is_empty() {
-        out.push_str("## Review focus (closest impacted first)\n\n");
-        for e in &outcome.entries {
+        if !declaration.owners.is_empty() {
             out.push_str(&format!(
-                "- **{}** (depth {}) via {} from {}\n",
-                e.label,
-                e.depth,
-                e.relation,
-                rel(&e.via_file)
+                " — owners {} ({})",
+                declaration.owners.join(", "),
+                declaration.owner_source.as_deref().unwrap_or("")
             ));
         }
         out.push('\n');
     }
-    out.push_str(
-        "_Untracked files are invisible to `git diff`; run the graph update (`astria update`) before scoring for full coverage._\n",
-    );
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use astria_core::db::open_db_in_memory;
-
-    fn seed(db: &Connection) {
-        db.execute_batch(
-            "INSERT INTO nodes (id, label, file_type, source_file, community) VALUES
-                ('a', 'auth_login()', 'code', 'src/auth.rs', 0),
-                ('b', 'session_store()', 'code', 'src/session.rs', 0),
-                ('c', 'api_handler()', 'code', 'src/api.rs', 1);
-             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
-                ('c', 'a', 'calls', 'EXTRACTED', 'src/api.rs'),
-                ('a', 'b', 'calls', 'EXTRACTED', 'src/auth.rs');
-             INSERT INTO communities (id, label, size) VALUES (0, 'Auth', 2), (1, 'Api', 1);",
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn diff_on_one_file_union_reachability() {
-        let db = open_db_in_memory().unwrap();
-        seed(&db);
-        let outcome = compute_risk(&db, &["src/auth.rs".to_string()], None).unwrap();
-        // auth.rs defines a; a reaches b at depth 1. c calls a, but reverse
-        // reachability from a does not include its callers.
-        assert_eq!(outcome.files_with_symbols, 1);
-        assert_eq!(outcome.impacted, 1);
-        assert_eq!(outcome.by_depth.get(&1), Some(&1));
-    }
-
-    #[test]
-    fn git_relative_paths_match_absolute_source_files() {
-        // Persistence stores normalized absolute paths; Git reports
-        // repository-relative ones. With the canonical root supplied, a
-        // relative diff path must find the symbols (previously the
-        // exact-equality lookup always missed and scored the diff zero).
-        let db = open_db_in_memory().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        let stored = astria_paths::normalize(&root.join("src/auth.rs"));
-        db.execute(
-            "INSERT INTO nodes (id, label, file_type, source_file, community) VALUES
-                ('a', 'auth_login()', 'code', ?1, 0)",
-            [&stored],
-        )
-        .unwrap();
-
-        let outcome = compute_risk(&db, &["src/auth.rs".to_string()], Some(&root)).unwrap();
-        assert_eq!(
-            outcome.files_with_symbols, 1,
-            "relative git path must resolve to the absolute stored path"
-        );
-
-        // Absolute changed paths normalize to the same representation.
-        let outcome = compute_risk(&db, &[stored], Some(&root)).unwrap();
-        assert_eq!(outcome.files_with_symbols, 1);
-    }
-
-    #[test]
-    fn nul_separated_filenames_with_spaces_and_unicode() {
-        // Git's -z output never C-quotes; paths with spaces/Unicode arrive
-        // verbatim between NULs.
-        let dir = tempfile::tempdir().unwrap();
-        let repo = dir.path().join("repo");
-        std::fs::create_dir_all(repo.join("src")).unwrap();
-        let run = |args: &[&str]| {
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repo)
-                .args(args)
-                .output()
-                .unwrap()
-        };
-        run(&["init", "-q"]);
-        run(&["config", "user.email", "t@t"]);
-        run(&["config", "user.name", "t"]);
-        std::fs::write(repo.join("src/a b.rs"), "fn a() {}").unwrap();
-        std::fs::write(repo.join("src/中文.rs"), "fn c() {}").unwrap();
-        run(&["add", "."]);
-        run(&["commit", "-qm", "first"]);
-        std::fs::write(repo.join("src/a b.rs"), "fn a() { let _ = 1; }").unwrap();
-        std::fs::write(repo.join("src/中文.rs"), "fn c() { let _ = 1; }").unwrap();
-
-        let changed = git_changed_files(&repo, &DiffScope::WorkingTree).unwrap();
-        assert_eq!(
-            changed,
-            vec!["src/a b.rs".to_string(), "src/中文.rs".to_string()]
-        );
-    }
-
-    #[test]
-    fn range_refs_are_validated() {
-        let dir = tempfile::tempdir().unwrap();
-        let err = git_changed_files(
-            dir.path(),
-            &DiffScope::Range {
-                base: "--upload-pack=evil".into(),
-                head: "HEAD".into(),
+    out.push_str("\n## Review and validation focus\n\n");
+    for consumer in &report.consumers {
+        out.push_str(&format!(
+            "- {}{} at {}:{} [{}; {}; depth {}; {}] from {}",
+            if consumer.is_test { "test: " } else { "" },
+            consumer.label,
+            consumer.file,
+            consumer.line.unwrap_or(1),
+            consumer.snapshot,
+            consumer.evidence,
+            consumer.depth,
+            if consumer.still_present {
+                "present after change"
+            } else {
+                "also removed"
             },
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("invalid git ref"), "got: {err}");
+            consumer.changed_id
+        ));
+        if !consumer.owners.is_empty() {
+            out.push_str(&format!(
+                " — owners {} ({})",
+                consumer.owners.join(", "),
+                consumer.owner_source.as_deref().unwrap_or("")
+            ));
+        }
+        out.push('\n');
+        for step in &consumer.path {
+            out.push_str(&format!(
+                "  - {} → {}: {} {} at {}:{}\n",
+                step.from,
+                step.to,
+                step.relation,
+                step.evidence,
+                step.file,
+                step.line.unwrap_or(1)
+            ));
+        }
     }
-
-    #[test]
-    fn files_without_symbols_are_listed_but_free() {
-        let db = open_db_in_memory().unwrap();
-        seed(&db);
-        let outcome = compute_risk(
-            &db,
-            &["src/auth.rs".to_string(), "docs/notes.md".to_string()],
-            None,
-        )
-        .unwrap();
-        assert_eq!(outcome.changed_files.len(), 2);
-        assert_eq!(outcome.files_with_symbols, 1, "docs carry no code nodes");
-        assert!(outcome.score > 0);
+    out.push_str("\n## Coverage\n\n");
+    if report.coverage_complete {
+        out.push_str("All supported source in both review snapshots was analyzed.\n");
     }
-
-    #[test]
-    fn score_prefers_wide_and_cross_community_changes() {
-        let db = open_db_in_memory().unwrap();
-        seed(&db);
-        // A file whose only node nothing depends on is the cheapest change.
-        db.execute(
-            "INSERT INTO nodes (id, label, file_type, source_file, community) VALUES ('d', 'leaf()', 'code', 'src/leaf.rs', 1)",
-            [],
-        )
-        .unwrap();
-        let narrow = compute_risk(&db, &["src/leaf.rs".to_string()], None).unwrap();
-        assert_eq!(narrow.impacted, 0, "leaf has no dependents");
-        // auth.rs (a) + api.rs (c): their dependents span two communities.
-        let wide = compute_risk(
-            &db,
-            &["src/auth.rs".to_string(), "src/api.rs".to_string()],
-            None,
-        )
-        .unwrap();
-        assert!(
-            wide.score > narrow.score,
-            "wide cross-community change must outrank a leaf file (wide {} vs narrow {})",
-            wide.score,
-            narrow.score
-        );
-        assert!(wide.communities.len() >= 2);
-        assert!(narrow.score <= 100 && wide.score <= 100);
+    for issue in &report.coverage_issues {
+        out.push_str(&format!("- {issue}\n"));
     }
-
-    #[test]
-    fn level_thresholds() {
-        assert_eq!(level_of(0), "low");
-        assert_eq!(level_of(45), "medium");
-        assert_eq!(level_of(90), "high");
-    }
-
-    #[test]
-    fn render_lists_sections() {
-        let db = open_db_in_memory().unwrap();
-        seed(&db);
-        let outcome = compute_risk(&db, &["src/auth.rs".to_string()], None).unwrap();
-        assert!(outcome.impacted > 0, "auth.rs has a caller chain");
-        let text = render(&outcome, None);
-        assert!(text.contains("Change Risk Report"));
-        assert!(text.contains("Impacted symbols"));
-        assert!(text.contains("Communities touched"));
-        assert!(text.contains("git diff"));
-    }
+    out.push_str(&format!("\n{} / {} files indexed before/after in {} ms. Unresolved relationship targets: {} / {}.\n\nSecondary triage score: {score}. Formula: 2 per changed declaration plus 1 per surviving consumer, capped at 100.\n\nEvidence is structural reachability, not proof of runtime behavior. EXTRACTED/DECLARED = source facts; RESOLVED = unique name binding; INFERRED = heuristic. The weakest edge labels each complete chain. Source snapshots are rebuilt in memory and never overwrite the project graph.\n",
+        report.files_indexed_before, report.files_indexed_after, report.indexing_ms, report.unresolved_before, report.unresolved_after));
+    out
 }

@@ -105,10 +105,12 @@ pub fn extract_component(path: &Path, naming: &Path) -> Result<Extraction> {
                 continue;
             }
             node.source_file = path.to_path_buf();
+            node.source_line = node.source_line.map(|line| line + segment.line_offset);
             nodes.push(node);
         }
         for mut edge in extraction.edges {
             edge.source_file = path.to_path_buf();
+            edge.source_line = edge.source_line.map(|line| line + segment.line_offset);
             edges.push(edge);
         }
     }
@@ -130,6 +132,7 @@ pub fn extract_component(path: &Path, naming: &Path) -> Result<Extraction> {
 struct Segment {
     body: String,
     is_typescript: bool,
+    line_offset: u32,
 }
 
 static ASTRO_FRONTMATTER_RE: std::sync::LazyLock<Regex> =
@@ -145,6 +148,10 @@ fn segments(source: &str, ext: &str) -> Vec<Segment> {
             Some(caps) => vec![Segment {
                 body: caps[1].to_string(),
                 is_typescript: true,
+                line_offset: source[..caps.get(1).unwrap().start()]
+                    .bytes()
+                    .filter(|b| *b == b'\n')
+                    .count() as u32,
             }],
             None => Vec::new(),
         };
@@ -160,6 +167,10 @@ fn segments(source: &str, ext: &str) -> Vec<Segment> {
         out.push(Segment {
             body: caps[2].to_string(),
             is_typescript,
+            line_offset: source[..caps.get(2).unwrap().start()]
+                .bytes()
+                .filter(|b| *b == b'\n')
+                .count() as u32,
         });
     }
     out

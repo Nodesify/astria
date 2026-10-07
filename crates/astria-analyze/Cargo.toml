@@ -11,6 +11,12 @@ publish = false
 [dependencies]
 astria-core = { workspace = true }
 astria-paths = { workspace = true }
+astria-extract = { workspace = true }
+ignore = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 rusqlite = { workspace = true }
 petgraph = { workspace = true }
 

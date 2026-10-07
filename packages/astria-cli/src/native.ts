@@ -21,17 +21,11 @@ const PLATFORM_SUFFIX: Record<string, string> = {
 };
 
 function isMusl(): boolean {
-  try {
-    const { execFileSync } = require('child_process') as typeof import('child_process');
-    // execFileSync never invokes a shell: ldd runs with a fixed arg vector.
-    const out = execFileSync('ldd', ['--version'], { encoding: 'utf-8' });
-    return out.includes('musl');
-  } catch {
-    return false;
-  }
+  const report = process.report!.getReport() as { header: { glibcVersionRuntime?: string } };
+  return !report.header.glibcVersionRuntime;
 }
 
-function getPlatformSuffix(): string {
+export function getPlatformSuffix(): string {
   if (process.platform === 'linux' && isMusl()) {
     return `linux-${process.arch}-musl`;
   }
@@ -50,8 +44,10 @@ function requirePlatformPackage(suffix: string): any {
   const attempt = (name: string): any => {
     try {
       return require(name);
-    } catch {
-      return undefined;
+    } catch (error: any) {
+      // Missing packages and installed-but-unloadable binaries need different repairs.
+      if (error.code === 'MODULE_NOT_FOUND' && error.message.includes(`'${name}'`)) return undefined;
+      throw new Error(`Native package ${name} is installed but cannot load (${error.code ?? 'load error'}): ${error.message}`);
     }
   };
   switch (suffix) {
@@ -67,12 +63,8 @@ function requirePlatformPackage(suffix: string): any {
       return attempt('@nodesify/astria-linux-x64-gnu');
     case 'linux-arm64-gnu':
       return attempt('@nodesify/astria-linux-arm64-gnu');
-    // Musl targets are recognized so the error below can say exactly what
-    // is missing; no musl platform package is published yet.
     case 'linux-x64-musl':
       return attempt('@nodesify/astria-linux-x64-musl');
-    case 'linux-arm64-musl':
-      return attempt('@nodesify/astria-linux-arm64-musl');
     default:
       return undefined;
   }
@@ -98,6 +90,9 @@ function warnIfShadowed(root: string, dist: string): void {
 }
 
 function loadNativeBinding(): NativeModule {
+  const suffix = getPlatformSuffix();
+  const supported = ['win32-x64-msvc', 'win32-arm64-msvc', 'darwin-x64', 'darwin-arm64', 'linux-x64-gnu', 'linux-arm64-gnu', 'linux-x64-musl'];
+  if (!supported.includes(suffix)) throw new Error(`Unsupported native platform: ${suffix}. Supported targets: ${supported.join(', ')}.`);
   const local = join(__dirname, '..', 'astria.node');
   if (existsSync(local)) {
     warnIfShadowed(local, join(__dirname, '..', 'dist', 'astria.node'));
@@ -122,7 +117,7 @@ function loadNativeBinding(): NativeModule {
     `Tried: local astria.node and the platform fallback package.\n` +
     `If the platform package is missing, reinstall without --omit=optional ` +
     `(npm install @nodesify/astria --force). ` +
-    `Note: musl and windows-arm64 builds ship without the local embedding ` +
+    `Note: Intel macOS, musl and windows-arm64 builds ship without the local embedding ` +
     `runtime (no prebuilt ONNX there) — everything else works.`
   );
 }
@@ -144,14 +139,18 @@ function binding(): NativeModule {
 // the generated declaration, so a drift between wrapper and native surface
 // is a compile error here, not a runtime surprise.
 function fn<K extends NativeFn>(name: K): NativeModule[K] {
-  return ((...args: unknown[]) =>
-    (binding() as Record<string, (...a: unknown[]) => unknown>)[name](...args)) as NativeModule[K];
+  return ((...args: unknown[]) => {
+    const call = (binding() as Record<string, (...a: unknown[]) => unknown>)[name];
+    if (typeof call !== 'function') throw new Error(`Native binary does not provide ${name}; CLI and native versions do not match. Reinstall the matching platform package or rebuild the local native module, then restart MCP sessions.`);
+    return call(...args);
+  }) as NativeModule[K];
 }
 
 export const runPipeline = fn('runPipeline');
 export const updatePipeline = fn('updatePipeline');
 export const graphStats = fn('graphStats');
 export const graphBuildInfo = fn('graphBuildInfo');
+export const embeddingsSupported = fn('embeddingsSupported');
 export const verifySourceCommit = fn('verifySourceCommit');
 export const godNodes = fn('godNodes');
 export const listCommunities = fn('listCommunities');

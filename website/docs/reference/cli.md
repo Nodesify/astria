@@ -18,7 +18,7 @@ astria run <path> --embed         # ...also compute local embeddings (similar_to
 astria run <path> --backend openai --model gpt-4o-mini  # ...with LLM semantic enrichment (see Semantic enrichment)
 astria run <path> --global --as <tag>  # ...also merge this repo into the cross-repo global graph (see Global graph)
 astria update <path>              # Reuse cached ASTs, reconcile current corpus; regenerate an existing wiki
-astria watch <path> [--debounce 3000]  # Watch for file changes, auto-rebuild
+astria watch <path> [--debounce 3000] [--max-wait 15000]  # Reconcile at startup and after file changes
 astria cluster-only <path> [--resolution 0.5] [--exclude-hubs]  # Re-cluster + analyze + report without re-extracting
 astria merge <pathA> <pathB> <outPath> [--same-repo]  # Merge two graphs (namespaced per repo; --same-repo shares ids and errors on conflicts)
 astria diff <pathA> <pathB>       # Compare two graphs
@@ -30,6 +30,12 @@ astria merge-driver install       # Union-merge .astria/graph.json on parallel-b
 `run` and `update` accept `--backend <claude|openai|gemini|none>`, `--model <name>`, and `--judge <name>` (per-run LLM enrichment without env vars; `--judge jev` layers the TypeSafe judge over the backend), `--no-dedup` (skip near-duplicate semantic entity merging), `--label-communities` (LLM thematic names for changed communities), and `--deep` (per-file concept linking) — the two LLM features require `--backend` and are described in [Semantic enrichment](../guides/semantic-enrichment). `--judge` requires `--backend`. `update` additionally accepts `--embed` (compute/recompute local embeddings, same as `run --embed`), `--quiet` (suppress progress lines and the token benchmark, used by git hooks), and `--if-stale <minutes>` (skip when the graph was published less than N minutes ago). Code definitions retain their identities even when labels match across classes or files.
 
 Backend selection must be explicit through `--backend` or `ASTRIA_LLM_BACKEND`; credentials alone do not activate it. `none` disables enrichment. Cached ASTs avoid reparsing unchanged files, while references are reconciled across the current corpus. Graph facts and the manifest commit together after successful extraction; derived passes rerun after that commit and can be retried on the next update.
+
+The published indexing policy is saved in `.astria/indexing-profile.json` without credentials. Ordinary `update`, watch, hook and ingestion updates reuse its backend, model, endpoint, budget and feature flags. A project with no saved policy defaults to structural indexing during automatic updates. Changing a paid policy requires `--refresh-policy`; selecting a paid replacement also requires `--llm-budget <positive tokens>`. For example, `astria update . --backend openai --model <name> --refresh-policy --llm-budget 50000`. To disable enrichment, use `astria update . --backend none --refresh-policy`. Project writers hold one OS-backed lock across indexing and publication; readers can continue using database snapshots. Artifact writes use unique temporary siblings and atomic replacement, with generation stamps to detect different publications.
+
+Watch installs its listener before startup reconciliation, coalesces changes, and bounds continuous debounce with `--max-wait`. It runs one owned update child at a time, queues another when needed, and stops that child on shutdown.
+
+`update` can explicitly disable saved options with `--no-embed`, `--no-label-communities`, and `--no-deep`, and re-enable merging with `--dedup`. Disabling embeddings removes stored vectors and similarity edges; a cached model does not trigger embedding work when the effective policy disables it. Use `--embed` to enable it again. Paid-option changes follow the refresh/budget rules above.
 
 Builds also pick up, automatically:
 
@@ -44,6 +50,8 @@ Builds also pick up, automatically:
 - **Transcript sidecars** — any `.txt`/`.md` you drop into `.astria/transcripts/` is ingested as document nodes on the next run/update (handy for tools or languages the built-in transcription does not cover). The contract for external transcribers: run any tool you like, write the text there, let the graph index it — or pipe it through the built-in writer: `astria add --transcript <file>` keeps the file's name, `astria add --transcript -` reads piped stdin (e.g. `whisper ... | astria add --transcript -`) and stores it under a timestamped name.
 
 ## Querying
+
+AST citations use one-based lines. Queries return qualifying relationships between all selected nodes, including relationships between seeds and cycles; depth controls node discovery. Repo maps exclude unlocated references and stubs and budget complete records using the response tokenizer. Lexical corpus data is cached per graph generation. Markdown frontmatter can set `status: current`, `resolved`, or `superseded`, plus `resolution` and `superseded_by`; document sections, chunks and enriched concepts inherit this metadata. Rendered answers disclose it, and historical documents receive less relevance unless the question asks for history.
 
 ```bash
 astria explain <node> [--graph .] [--json]      # Explain a node and its connections
@@ -97,7 +105,7 @@ Every query can also append a JSONL line (ts, kind, question, nodes, duration_ms
 astria export [--graph .] [--out graph.json] [--format json|html|graphml|cypher|svg|falkordb] [--mode standard|large]
 astria tree [--out tree.html] [--max-children 40]   # Collapsible filesystem tree of all symbols (HTML)
 astria wiki [--out .astria/wiki] [--max-nodes 25] [--format markdown|obsidian] [--graph .]  # Wikipedia-style markdown wiki, or an Obsidian vault
-astria prs [20] [--conflicts] [--triage] [--queue] [--json] [--graph .]  # PR dashboard: CI state, review status, worktree mapping, ranked queue, merge-order risk (requires the gh CLI)
+astria prs [20] [--conflicts] [--triage] [--queue] [--json] [--graph .]  # Revision-aware PR review queue (requires gh and local base/head Git objects)
 ```
 
 Every `run`/`update` also writes two machine-readable artifacts next to the report: `.astria/graph.json` (the full graph — nodes, edges, hyperedges, communities; the file the git merge driver union-merges) and `.astria/cost.json` (the run's measured LLM spend — this run plus lifetime totals, with a dollar estimate when `ASTRIA_COST_*_PER_MTOK` are set; see [Environment variables](./env-vars)).
@@ -120,14 +128,22 @@ See [Wiki and exports](../guides/wiki-and-exports) for details.
 ```bash
 astria diagnose [--graph .] [--json]
 astria health [--graph .] [--json] [--min-score <n>]
-astria risk [--graph .] [--staged] [--json]
+astria risk [--graph .] [--staged | --base <ref> [--head <ref>]] [--json]
 astria merge-gate [--max-age-hours 24] [--min-health 60] [--max-risk 70] [--staged] [--base <ref> --head <ref>] [--json]  # CI merge gate (see Team serving & CI)
 astria digest [--out .astria/digest.md] [--json]  # Engineering digest brief (see Team serving & CI)
 ```
 
 Read-only health report over an existing graph: dangling edge endpoints (stub vs actionable), self-loops, duplicate edges, unclassified files, and zero-cohesion communities. `--json` emits machine-readable output. Never mutates the graph.
 
-`health` scores code-health heuristics (unreachable-symbol candidates, file cycles, hub concentration, and staleness) from 0 to 100. `--min-score <n>` exits non-zero when the score falls below `n`, which is the direct CI form (`astria health --min-score 70 || exit 1`); without it the command always exits 0, since a report that only prints is not a gate. `risk` maps the current git diff to impacted symbols and communities; use `--staged` to inspect only staged changes, or `--base origin/main --head HEAD` to score a committed PR range (the CI shape — a clean checkout has no working-tree diff). Both support `--json`.
+`health` scores code-health heuristics (unreachable-symbol candidates, file cycles, hub concentration, and staleness) from 0 to 100. `--min-score <n>` exits non-zero when the score falls below `n`, which is the direct CI form (`astria health --min-score 70 || exit 1`); without it the command always exits 0, since a report that only prints is not a gate.
+
+`risk` produces a source-based change review using the same engine as `merge-gate` and `prs`. It reads Git objects and source bytes into memory, without checking out revisions or updating the published graph. The default compares HEAD with the working tree, including untracked files; `--staged` compares HEAD with the index. `--base origin/main --head HEAD` compares the merge base with the specified head; head defaults to HEAD, and range mode cannot be combined with `--staged`.
+
+Changed line hunks select their innermost declarations. Before/after source graphs retain evidence for removed APIs, deleted files and renames. The report includes changed declarations, surviving and also-removed consumers, complete relationship chains with evidence classes, related test consumers, and file-based CODEOWNERS matches with rule locations. Type-signature edits include member consumers; method-only edits do not seed unrelated siblings. Commit IDs, source-content digests, before/after indexed-file counts and total indexing/review time identify the analyzed snapshots and their cost.
+
+Coverage gaps are explicit: unsupported or malformed source, ambiguous declaration spans, excluded source, unavailable files, non-code changes and metadata-only changes produce `coverageComplete: false`, `score: null`, and exit 1. Review currently supports compiled tree-sitter code grammars; embedded-component and regex-only language routes are reported as unavailable. Each source file is limited to 2 MiB and each snapshot to 256 MiB. Unresolved relationship targets are counted separately. Structural reachability cannot establish runtime safety. The numeric score is secondary and uncalibrated: two points per changed declaration plus one per surviving consumer, capped at 100. Both `risk` and `health` support `--json`.
+
+`prs` reads each PR's immutable base/head commit IDs and files through `gh`, then runs that same local revision comparison. The required commits and merge base must already be available locally; the command does not fetch, switch branches or create checkouts. API failures, changed PR heads and missing Git objects appear as unavailable coverage and produce exit 1 instead of zero impact. The ranked queue combines CI/review state with source-based impact. `--conflicts` shows overlapping changed/affected symbols as review-coordination signals; overlap is not proof of a Git merge conflict. Actual merge-conflict status is identified separately as GitHub's report. `--json` includes each complete review and any coverage error.
 
 ## Memory and reflection
 
@@ -164,12 +180,14 @@ astria query "where is the shared auth type" --graph ~/.astria/global.db
 
 ```bash
 astria add <url> [--author <name>] [--contributor <name>]  # Fetch arXiv/tweet/webpage/image/PDF into ./raw + update graph
-astria add --scip <index.json>                      # Ingest a simplified SCIP JSON index (rust-analyzer & co.)
+astria add --scip <index.scip>                      # Ingest a standard SCIP protobuf index (or protobuf JSON)
 astria add --postgres <dsn>                         # Introspect a live PostgreSQL schema (requires psql on PATH)
 astria add --transcript <file|->                    # Save a transcript into .astria/transcripts/ + update graph
 ```
 
 Both `--scip` and `--postgres` are offline/local alternatives to URL fetching: SCIP indexes bring external toolchain symbols into the graph (`scip_impl`/`scip_typed`/`scip_def`/`scip_ref` edges, deterministic ids); Postgres introspection is read-only over the pg system catalogs (`pg_class`/`pg_namespace`/`pg_constraint` — tables/views/FKs → `contains` + `references` edges, no credentials stored). The Postgres DSN is opt-in by flag — nothing calls the network by default.
+
+SCIP uses the official protocol's `metadata.project_root` file URI, document `relative_path`, symbol information, and occurrence ranges. Source citations point to the indexed document at one-based definition or reference lines. Global symbols share an identity across documents; local symbols remain scoped to their document. All enabled relationship flags produce their own edge. Native `.scip` protobuf and standard protobuf JSON are accepted; the former custom JSON shape is unsupported. Re-importing an index replaces its owned facts independently of the symbol's source location. External symbols without a definition occurrence have no fabricated source citation.
 
 URL fetching is SSRF-guarded: only `http`/`https` schemes are accepted; each host is checked by name *and* DNS-resolved, and any loopback/private/CGNAT/link-local address (IPv4 or IPv6, including mapped forms like `::ffff:127.0.0.1`) is rejected — so cloud metadata endpoints and localhost services are unreachable no matter how the URL is spelled. Redirects are followed manually (max 5 hops) and every hop is re-validated, meaning a public server cannot bounce a fetch to an internal address. Downloads are capped at 50 MB with a 30-second timeout, and saved filenames are slugified from the URL, so a hostile URL segment cannot escape the output directory.
 
@@ -178,8 +196,8 @@ URL fetching is SSRF-guarded: only `http`/`https` schemes are accepted; each hos
 ```bash
 astria mcp [--graph .]                    # MCP over stdio (the default)
 astria mcp --http [--port 8620] [--host 127.0.0.1] [--token <t>] [--projects a=./b name2=./c] [--allow-origin http://localhost:5173]  # MCP over HTTP, multi-project
-astria install [--platform claude] [--all]  # Skill + MCP registration for one AI platform or all (claude, codex, gemini, cursor, copilot, aider, opencode, kiro, trae, zcode, vscode, windsurf, cline, roo, amp, pi)
-astria uninstall [--platform claude] [--all] [--purge]  # Remove the install for one platform or all; --purge deep-cleans everything
+astria install [--platform claude] [--all] [--scope project|user]  # Skill + MCP registration for one AI platform or all (claude, codex, gemini, cursor, copilot, aider, opencode, kiro, trae, zcode, vscode, windsurf, cline, roo, amp, pi)
+astria uninstall [--platform claude] [--all] [--scope project|user] [--purge-project] [--purge-global]
 astria hook install|uninstall|status  # Git hook management
 astria hook-guard <mode>            # Editor PreToolUse guard (search | read | gemini) — installed into .claude/settings.json
 astria merge-driver install|uninstall|run  # Gitattributes merge driver for the graph file
@@ -191,7 +209,7 @@ astria merge-driver install|uninstall|run  # Gitattributes merge driver for the 
 
 **Git merge driver for the graph file.** Parallel branches both rebuild and both commit `.astria/graph.json`; `astria merge-driver install` wires a three-way union-merge driver into `.gitattributes` + git config (`merge.astria.*`) so those commits merge instead of conflicting: additions from both sides survive, a side's deletion is respected, community renumbering resolves to whichever side changed (the next `update` re-clusters anyway). `astria/graph_report.md` gets git's built-in `union` driver. `uninstall` removes the wiring.
 
-**Merge gate.** `astria merge-gate` is the CI check the hosted tier enforces on every merge: it fails (exit 1) when the graph is missing, older than `--max-age-hours`, does not cover the current HEAD, scores below `--min-health`, or the pending diff's blast radius exceeds `--max-risk`. Head coverage is commit identity plus content — the gate compares the commit the graph was built from (`_meta.git_head`, recorded in the publication transaction) with the repository's current HEAD and re-hashes every manifest file against the graph's own versioned content scheme, so a graph built from a dirty tree, an older commit, or sources that drifted after publication all fail the check (a publish timestamp alone proves none of that). `--json` gives the pipeline something to parse.
+**Merge gate.** `astria merge-gate` fails (exit 1) when the graph is missing, older than `--max-age-hours`, extracted by outdated rules, does not cover the current HEAD, scores below `--min-health`, or the source-based change review has incomplete coverage or exceeds `--max-risk`. The complete review is included in text and JSON output. Use `--base origin/main --head HEAD` for committed PR changes; the default reviews working-tree changes and `--staged` reviews the index. Head coverage is a separate published-graph check: commit identity plus hashes of manifest files. The source review builds its own before/after graphs in memory, so removed symbols remain available even when the published graph represents only HEAD. An unknown review score never passes the gate.
 
 **Engineering digest.** `astria digest` renders a deterministic markdown brief — graph overview, health score, hub concentration, largest communities, LLM spend from `cost.json` — for stdout or `--out <file>`. Schedule it in cron/CI for a weekly cadence.
 
@@ -206,3 +224,11 @@ Supported platforms for `install`: `claude`, `codex`, `gemini`, `cursor`, `copil
 ## Learning from usage {#learning-from-usage}
 
 The graph compounds in value as you query it. Every query records which (seed, discovered) node pairs its traversal connected; when the same pair recurs across **at least 2 distinct questions with 3+ total hits**, the next `run`/`update` promotes it to a `learned` edge (`INFERRED`, hits-scored, provenance `query_history`). Learned edges flow into clustering, analysis, and every export — the graph remembers which connections you actually keep asking about. High-fidelity traversals (`--detail high`) can filter them like any `INFERRED` fact.
+
+## Installation diagnostics
+
+```bash
+astria doctor [--graph .] [--scope project|user] [--json]
+```
+
+Checks Node, native loading, embedding support, executable resolution, scoped integrations, managed file integrity, permissions, git hooks and graph compatibility. Exit 1 on errors; warnings are advisory. Installation defaults to project scope. Project and global data deletion are separate options; the combined `--purge` option is removed. See [Install, upgrade and remove Astria](../guides/installation-lifecycle) for setup, recovery and package removal.

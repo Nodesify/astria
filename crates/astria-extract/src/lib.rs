@@ -10,7 +10,9 @@ pub mod schema;
 pub mod walkers;
 
 pub use engine::extract;
+pub use refs::resolve_cross_file_references;
 pub use schema::{ExtractedEdge, ExtractedNode, Extraction};
+pub use walkers::{declaration_spans, extract_source};
 
 /// The content-hash family the extraction layer stores under: the plain
 /// file hash, or that hash suffixed with `:gws-rev:<revision>` for Google

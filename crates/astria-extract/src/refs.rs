@@ -8,13 +8,14 @@ use std::collections::{HashMap, HashSet};
 /// Resolve names using complete scope suffixes before considering bare names.
 /// Every candidate set stays ambiguous unless file metadata selects one definition.
 /// These are name-derived bindings, never compiler-proven EXTRACTED calls.
-pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
+pub fn resolve_cross_file_references(results: &mut [Extraction]) {
     let mut names: HashMap<String, Vec<&crate::schema::ExtractedNode>> = HashMap::new();
     let known_ids: HashSet<_> = results
         .iter()
         .flat_map(|ext| ext.nodes.iter().map(|node| node.id.as_str()))
         .collect();
     let mut modules: HashMap<String, Vec<&Extraction>> = HashMap::new();
+    let mut languages = HashMap::new();
     for ext in results.iter() {
         let mut keys = vec![
             module_path(&ext.file_path),
@@ -29,6 +30,7 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
             modules.entry(key).or_default().push(ext);
         }
         for node in &ext.nodes {
+            languages.insert(node.id.as_str(), ext.language.as_str());
             // Only code definitions can be callees; prose and identifier-shaped
             // string references are not declarations.
             if !matches!(node.node_type.as_str(), "function" | "class" | "test") {
@@ -67,8 +69,42 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
             if edge.relation != "calls" && edge.relation != "imports" {
                 continue;
             }
+            if edge.target.starts_with("receiver::") {
+                // An assigned JavaScript member (api.run = () => ...) carries
+                // its receiver in its declaration label. Resolve only that
+                // exact supported declaration, never a class method or a
+                // module inferred solely from a receiver variable's spelling.
+                if language_family(&ext.language) == "JavaScript" {
+                    if let Some(qualified) = edge
+                        .target
+                        .strip_prefix(&format!("receiver::{}::", edge.source))
+                    {
+                        let candidates: Vec<_> = names
+                            .get(qualified)
+                            .into_iter()
+                            .flatten()
+                            .copied()
+                            .filter(|node| {
+                                node.label.contains('.')
+                                    && make_target_id(node.label.trim_end_matches("()"))
+                                        == qualified
+                                    && language_family(languages[node.id.as_str()]) == "JavaScript"
+                                    && (node.source_file == ext.file_path
+                                        || imported_files.contains(&&node.source_file))
+                            })
+                            .collect();
+                        if let Some(node) = unique_candidate(&candidates) {
+                            rewrites.push((file_index, edge_index, node.id.clone()));
+                        }
+                    }
+                }
+                continue;
+            }
             // Preserve bindings already pointing to a complete structural id.
             if known_ids.contains(edge.target.as_str()) {
+                if edge.relation == "calls" && edge.confidence == "INFERRED" {
+                    rewrites.push((file_index, edge_index, edge.target.clone()));
+                }
                 continue;
             }
             let target = make_target_id(edge.target.trim_end_matches("()"));
@@ -89,6 +125,18 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
             }
             candidates.sort_by(|a, b| a.id.cmp(&b.id));
             candidates.dedup_by(|a, b| a.id == b.id);
+            if edge.relation == "calls" {
+                candidates.retain(|node| {
+                    language_family(languages[node.id.as_str()]) == language_family(&ext.language)
+                        // A bare call can only name a free function or a member
+                        // in the caller's lexical scope, never a remote method.
+                        && (target.contains("::")
+                            || node.id.split("::").count() <= 2
+                            || (node.source_file == ext.file_path
+                                && node.id.rsplit_once("::").is_some_and(|(scope, _)|
+                                    edge.source == scope || edge.source.starts_with(&format!("{scope}::")))))
+                });
+            }
             if edge.relation == "imports" {
                 // Module imports name files, not arbitrary same-name functions.
                 candidates.clear();
@@ -101,11 +149,17 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
                         .collect();
                 }
             }
-            let local: Vec<_> = candidates
+            let mut local: Vec<_> = candidates
                 .iter()
                 .copied()
                 .filter(|node| node.source_file == ext.file_path)
                 .collect();
+            if edge.relation == "calls" && !target.contains("::") {
+                if let Some(depth) = local.iter().map(|node| node.id.split("::").count()).max() {
+                    // Inner lexical declarations shadow outer declarations.
+                    local.retain(|node| node.id.split("::").count() == depth);
+                }
+            }
             let selected = if !local.is_empty() {
                 unique_candidate(&local)
             } else if candidates.len() > 1 && target.contains("::") {
@@ -131,6 +185,13 @@ pub(crate) fn resolve_cross_file_references(results: &mut [Extraction]) {
         // binding. Direct structural-id edges were preserved by the guard above.
         edge.confidence = "RESOLVED".to_string();
         edge.confidence_score = Some(0.85);
+    }
+}
+
+fn language_family(language: &str) -> &str {
+    match language {
+        "JavaScript" | "TypeScript" | "Vue" | "Svelte" | "Astro" => "JavaScript",
+        other => other,
     }
 }
 

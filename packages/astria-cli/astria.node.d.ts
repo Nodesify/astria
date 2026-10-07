@@ -47,14 +47,7 @@ export interface DiagnoseReportJs {
 }
 
 export interface RiskReportJs {
-  score: number;
-  level: string;
-  changedFiles: Array<string>;
-  filesWithSymbols: number;
-  impacted: number;
-  byDepth: Array<string>;
-  communities: Array<string>;
-  entries: Array<string>;
+  reportJson: string;
   text: string;
 }
 
@@ -89,6 +82,7 @@ export interface GraphBuildInfoJs {
   extractionHashVersion: string | null;
   buildConfiguration: string | null;
   currentExtractionHashVersion: string;
+  staleExternalIndexes: string[];
 }
 
 export interface SourceCoverageJs {
@@ -226,6 +220,11 @@ export interface GlobalListEntryJs {
   tag: string;
   nodes: number;
   edges: number;
+  root: string;
+  sourceCommit?: string;
+  graphGeneration?: string;
+  graphBuiltAt?: string;
+  state: string;
 }
 
 export interface IngestCountsJs {

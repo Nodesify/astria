@@ -92,7 +92,7 @@ pub fn save_result(
     body.push_str("\n## Outcome\n\n");
     body.push_str(outcome.unwrap_or("unrecorded"));
     body.push('\n');
-    std::fs::write(&memory_path, &body)?;
+    astria_core::writer_lock::write_atomic(&memory_path, body.as_bytes())?;
 
     // Graph side: one document node + references edges to cited nodes.
     let node_id = format!("memory_{ts}_{:x}", fnv64(&file_name));
@@ -190,7 +190,7 @@ pub fn reflect(astria_dir: &Path) -> Result<String> {
         }
     }
     let lessons_path = lessons_dir.join("LESSONS.md");
-    std::fs::write(&lessons_path, &out)?;
+    astria_core::writer_lock::write_atomic(&lessons_path, out.as_bytes())?;
     Ok(out)
 }
 

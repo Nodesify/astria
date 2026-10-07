@@ -613,15 +613,11 @@ mod paths;
 mod repo_map;
 
 pub use callflow::callflow_mermaid;
-pub(crate) use callflow::*;
-pub(crate) use explain::*;
 pub use explain::{explain_with_neighbors, EdgeInfoResult, ExplainResult};
 pub use learned::promote_learned_edges;
 pub(crate) use learned::*;
 pub use paths::find_shortest_path;
-pub(crate) use paths::*;
 pub use repo_map::repo_map;
-pub(crate) use repo_map::*;
 
 #[cfg(test)]
 mod tests {
@@ -2323,8 +2319,16 @@ at the lake house');",
         assert!(map1.contains("Orphan"), "isolated files still appear");
         assert_eq!(shown1, 3);
 
-        let (small, small_shown) = repo_map(&db, key, 1, 0.0).unwrap();
+        assert!(repo_map(&db, key, 1, 0.0).is_err());
+        let (budget, small, small_shown) = (2..count_response_tokens(&map1))
+            .find_map(|budget| {
+                repo_map(&db, key, budget as i64, 0.0)
+                    .ok()
+                    .map(|(map, shown)| (budget, map, shown))
+            })
+            .expect("a complete first record fits below the full map budget");
         assert!(small_shown < shown1, "tiny budget shows fewer files");
+        assert!(count_response_tokens(&small) <= budget);
         assert!(small.contains("truncated"), "truncation is declared");
         assert!(small.contains("Hub"), "the top-ranked file always fits");
     }

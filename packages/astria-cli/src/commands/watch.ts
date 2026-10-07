@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 
 // The watcher does not second-guess discovery: the pipeline's detect pass
 // already classifies every supported input (code, docs, manifests, media,
@@ -18,10 +18,16 @@ const SKIP_DIRS = new Set([
   '.cache',
 ]);
 
-export async function watchCommand(watchPath: string, opts: { debounce: string }) {
+export async function watchCommand(watchPath: string, opts: { debounce: string; maxWait?: string }) {
   const debounceMs = Number(opts.debounce || '3000');
   if (!Number.isFinite(debounceMs) || debounceMs <= 0) {
     console.error(`Error: invalid --debounce value "${opts.debounce}" (must be a positive number of milliseconds)`);
+    process.exitCode = 1;
+    return;
+  }
+  const maxWaitMs = Number(opts.maxWait ?? Math.max(debounceMs, Math.min(debounceMs * 5, 30_000)));
+  if (!Number.isFinite(maxWaitMs) || maxWaitMs <= 0) {
+    console.error('Error: --max-wait must be a positive number of milliseconds');
     process.exitCode = 1;
     return;
   }
@@ -40,8 +46,18 @@ export async function watchCommand(watchPath: string, opts: { debounce: string }
   // it inline would freeze the watcher for the whole build).
   let rebuildInFlight = false;
   let rebuildQueued = false;
+  let activeChild: ChildProcess | null = null;
+  let stopped = false;
+  let maxWaitTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearTimers = () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    if (maxWaitTimer) clearTimeout(maxWaitTimer);
+    debounceTimer = maxWaitTimer = null;
+  };
 
   const runRebuild = () => {
+    clearTimers();
+    if (stopped) return;
     if (rebuildInFlight) {
       rebuildQueued = true;
       return;
@@ -49,29 +65,34 @@ export async function watchCommand(watchPath: string, opts: { debounce: string }
     rebuildInFlight = true;
     console.log(`\n[astria] ${pendingEvents.size} change event(s), rebuilding...`);
     pendingEvents.clear();
-    const child = spawn(
-      process.execPath,
-      [process.argv[1], 'update', resolved],
-      { stdio: 'inherit' },
-    );
-    child.on('error', (err) => {
-      console.error('[astria] Rebuild could not start:', err.message);
-    });
-    child.on('exit', (code) => {
-      if (code !== 0) {
-        console.error(`[astria] Rebuild exited with code ${code}`);
-      }
+    let finished = false;
+    const complete = (code: number | null, error?: Error) => {
+      if (finished) return;
+      finished = true;
+      activeChild = null;
       rebuildInFlight = false;
-      if (rebuildQueued) {
+      if (error) console.error('[astria] Rebuild could not start:', error.message);
+      else if (code !== 0 && !stopped) console.error(`[astria] Rebuild exited with code ${code}`);
+      if (!stopped && rebuildQueued) {
         rebuildQueued = false;
         runRebuild();
       }
-    });
+    };
+    try {
+      const child = spawn(process.execPath, [process.argv[1], 'update', resolved], { stdio: 'inherit' });
+      activeChild = child;
+      child.once('error', err => complete(null, err));
+      child.once('exit', code => complete(code));
+    } catch (err) {
+      complete(null, err instanceof Error ? err : new Error(String(err)));
+    }
   };
 
   const scheduleRebuild = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(runRebuild, debounceMs);
+    // Continuous edits cannot postpone reconciliation indefinitely.
+    if (!maxWaitTimer) maxWaitTimer = setTimeout(runRebuild, maxWaitMs);
   };
 
   let watcher: fs.FSWatcher;
@@ -92,8 +113,7 @@ export async function watchCommand(watchPath: string, opts: { debounce: string }
     watcher.on('error', (err) => {
       console.error(`[astria] Watcher failed:`, err.message || err);
       console.error('[astria] Stopping; restart the watcher to continue.');
-      watcher.close();
-      process.exitCode = 1;
+      stop(1);
     });
   } catch (err: any) {
     console.error(`Error: Failed to watch "${resolved}": ${err.message || err}`);
@@ -104,17 +124,28 @@ export async function watchCommand(watchPath: string, opts: { debounce: string }
   console.log(`[astria] Watching ${resolved} (debounce: ${debounceMs}ms)`);
   console.log('[astria] Press Ctrl+C to stop');
 
-  const stop = () => {
-    console.log('\n[astria] Stopped.');
+  const stop = (exitCode = 0) => {
+    if (stopped) return;
+    stopped = true;
+    clearTimers();
+    rebuildQueued = false;
+    pendingEvents.clear();
     watcher.close();
-    process.exit(0);
+    process.exitCode = exitCode;
+    // This child belongs to this watcher; never terminate process categories.
+    activeChild?.kill('SIGTERM');
+    rl?.close();
+    console.log('\n[astria] Stopped.');
   };
+  let rl: import('readline').Interface | undefined;
+  process.once('SIGINT', () => stop());
+  process.once('SIGTERM', () => stop());
   if (process.platform === 'win32') {
     const readline = require('readline');
-    const rl = readline.createInterface({ input: process.stdin });
-    rl.on('SIGINT', stop);
-  } else {
-    process.on('SIGINT', stop);
-    process.on('SIGTERM', stop);
+    rl = readline.createInterface({ input: process.stdin });
+    rl!.on('SIGINT', () => stop());
   }
+  // Install the watcher first so edits during startup are queued too.
+  pendingEvents.add('(startup reconciliation)');
+  runRebuild();
 }

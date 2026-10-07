@@ -26,6 +26,12 @@ if (run.status !== 0) {
   process.exit(run.status ?? 1);
 }
 
+if (process.platform === 'win32' && process.arch === 'x64') {
+  const profile = debug ? 'debug' : 'release';
+  const runtime = spawnSync(process.execPath, [path.join(repoRoot, 'scripts', 'copy-native-runtime.mjs'), path.join(repoRoot, 'target', profile, 'build'), distDir], { stdio: 'inherit' });
+  if (runtime.status !== 0) process.exit(runtime.status ?? 1);
+}
+
 // The just-built profile wins: with --debug a stale target/release artifact
 // must not shadow the fresh target/debug build (it always did before).
 const profiles = debug ? ['debug', 'release'] : ['release', 'debug'];

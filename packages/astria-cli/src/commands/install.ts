@@ -1,71 +1,55 @@
 import { Command } from 'commander';
-import { installPlatform, uninstallPlatform, purgeEverything } from '../install/index';
+import { installPlatform, uninstallPlatform, purgeData } from '../install/index';
 import { PLATFORM_NAMES } from '../install/platforms';
+import { parseScope, readInstallState } from '../install/state';
+import { uninstallGitHooks } from '../install/hooks';
+import { mergeDriverUninstall } from './merge-driver';
+
+type Options = { platform: string; scope: string; all?: boolean; purgeProject?: boolean; purgeGlobal?: boolean };
+
+function report(work: () => string[]): boolean {
+  try { for (const message of work()) console.log(message); return true; }
+  catch (error: any) { console.error(`Failed: ${error.message || error}`); process.exitCode = 1; return false; }
+}
 
 export function registerInstallCommand(program: Command) {
-  program
-    .command('install')
-    .description(`Install astria skill + MCP for an AI platform (${PLATFORM_NAMES.join(', ')}) or all of them`)
+  program.command('install')
+    .description('Install Astria integrations in this project, or explicitly for the user')
     .option('--platform <name>', `Platform: ${PLATFORM_NAMES.join(', ')}`, 'claude')
-    .option('--all', 'Install for every supported platform')
-    .action(async (opts: { platform: string; all?: boolean }) => {
+    .option('--scope <scope>', 'project or user', 'project')
+    .option('--all', 'Install for every supported project platform')
+    .action((opts: Options) => {
       try {
-        if (opts.all) {
-          for (const platform of PLATFORM_NAMES) {
-            for (const msg of installPlatform(platform, process.cwd())) {
-              console.log(msg);
-            }
-          }
-          return;
+        const scope = parseScope(opts.scope);
+        if (opts.all && scope === 'user') throw new Error('Choose one platform for --scope user; --all is project-only.');
+        for (const platform of opts.all ? PLATFORM_NAMES : [opts.platform]) {
+          report(() => installPlatform(platform, process.cwd(), scope));
         }
-        const results = installPlatform(opts.platform, process.cwd());
-        for (const msg of results) {
-          console.log(msg);
-        }
-        // A single-platform install is silent about every other tool — point
-        // the user at the rest so multi-tool setups don't get half wired.
-        if (opts.platform !== 'claude') return;
-        const others = PLATFORM_NAMES.filter((p) => p !== 'claude');
-        console.log(`\nOther supported platforms: ${others.join(', ')}`);
-        console.log('Install for all of them with: astria install --all');
-      } catch (err: any) {
-        console.error(err.message || err);
-        process.exitCode = 1;
-      }
+        if (!process.exitCode) console.log('Integration setup complete. Restart your assistant/MCP server, then run astria doctor.');
+      } catch (error: any) { console.error(error.message); process.exitCode = 1; }
     });
 
-  program
-    .command('uninstall')
-    .description('Uninstall astria skill for an AI platform (--purge removes everything: hooks, merge driver, graph data, global store)')
+  program.command('uninstall')
+    .description('Remove scoped integrations; data is kept unless separately selected for deletion')
     .option('--platform <name>', `Platform: ${PLATFORM_NAMES.join(', ')}`, 'claude')
-    .option('--all', 'Uninstall from every supported platform')
-    .option('--purge', 'Deep clean: uninstall every platform, git hooks, merge driver, .astria/ graph data, and the ~/.astria global store')
-    .action(async (opts: { platform: string; all?: boolean; purge?: boolean }) => {
+    .option('--scope <scope>', 'project or user', 'project')
+    .option('--all', 'Remove every recorded integration in the selected scope')
+    .option('--purge-project', 'Also remove this project graph, git hooks and merge-driver wiring')
+    .option('--purge-global', 'Also delete the user-wide cross-repository store')
+    .action((opts: Options) => {
       try {
-        if (opts.purge) {
-          // The flag is the consent: purge removes graph data and the
-          // global store, which no plain uninstall ever touches.
-          for (const msg of purgeEverything(process.cwd())) {
-            console.log(msg);
-          }
-          console.log('\nastria fully removed from this machine and project.');
-          return;
+        const scope = parseScope(opts.scope);
+        const platforms = opts.all ? readInstallState(process.cwd(), scope).platforms : [opts.platform];
+        let complete = true;
+        for (const platform of platforms) complete = report(() => uninstallPlatform(platform, process.cwd(), scope)) && complete;
+        if (opts.purgeProject) {
+          complete = report(() => uninstallGitHooks(process.cwd())) && complete;
+          complete = report(() => mergeDriverUninstall(process.cwd())) && complete;
+          // Retain data when integration removal failed, so recovery remains possible.
+          if (complete) complete = report(() => purgeData(process.cwd(), false));
         }
-        if (opts.all) {
-          for (const platform of PLATFORM_NAMES) {
-            for (const msg of uninstallPlatform(platform, process.cwd())) {
-              console.log(msg);
-            }
-          }
-          return;
-        }
-        const results = uninstallPlatform(opts.platform, process.cwd());
-        for (const msg of results) {
-          console.log(msg);
-        }
-      } catch (err: any) {
-        console.error(err.message || err);
-        process.exitCode = 1;
-      }
+        if (opts.purgeGlobal && complete) complete = report(() => purgeData(process.cwd(), true));
+        console.log(complete ? 'Selected cleanup completed. The npm package remains installed; see the lifecycle guide for package removal.' : 'Cleanup incomplete. Resolve the failures above and retry; remaining graph data was retained.');
+      } catch (error: any) { console.error(error.message); process.exitCode = 1; }
     });
 }

@@ -69,3 +69,5 @@ Place a `.astriaignore` file in your project root (gitignore syntax) to exclude 
 ## License
 
 MIT
+
+Installation defaults to project scope: `astria install --platform codex --scope project`. Use `--scope user` explicitly for user-wide integrations. Run `astria doctor` after setup or upgrades. See the [installation lifecycle guide](https://nodesify.github.io/astria/docs/guides/installation-lifecycle) for supported platforms, upgrade, backup/restore and complete removal.

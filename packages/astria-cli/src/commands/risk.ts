@@ -1,28 +1,14 @@
-import { riskReport } from '../native';
+import { changeReview, ReviewOptions } from './change-review';
 
-export async function riskCommand(opts: { graph: string; staged?: boolean; json?: boolean }) {
+export async function riskCommand(opts: ReviewOptions & { json?: boolean }) {
   try {
-    const report = riskReport(opts.graph, opts.staged === true);
+    const report = changeReview(opts);
     if (opts.json) {
-      console.log(
-        JSON.stringify(
-          {
-            score: report.score,
-            level: report.level,
-            changedFiles: report.changedFiles,
-            filesWithSymbols: report.filesWithSymbols,
-            impacted: report.impacted,
-            byDepth: report.byDepth,
-            communities: report.communities,
-            entries: report.entries,
-          },
-          null,
-          2,
-        ),
-      );
+      console.log(JSON.stringify(report, null, 2));
     } else {
       console.log(report.text);
     }
+    if (!report.coverageComplete) process.exitCode = 1;
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);
     process.exitCode = 1;

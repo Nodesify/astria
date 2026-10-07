@@ -214,11 +214,62 @@ pub(crate) fn extract_markdown_from_string(
         );
     }
 
+    apply_document_lifecycle(content, &mut nodes);
+
     Extraction {
         file_path: path.to_path_buf(),
         language: language.to_string(),
         nodes,
         edges,
+    }
+}
+
+/// Explicit document lifecycle is inherited by every section and chunk. Keep
+/// it in signature metadata, not body text, so source spans remain exact.
+fn apply_document_lifecycle(content: &str, nodes: &mut [ExtractedNode]) {
+    let mut status = None;
+    let mut replacement = None;
+    let mut resolution = None;
+    let mut frontmatter = false;
+    for (index, line) in content.lines().enumerate() {
+        if index == 0 && line.trim() == "---" {
+            frontmatter = true;
+            continue;
+        }
+        if !frontmatter {
+            break;
+        }
+        if line.trim() == "---" {
+            break;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value
+            .trim()
+            .trim_matches(['\'', '"'])
+            .replace(['\n', '\r', ';'], " ");
+        match key.trim() {
+            "status" if matches!(value.as_str(), "current" | "resolved" | "superseded") => {
+                status = Some(value)
+            }
+            "superseded_by" => replacement = Some(value),
+            "resolution" => resolution = Some(value),
+            _ => {}
+        }
+    }
+    let Some(status) = status else {
+        return;
+    };
+    let mut metadata = format!("astria-document: status={status}");
+    if let Some(replacement) = replacement {
+        metadata.push_str(&format!("; replacement={replacement}"));
+    }
+    if let Some(resolution) = resolution {
+        metadata.push_str(&format!("; resolution={resolution}"));
+    }
+    for node in nodes {
+        node.signature = Some(metadata.clone());
     }
 }
 

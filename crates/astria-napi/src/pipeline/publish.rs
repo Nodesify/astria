@@ -16,28 +16,28 @@ pub(crate) fn write_report(
 /// Write a published artifact whole: temp sibling + rename, so a concurrent
 /// reader never observes a torn or half-written file.
 pub(crate) fn write_artifact_atomic(path: &Path, bytes: &[u8]) -> astria_core::Result<()> {
-    let tmp = path.with_extension("new");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    astria_core::writer_lock::write_atomic(path, bytes)
 }
 
-/// Fresh publication stamp: node count + wall-clock millis. Every writer
+/// Fresh publication stamp: process identity, clock and a monotonic counter. Every writer
 /// (pipeline, merge, global) mints one at publication so snapshot caches
 /// keyed on it invalidate.
 pub(crate) fn generation_stamp(db: &Connection) -> String {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     format!(
-        "{}:{}",
+        "{}:{}:{}:{}",
         db.query_row(
             "SELECT COUNT(*) + COALESCE((SELECT MAX(id) FROM pipeline_runs), 0) FROM nodes",
             [],
             |r| r.get::<_, i64>(0)
         )
         .unwrap_or(0),
+        std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis()
+            .as_nanos(),
+        SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     )
 }
 

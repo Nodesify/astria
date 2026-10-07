@@ -1,11 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createHash } from 'crypto';
+import { withInstallLock, writeTextAtomic } from './atomic';
+import { InstallScope, installRoot, readInstallState, saveInstallState } from './state';
 import { PLATFORMS, PLATFORM_NAMES, PlatformConfig } from './platforms';
-import { uninstallGitHooks } from './hooks';
-import { mergeDriverUninstall } from '../commands/merge-driver';
 import { injectSection, removeSection, PROJECT_MD_SECTION, SKILL_REGISTRATION, SectionResult } from './markdown-inject';
 import {
+  injectCodexMcp, removeCodexMcp,
+  generatedIntegrationFiles,
   injectClaudeHook, removeClaudeHook,
   injectCodexHook, removeCodexHook,
   injectGeminiHook, removeGeminiHook,
@@ -31,33 +34,123 @@ const MCP_LABELS: Record<McpFlavor, { name: string; file: string }> = {
   kiro: { name: 'Kiro MCP server', file: '.kiro/settings/mcp.json' },
   opencode: { name: 'OpenCode MCP server', file: '.opencode/opencode.json' },
   pi: { name: 'astria MCP server (pi-mcp-adapter reads it)', file: '.mcp.json' },
-  codex: { name: 'Codex MCP server', file: '~/.codex/config.toml (user-global)' },
+  codex: { name: 'Codex MCP server', file: '.codex/config.toml' },
 };
 
 function getSkillDir(): string {
   return path.resolve(__dirname, '..', '..', 'skills');
 }
 
-/// CLAUDE_CONFIG_DIR is read exactly once, at load, and sanitized to a
-/// normalized absolute path without traversal segments (or undefined). No
-/// other code path reads it, so env input can never reach a filesystem
-/// write unvalidated.
-const CLAUDE_CONFIG_DIR: string | undefined = (() => {
-  const raw = process.env.CLAUDE_CONFIG_DIR;
-  if (!raw) return undefined;
-  const resolved = path.resolve(raw);
-  return raw === resolved && !raw.includes('..') && path.isAbsolute(raw)
-    ? resolved
-    : undefined;
-})();
-
-/// Resolve the live skill destination for a platform config: home-scoped
-/// platforms root at the user's home dir; project-scoped ones (Copilot)
-/// root at the project.
 function skillDstPath(cfg: PlatformConfig, projectDir: string): string {
-  return cfg.skillScope === 'project'
-    ? path.join(projectDir, cfg.skillDst)
-    : path.join(os.homedir(), cfg.skillDst);
+  return path.join(projectDir, cfg.skillDst);
+}
+
+function removeFile(file: string): string {
+  try { fs.unlinkSync(file); return `Removed: ${file}`; }
+  catch (error: any) { if (error.code === 'ENOENT') return `Not found: ${file}`; throw error; }
+}
+
+function generatedFiles(platform: string, root: string, scope: InstallScope, requireSource = true): Record<string, string> {
+  const cfg = PLATFORMS[platform];
+  const files = generatedIntegrationFiles(root, platform, scope === 'user');
+  if (cfg.skillFile) {
+    try { files[skillDstPath(cfg, root)] = fs.readFileSync(path.join(getSkillDir(), cfg.skillFile), 'utf8'); }
+    catch (error: any) { if (requireSource || error.code !== 'ENOENT') throw error; files[skillDstPath(cfg, root)] = ''; }
+  }
+  return files;
+}
+
+const fingerprint = (text: string) => createHash('sha256').update(text).digest('hex');
+function checkOwnedFiles(files: Record<string, string>, recorded: Record<string, string>): void {
+  for (const [file, expected] of Object.entries(files)) {
+    let current: string;
+    try { current = fs.readFileSync(file, 'utf8'); }
+    catch (error: any) { if (error.code === 'ENOENT') continue; throw error; }
+    if (fingerprint(current) !== (recorded[file] ?? fingerprint(expected))) {
+      throw new Error(`Customized file retained: ${file}. Back it up and move it out of the managed location before retrying.`);
+    }
+  }
+}
+
+function userIntegration(platform: string, root: string, remove: boolean, remaining: string[]): string[] {
+  const cfg = PLATFORMS[platform];
+  const messages: string[] = [];
+  if (!cfg.skillFile && platform !== 'pi' && platform !== 'codex') {
+    throw new Error(`${platform} has no user-scoped integration; use --scope project.`);
+  }
+  if (cfg.skillFile && !remaining.some(p => PLATFORMS[p]?.skillDst === cfg.skillDst)) {
+    messages.push(...(remove ? [removeFile(skillDstPath(cfg, root))] : copySkillFile(platform, cfg, root)));
+  }
+  if (platform === 'claude') {
+    const file = path.join(root, '.claude', 'CLAUDE.md');
+    if (remove) removeSection(file); else injectSection(file, SKILL_REGISTRATION);
+    messages.push(`User Claude registration: ${remove ? 'removed' : 'installed'}`);
+  }
+  if (platform === 'codex') {
+    const changed = remove ? removeCodexMcp(root) : injectCodexMcp(root);
+    messages.push(`User Codex MCP: ${changed ? (remove ? 'removed' : 'installed') : 'unchanged'}`);
+  }
+  if (platform === 'pi') {
+    const changed = remove ? removePiExtension() : injectPiExtension();
+    messages.push(`User Pi extension: ${changed ? (remove ? 'removed' : 'installed') : 'unchanged'}`);
+  }
+  return messages;
+}
+
+export function installPlatform(platform: string, projectDir: string, scope: InstallScope = 'project'): string[] {
+  if (!PLATFORMS[platform]) throw new Error(`Unknown platform: ${platform}`);
+  if (scope === 'user' && ((!PLATFORMS[platform].skillFile && platform !== 'pi') || PLATFORMS[platform].skillScope === 'project')) throw new Error(`${platform} has no user-scoped integration; use --scope project.`);
+  return withInstallLock(() => {
+    const state = readInstallState(projectDir, scope);
+    const root = installRoot(projectDir, scope);
+    const files = generatedFiles(platform, root, scope);
+    checkOwnedFiles(files, state.files);
+    // Record before writing: a partial install remains discoverable and removable.
+    if (!state.platforms.includes(platform)) state.platforms.push(platform);
+    saveInstallState(projectDir, scope, state);
+    try {
+      const messages = scope === 'user' ? userIntegration(platform, root, false, []) : installPlatformRaw(platform, root);
+      return [`Scope: ${scope} (${root})`, ...messages];
+    } finally {
+      // Preserve old fingerprints after an interrupted upgrade; capture only files actually written.
+      for (const [file, content] of Object.entries(files)) {
+        try { if (fs.readFileSync(file, 'utf8') === content) state.files[file] = fingerprint(content); }
+        catch (error: any) { if (error.code !== 'ENOENT') throw error; }
+      }
+      saveInstallState(projectDir, scope, state);
+    }
+  });
+}
+
+export function uninstallPlatform(platform: string, projectDir: string, scope: InstallScope = 'project'): string[] {
+  if (!PLATFORMS[platform]) throw new Error(`Unknown platform: ${platform}`);
+  if (scope === 'user' && ((!PLATFORMS[platform].skillFile && platform !== 'pi') || PLATFORMS[platform].skillScope === 'project')) throw new Error(`${platform} has no user-scoped integration; use --scope project.`);
+  return withInstallLock(() => {
+    const state = readInstallState(projectDir, scope);
+    const remaining = state.platforms.filter(p => p !== platform);
+    const root = installRoot(projectDir, scope);
+    const files = generatedFiles(platform, root, scope, false);
+    checkOwnedFiles(files, state.files);
+    const messages = scope === 'user' ? userIntegration(platform, root, true, remaining) : uninstallPlatformRaw(platform, root, remaining);
+    state.platforms = remaining;
+    const retained = new Set(remaining.flatMap(p => Object.keys(generatedFiles(p, root, scope, false))));
+    for (const file of Object.keys(files)) if (!retained.has(file)) delete state.files[file];
+    saveInstallState(projectDir, scope, state);
+    return [`Scope: ${scope} (${root})`, ...messages];
+  });
+}
+
+/** Explicit, independent data deletion; integration removal does not delete data. */
+export function purgeData(projectDir: string, global: boolean): string[] {
+  return withInstallLock(() => {
+    const target = path.resolve(global ? path.join(os.homedir(), '.astria') : path.join(projectDir, '.astria'));
+    const root = path.resolve(global ? os.homedir() : projectDir);
+    if (path.dirname(target) !== root || path.basename(target) !== '.astria') throw new Error('Unsafe purge target.');
+    if (!fs.existsSync(target)) return [`Not found: ${target}`];
+    if (fs.lstatSync(target).isSymbolicLink()) throw new Error(`Refusing to purge a linked directory: ${target}`);
+    fs.rmSync(target, { recursive: true });
+    return [`Removed ${global ? 'global store' : 'project graph data'}: ${target}`];
+  });
 }
 
 function copySkillFile(platform: string, cfg: PlatformConfig, projectDir: string): string[] {
@@ -67,21 +160,12 @@ function copySkillFile(platform: string, cfg: PlatformConfig, projectDir: string
   // skillDst comes from the static platform table; refuse traversal
   // segments anyway so no runtime value can redirect the install target.
   if (cfg.skillDst.split(/[\\/]/).includes('..')) {
-    messages.push(`Refusing unsafe skill destination: ${cfg.skillDst}`);
-    return messages;
+    throw new Error(`Unsafe skill destination: ${cfg.skillDst}`);
   }
 
   const src = path.join(getSkillDir(), cfg.skillFile);
   if (!fs.existsSync(src)) {
-    messages.push(`Skill file not found: ${src}`);
-    return messages;
-  }
-
-  if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
-    const overrideDst = path.join(CLAUDE_CONFIG_DIR, 'skills', 'astria', 'SKILL.md');
-    copyFile(src, overrideDst);
-    messages.push(`Skill file -> ${overrideDst}`);
-    return messages;
+    throw new Error(`Skill file not found: ${src}`);
   }
 
   const dst = skillDstPath(cfg, projectDir);
@@ -94,74 +178,16 @@ function copyFile(src: string, dst: string) {
   // Sink guard: only normalized absolute destinations without traversal
   // segments may be written, regardless of how the caller derived them.
   if (!path.isAbsolute(dst) || dst.split(/[\\/]/).includes('..')) {
-    return;
+    throw new Error(`Unsafe destination: ${dst}`);
   }
   const dir = path.dirname(dst);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.copyFileSync(src, dst);
+  writeTextAtomic(dst, fs.readFileSync(src, 'utf8'));
 }
 
-/// Pre-1.0 installs wrote skills under `skills/graphify/`. The path carries
-/// exactly one `astria` segment (the skill dir name), so the legacy
-/// destination is derivable by swapping that segment. Layouts whose `astria`
-/// is a file stem rather than a directory (`.clinerules/astria.md`) have no
-/// legacy variant — the swap is a no-op there and must not run, or the
-/// cleanup would delete the freshly installed skill.
-function legacySkillDst(cfg: PlatformConfig): string {
-  return cfg.skillDst.replace(/([\\/])astria([\\/])/, '$1graphify$2');
-}
-
-/// Removes stale skill files this installer no longer produces: the pre-1.0
-/// graphify name, and — for project-scoped platforms (Copilot) — the
-/// 1.0.9/1.0.10-era copy under the user's home directory, which nothing
-/// reads. Now-empty folders are removed so no stale skill dir lingers.
-/// Layouts with no legacy variant (file stems like .clinerules/astria.md,
-/// where the graphify swap is a no-op) have nothing to clean — the identity
-/// guard must hold or a second install would delete its own fresh skill.
-function removeLegacySkillFile(platform: string, cfg: PlatformConfig, projectDir: string): string[] {
-  const messages: string[] = [];
-  if (!cfg.skillFile) return messages;
-
-  const home = os.homedir();
-  const hasLegacyVariant = legacySkillDst(cfg) !== cfg.skillDst;
-  const targets: string[] = [];
-  if (cfg.skillScope === 'project') {
-    // Current name at the wrong (home) root, plus the legacy name at both
-    // roots when one exists.
-    targets.push(path.join(home, cfg.skillDst));
-    if (hasLegacyVariant) {
-      targets.push(path.join(home, legacySkillDst(cfg)), path.join(projectDir, legacySkillDst(cfg)));
-    }
-  } else if (hasLegacyVariant) {
-    targets.push(path.join(home, legacySkillDst(cfg)));
-  }
-  if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
-    targets.push(path.join(CLAUDE_CONFIG_DIR, 'skills', 'graphify', 'SKILL.md'));
-  }
-
-  for (const legacy of targets) {
-    const dir = path.dirname(legacy);
-    const hadDir = fs.existsSync(dir);
-    if (fs.existsSync(legacy)) {
-      try {
-        fs.unlinkSync(legacy);
-        messages.push(`Legacy skill file removed: ${legacy}`);
-      } catch { /* unreadable — leave it */ }
-    }
-    if (!hadDir) continue;
-    // Install stamps from both eras; a folder holding only these is removed
-    // outright so no stale skill directory lingers.
-    for (const stamp of ['.astria_version', '.graphify_version']) {
-      try { fs.unlinkSync(path.join(dir, stamp)); } catch { /* absent */ }
-    }
-    try { fs.rmdirSync(dir); } catch { /* not empty — leave */ }
-  }
-  return messages;
-}
-
-export function installPlatform(platform: string, projectDir: string): string[] {
+function installPlatformRaw(platform: string, projectDir: string): string[] {
   const messages: string[] = [];
 
   if (platform === 'cursor') {
@@ -181,7 +207,6 @@ export function installPlatform(platform: string, projectDir: string): string[] 
   if (platform === 'kiro') {
     const cfg = PLATFORMS.kiro;
     messages.push(...copySkillFile('kiro', cfg, projectDir));
-    messages.push(...removeLegacySkillFile('kiro', cfg, projectDir));
     if (injectKiroSteering(projectDir)) {
       messages.push('Kiro steering -> .kiro/steering/astria.md');
     } else {
@@ -204,20 +229,6 @@ export function installPlatform(platform: string, projectDir: string): string[] 
   }
 
   messages.push(...copySkillFile(platform, cfg, projectDir));
-  messages.push(...removeLegacySkillFile(platform, cfg, projectDir));
-
-  if (cfg.claudeMd) {
-    const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
-    const registration = injectSection(claudeMdPath, SKILL_REGISTRATION);
-    messages.push(
-      sectionMessage(
-        registration,
-        'User CLAUDE.md: skill registration added',
-        'User CLAUDE.md: skill registration updated',
-        'User CLAUDE.md: already registered'
-      )
-    );
-  }
 
   const projectMd = path.join(projectDir, 'CLAUDE.md');
   if (cfg.claudeMd || cfg.agentsMd || cfg.geminiMd || cfg.copilotMd) {
@@ -304,8 +315,8 @@ export function installPlatform(platform: string, projectDir: string): string[] 
       }
       break;
     case 'pi':
-      if (injectPiExtension()) {
-        messages.push('Pi extension -> ~/.pi/agent/extensions/astria.mjs');
+      if (injectPiExtension(projectDir)) {
+        messages.push('Pi extension -> .pi/extensions/astria.mjs');
       } else {
         messages.push('Pi extension: already installed');
       }
@@ -331,68 +342,7 @@ export function installPlatform(platform: string, projectDir: string): string[] 
   return messages;
 }
 
-/// Deep clean (`uninstall --purge`): everything uninstall does, plus the
-/// artifacts uninstall deliberately leaves alone — git hooks, the merge
-/// driver wiring, the project's `.astria/` data directory, and the global
-/// cross-repo store. Explicit-flag consent only; there is no interactive
-/// prompt, so CI can run it unattended.
-export function purgeEverything(projectDir: string): string[] {
-  const messages: string[] = [];
-
-  // 1. Every platform's skill/MCP/hook registrations.
-  for (const platform of PLATFORM_NAMES) {
-    try {
-      messages.push(...uninstallPlatform(platform, projectDir));
-    } catch (e: any) {
-      messages.push(`${platform}: ${e.message || e}`);
-    }
-  }
-
-  // 2. Git post-commit / post-checkout hooks installed by `astria hook install`.
-  try {
-    messages.push(...uninstallGitHooks(projectDir));
-  } catch (e: any) {
-    messages.push(`git hooks: ${e.message || e}`);
-  }
-
-  // 3. Merge-driver wiring from `astria merge-driver install`.
-  try {
-    messages.push(...mergeDriverUninstall(projectDir));
-  } catch (e: any) {
-    messages.push(`merge driver: ${e.message || e}`);
-  }
-
-  // 4. The project's graph data: graphs, wiki, transcripts, caches,
-  //    history — everything lives under .astria/.
-  const projectData = path.join(projectDir, '.astria');
-  if (fs.existsSync(projectData)) {
-    try {
-      fs.rmSync(projectData, { recursive: true, force: true });
-      messages.push(`Project graph data removed: ${projectData}`);
-    } catch (e: any) {
-      messages.push(`Project graph data (${projectData}): ${e.message || e}`);
-    }
-  } else {
-    messages.push('Project graph data: not found');
-  }
-
-  // 5. The global cross-repo store (~/.astria/global.db and friends).
-  const globalDir = path.join(os.homedir(), '.astria');
-  if (fs.existsSync(globalDir)) {
-    try {
-      fs.rmSync(globalDir, { recursive: true, force: true });
-      messages.push(`Global store removed: ${globalDir}`);
-    } catch (e: any) {
-      messages.push(`Global store (${globalDir}): ${e.message || e}`);
-    }
-  } else {
-    messages.push('Global store: not found');
-  }
-
-  return messages;
-}
-
-export function uninstallPlatform(platform: string, projectDir: string): string[] {
+function uninstallPlatformRaw(platform: string, projectDir: string, remaining: string[]): string[] {
   const messages: string[] = [];
 
   if (platform === 'cursor') {
@@ -412,9 +362,8 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
   if (platform === 'kiro') {
     const cfg = PLATFORMS.kiro;
     if (cfg.skillFile) {
-      try { fs.unlinkSync(skillDstPath(cfg, projectDir)); messages.push(`Skill file removed: ${skillDstPath(cfg, projectDir)}`); } catch { messages.push('Skill file: not found'); }
+      messages.push(removeFile(skillDstPath(cfg, projectDir)));
     }
-    messages.push(...removeLegacySkillFile('kiro', cfg, projectDir));
     if (removeKiroSteering(projectDir)) {
       messages.push('Kiro steering: removed');
     } else {
@@ -436,43 +385,22 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
   }
 
   if (cfg.skillFile) {
-    // The live location by scope, plus — for claude — both candidate roots,
-    // because CLAUDE_CONFIG_DIR may have been set at install time but not
-    // now (or vice versa). Uninstall uses the same sanitized const install
-    // reads; the raw env var never reaches a filesystem delete.
-    const candidates = [skillDstPath(cfg, projectDir)];
-    if (platform === 'claude' && CLAUDE_CONFIG_DIR) {
-      candidates.push(path.join(CLAUDE_CONFIG_DIR, 'skills', 'astria', 'SKILL.md'));
-    }
-    let removedAny = false;
-    for (const dst of candidates) {
-      try { fs.unlinkSync(dst); messages.push(`Skill file removed: ${dst}`); removedAny = true; } catch { /* absent */ }
-    }
-    if (!removedAny) messages.push('Skill file: not found');
-  }
-  messages.push(...removeLegacySkillFile(platform, cfg, projectDir));
-
-  if (cfg.claudeMd) {
-    const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
-    removeSection(claudeMdPath);
-    messages.push('User CLAUDE.md: astria section removed');
+    if (!remaining.some(p => PLATFORMS[p]?.skillDst === cfg.skillDst)) {
+      messages.push(removeFile(skillDstPath(cfg, projectDir)));
+    } else messages.push('Skill file retained for another platform');
   }
 
   if (cfg.claudeMd) {
-    removeSection(path.join(projectDir, 'CLAUDE.md'));
-    messages.push('Project CLAUDE.md: astria section removed');
+    messages.push(removeSection(path.join(projectDir, 'CLAUDE.md')) ? 'Project CLAUDE.md: astria section removed' : 'Project CLAUDE.md: absent or customized');
   }
-  if (cfg.agentsMd) {
-    removeSection(path.join(projectDir, 'AGENTS.md'));
-    messages.push('Project AGENTS.md: astria section removed');
+  if (cfg.agentsMd && !remaining.some(p => PLATFORMS[p]?.agentsMd)) {
+    messages.push(removeSection(path.join(projectDir, 'AGENTS.md')) ? 'Project AGENTS.md: astria section removed' : 'Project AGENTS.md: absent or customized');
   }
   if (cfg.geminiMd) {
-    removeSection(path.join(projectDir, 'GEMINI.md'));
-    messages.push('Project GEMINI.md: astria section removed');
+    messages.push(removeSection(path.join(projectDir, 'GEMINI.md')) ? 'Project GEMINI.md: astria section removed' : 'Project GEMINI.md: absent or customized');
   }
   if (cfg.copilotMd) {
-    removeSection(path.join(projectDir, '.github', 'copilot-instructions.md'));
-    messages.push('Copilot instructions: astria section removed');
+    messages.push(removeSection(path.join(projectDir, '.github', 'copilot-instructions.md')) ? 'Copilot instructions: astria section removed' : 'Copilot instructions: absent or customized');
     if (cleanupLegacyCopilotMcp(projectDir)) {
       messages.push('Legacy Copilot MCP config removed (.github/copilot-mcp.json is read by nothing)');
     }
@@ -480,29 +408,28 @@ export function uninstallPlatform(platform: string, projectDir: string): string[
 
   switch (cfg.settingsHook) {
     case 'claude':
-      removeClaudeHook(projectDir);
-      messages.push('Claude PreToolUse hook: removed');
+      messages.push(removeClaudeHook(projectDir) ? 'Claude PreToolUse hook: removed' : 'Claude PreToolUse hook: absent or customized');
       break;
     case 'codex':
-      removeCodexHook(projectDir);
-      messages.push('Codex PreToolUse hook: removed');
+      messages.push(removeCodexHook(projectDir) ? 'Codex PreToolUse hook: removed' : 'Codex PreToolUse hook: absent or customized');
       break;
     case 'gemini':
-      removeGeminiHook(projectDir);
-      messages.push('Gemini BeforeTool hook: removed');
+      messages.push(removeGeminiHook(projectDir) ? 'Gemini BeforeTool hook: removed' : 'Gemini BeforeTool hook: absent or customized');
+      break;
+    case 'pi':
+      messages.push(removePiExtension(projectDir) ? 'Pi extension: removed' : 'Pi extension: not found');
       break;
     case 'opencode':
-      removeOpenCodePlugin(projectDir);
-      messages.push('OpenCode plugin: removed');
+      messages.push(removeOpenCodePlugin(projectDir) ? 'OpenCode plugin: removed' : 'OpenCode plugin: absent or customized');
       break;
   }
 
-  if (cfg.mcp) {
+  if (cfg.mcp && !remaining.some(p => PLATFORMS[p]?.mcp === cfg.mcp || (['claude', 'pi'].includes(cfg.mcp!) && ['claude', 'pi'].includes(PLATFORMS[p]?.mcp ?? '')))) {
     const label = MCP_LABELS[cfg.mcp];
     messages.push(
       removeAgentMcp(projectDir, cfg.mcp)
         ? `${label.name}: removed`
-        : `${label.name}: not found`
+        : `${label.name}: absent or customized`
     );
   }
 

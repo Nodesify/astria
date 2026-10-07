@@ -39,7 +39,7 @@ function assert(condition: boolean, message: string) {
 // changes, update this list; a mismatch fails the suite in both directions.
 const expectedCommands: Set<string> = new Set([
   'add', 'affected', 'callflow', 'cluster-only', 'communities', 'diagnose',
-  'diff', 'digest', 'explain', 'export', 'global', 'god-nodes', 'health',
+  'diff', 'digest', 'doctor', 'explain', 'export', 'global', 'god-nodes', 'health',
   'history', 'hook', 'hook-guard', 'install', 'map', 'mcp', 'merge',
   'merge-driver', 'merge-gate', 'neighbors', 'path', 'prs', 'query',
   'reflect', 'risk', 'run', 'save-result', 'stats', 'status', 'tree',
@@ -116,11 +116,8 @@ const optDeps: Record<string, string> = pkg.optionalDependencies ?? {};
 // One pin per published release target. Bump deliberately when a target
 // is added or retired — this assert exists to force that update to be
 // conscious (and to catch a stale pin, which ships an old .node binary).
-// Five targets are published today; @nodesify/astria-linux-x64-musl,
-// -win32-arm64-msvc and -linux-arm64-musl still 404 on the registry and
-// must NOT be pinned until they publish (a pin npm cannot resolve breaks
-// `npm ci` for every consumer).
-assert(Object.keys(optDeps).length === 5, 'all 5 published napi platform packages should be pinned');
+// Release gates require all seven native packages before publishing the CLI.
+assert(Object.keys(optDeps).length === 7, 'all 7 supported napi platform packages should be pinned');
 for (const [name, pinned] of Object.entries(optDeps)) {
   assert(pinned === pkg.version, `${name} pinned at ${pinned} should match package version ${pkg.version}`);
 }

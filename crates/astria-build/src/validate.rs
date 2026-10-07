@@ -46,7 +46,9 @@ pub fn validate_extractions(extractions: &[Extraction]) -> Vec<ValidationIssue> 
                     detail: format!("node '{}' has an empty label", node.id),
                 });
             }
-            if node.source_file.as_os_str().is_empty() {
+            if node.source_file.as_os_str().is_empty()
+                && !(extraction.language == "SCIP" && node.source_line.is_none())
+            {
                 issues.push(ValidationIssue {
                     file: file.clone(),
                     kind: "node".into(),

@@ -1,39 +1,17 @@
 //! Pipeline stages: embedding, community labeling, deep-link extraction.
 use super::*;
 
-/// A model swap orphans the old vectors: `has_embeddings` is
-/// current-model-scoped, so a graph embedded by an older model counts as
-/// "no embeddings". Foreign-model rows therefore also trigger the silent
-/// refresh — `embed_missing_nodes` re-embeds exactly those rows — so an
-/// ordinary `update` heals a model swap. When the current model is not
-/// cached the heal cannot run offline; the mismatch is then reported
-/// loudly instead of silently disabling semantic recall.
+/// Embeddings run only when enabled by the project's effective policy.
 #[cfg(feature = "embed")]
 pub(crate) fn embed_stage(db: &Connection, requested: bool) -> astria_core::Result<()> {
+    if !requested {
+        clear_embeddings(db)?;
+        return Ok(());
+    }
     let foreign: Vec<(String, usize)> = astria_embed::stored_embedding_models(db)?
         .into_iter()
         .filter(|(model, _)| model != astria_embed::MODEL_NAME)
         .collect();
-    if !requested && !astria_embed::has_embeddings(db) && foreign.is_empty() {
-        return Ok(());
-    }
-    // The silent refresh path must stay offline: bail unless cached. With
-    // foreign-model rows present the bail would strand the graph with
-    // vectors no query can use — surface that instead of silence.
-    if !requested && !astria_embed::model_cached() {
-        if !foreign.is_empty() {
-            let stored: Vec<String> = foreign
-                .iter()
-                .map(|(model, rows)| format!("{model} ({rows} rows)"))
-                .collect();
-            eprintln!(
-                "[astria] stored embeddings use {}, but the current model is {}; semantic query recall is empty until they are re-embedded. Run once with --embed (downloads the model) to migrate.",
-                stored.join(", "),
-                astria_embed::MODEL_NAME
-            );
-        }
-        return Ok(());
-    }
     match astria_embed::load_embedder() {
         Ok(mut embedder) => {
             if !foreign.is_empty() {
@@ -55,31 +33,30 @@ pub(crate) fn embed_stage(db: &Connection, requested: bool) -> astria_core::Resu
                 "INSERT OR REPLACE INTO _meta (key, value) VALUES ('last_similar_edges', ?1)",
                 rusqlite::params![edges.to_string()],
             );
-            if requested || embedded > 0 {
-                eprintln!("[astria] semantic: {embedded} nodes embedded, {edges} similar_to edges (local model, no API key)");
-            }
+            eprintln!("[astria] semantic: {embedded} nodes embedded, {edges} similar_to edges (local model, no API key)");
             Ok(())
         }
-        Err(e) => {
-            if requested {
-                Err(e)
-            } else {
-                eprintln!("[astria] skipping semantic refresh: {e}");
-                Ok(())
-            }
-        }
+        Err(e) => Err(e),
     }
 }
 
 /// Builds without the `embed` feature (release targets with no prebuilt
 /// ONNX Runtime, e.g. x86_64-apple-darwin) reject --embed clearly.
 #[cfg(not(feature = "embed"))]
-pub(crate) fn embed_stage(_db: &Connection, requested: bool) -> astria_core::Result<()> {
+pub(crate) fn embed_stage(db: &Connection, requested: bool) -> astria_core::Result<()> {
     if requested {
         return Err(astria_core::AstriaError::Graph(
             "semantic embeddings are not supported in this build (no local model runtime for this platform)".to_string(),
         ));
     }
+    clear_embeddings(db)
+}
+
+fn clear_embeddings(db: &Connection) -> astria_core::Result<()> {
+    let tx = db.unchecked_transaction()?;
+    tx.execute("DELETE FROM edges WHERE relation = 'similar_to'", [])?;
+    tx.execute("DELETE FROM node_embeddings", [])?;
+    tx.commit()?;
     Ok(())
 }
 

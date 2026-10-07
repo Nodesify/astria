@@ -1,15 +1,13 @@
 {
   "name": "@nodesify/astria-win32-x64-msvc",
-  "version": "1.0.6",
-  "os": [
-    "win32"
-  ],
+  "version": "1.1.1",
   "cpu": [
     "x64"
   ],
   "main": "astria.win32-x64-msvc.node",
   "files": [
-    "astria.win32-x64-msvc.node"
+    "astria.win32-x64-msvc.node",
+    "DirectML.dll"
   ],
   "description": "Turn any folder into a queryable knowledge graph",
   "keywords": [
@@ -22,7 +20,7 @@
   "homepage": "https://github.com/Nodesify/astria#readme",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "repository": {
     "type": "git",
@@ -30,5 +28,8 @@
   },
   "bugs": {
     "url": "https://github.com/Nodesify/astria/issues"
-  }
+  },
+  "os": [
+    "win32"
+  ]
 }

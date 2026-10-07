@@ -65,6 +65,12 @@ fn ensure_roots_table(db: &Connection) -> Result<()> {
             root TEXT PRIMARY KEY,
             tag TEXT NOT NULL,
             registered_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS global_snapshots (
+            tag TEXT PRIMARY KEY,
+            source_commit TEXT,
+            graph_generation TEXT,
+            graph_built_at TEXT
         )",
     )?;
     Ok(())
@@ -195,6 +201,9 @@ pub fn global_add(
     explicit_tag: Option<&str>,
     store: &GlobalStore,
 ) -> Result<GlobalAddResult> {
+    let _writer = astria_core::writer_lock::WriterLock::acquire_in(
+        store.path.parent().unwrap_or_else(|| Path::new(".")),
+    )?;
     let repo_db_path = repo_root.join(".astria").join("db.sqlite");
     if !repo_db_path.exists() {
         return Err(AstriaError::Graph(format!(
@@ -203,6 +212,17 @@ pub fn global_add(
         )));
     }
     let repo_db = astria_core::db::open_db(&repo_db_path)?;
+    let _source_snapshot = repo_db.unchecked_transaction()?;
+    let source_meta = |key: &str| -> Option<String> {
+        repo_db
+            .query_row("SELECT value FROM _meta WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .ok()
+    };
+    let source_commit = source_meta("git_head");
+    let source_generation = source_meta("graph_generation");
+    let source_built_at = source_meta("graph_published_at");
     let tag = resolve_tag(&store.db, repo_root, explicit_tag)?;
     let root = root_key(repo_root);
     // Forward-slash form to match the normalized paths stored in node rows;
@@ -277,7 +297,7 @@ pub fn global_add(
 
             // Prefix relative paths with the tag; absolute paths are
             // relativized against the repo root so ids stay readable.
-            let source_file = if is_stub {
+            let source_file = if is_stub || source_file.is_empty() {
                 source_file
             } else {
                 let rel = source_file
@@ -354,7 +374,11 @@ pub fn global_add(
                     relation,
                     confidence,
                     score,
-                    format!("{tag}/{source_file}"),
+                    if source_file.is_empty() { String::new() } else {
+                        let rel = source_file.strip_prefix(&repo_root_prefix)
+                            .unwrap_or(&source_file).trim_start_matches(['\\', '/']);
+                        format!("{tag}/{rel}")
+                    },
                     source_line,
                 ],
             )?;
@@ -367,6 +391,10 @@ pub fn global_add(
     tx.execute(
         "INSERT OR REPLACE INTO global_roots (root, tag) VALUES (?1, ?2)",
         rusqlite::params![root, tag],
+    )?;
+    tx.execute(
+        "INSERT OR REPLACE INTO global_snapshots (tag, source_commit, graph_generation, graph_built_at) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![tag, source_commit, source_generation, source_built_at],
     )?;
 
     // Relation reconciliation inside the same transaction (a store snapshot
@@ -414,9 +442,21 @@ pub struct GlobalListEntry {
     pub tag: String,
     pub nodes: usize,
     pub edges: usize,
+    pub root: String,
+    pub source_commit: Option<String>,
+    pub graph_generation: Option<String>,
+    pub graph_built_at: Option<String>,
+    pub state: String,
 }
 
 pub fn global_list(store: &GlobalStore) -> Result<Vec<GlobalListEntry>> {
+    // Metadata is deliberately optional for unregistered graph nodes: unknown
+    // provenance is shown explicitly rather than claimed to be fresh.
+    let has_snapshots = store.db.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='global_snapshots'",
+        [],
+        |r| r.get::<_, i64>(0),
+    )? > 0;
     let mut stmt = store.db.prepare(
         "SELECT n.repo, COUNT(DISTINCT n.id),
                 (SELECT COUNT(*) FROM edges e JOIN nodes ns ON ns.id = e.source WHERE ns.repo = n.repo)
@@ -429,10 +469,68 @@ pub fn global_list(store: &GlobalStore) -> Result<Vec<GlobalListEntry>> {
             r.get::<_, i64>(2)? as usize,
         ))
     })?;
-    Ok(rows
-        .filter_map(|r| r.ok())
-        .map(|(tag, nodes, edges)| GlobalListEntry { tag, nodes, edges })
-        .collect())
+    let mut entries = Vec::new();
+    for row in rows {
+        let (tag, nodes, edges) = row?;
+        let root: String = store
+            .db
+            .query_row("SELECT root FROM global_roots WHERE tag=?1", [&tag], |r| {
+                r.get(0)
+            })
+            .unwrap_or_default();
+        let snapshot: Option<(Option<String>, Option<String>, Option<String>)> = if has_snapshots {
+            store.db.query_row("SELECT source_commit, graph_generation, graph_built_at FROM global_snapshots WHERE tag=?1", [&tag], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).ok()
+        } else {
+            None
+        };
+        let (source_commit, graph_generation, graph_built_at) = snapshot.unwrap_or_default();
+        let state = if root.is_empty() || graph_generation.is_none() {
+            "unknown"
+        } else {
+            match Connection::open_with_flags(
+                Path::new(&root).join(".astria/db.sqlite"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            ) {
+                Err(_) => "unavailable",
+                Ok(db) => {
+                    let current: Option<String> = db
+                        .query_row(
+                            "SELECT value FROM _meta WHERE key='graph_generation'",
+                            [],
+                            |r| r.get(0),
+                        )
+                        .ok();
+                    let coverage = crate::verify_source_commit(root.clone()).ok();
+                    if current != graph_generation
+                        || coverage
+                            .as_ref()
+                            .is_some_and(|c| c.covers_head == Some(false))
+                    {
+                        "stale"
+                    } else if coverage
+                        .as_ref()
+                        .is_some_and(|c| c.covers_head == Some(true))
+                    {
+                        "current"
+                    } else {
+                        "unknown"
+                    }
+                }
+            }
+        }
+        .to_string();
+        entries.push(GlobalListEntry {
+            tag,
+            nodes,
+            edges,
+            root,
+            source_commit,
+            graph_generation,
+            graph_built_at,
+            state,
+        });
+    }
+    Ok(entries)
 }
 
 /// `same_type_as` edges: same-label type declarations (non-function shapes)
@@ -549,7 +647,10 @@ fn resolve_cross_repo_calls(db: &Connection) -> Result<usize> {
             .filter_map(|r| r.ok())
             .collect();
 
-        for (source, _stub_target, stub_label, source_file) in rows {
+        for (source, stub_target, stub_label, source_file) in rows {
+            if stub_target.starts_with("receiver::") {
+                continue;
+            }
             let caller_repo = match repo_of(db, &source)? {
                 Some(r) => r,
                 None => continue,
@@ -578,6 +679,9 @@ fn resolve_cross_repo_calls(db: &Connection) -> Result<usize> {
 }
 
 pub fn global_remove(store: &GlobalStore, tag: &str) -> Result<usize> {
+    let _writer = astria_core::writer_lock::WriterLock::acquire_in(
+        store.path.parent().unwrap_or_else(|| Path::new(".")),
+    )?;
     let tag = normalize_tag(tag);
     // Removal is one transaction: prune, registry delete, relation
     // re-derivation (a call that just became unambiguous may resolve now),
@@ -589,6 +693,7 @@ pub fn global_remove(store: &GlobalStore, tag: &str) -> Result<usize> {
         "DELETE FROM global_roots WHERE tag = ?1",
         rusqlite::params![tag],
     )?;
+    tx.execute("DELETE FROM global_snapshots WHERE tag=?1", [&tag])?;
     add_same_type_edges(&tx)?;
     resolve_cross_repo_calls(&tx)?;
     bump_generation(&tx)?;
@@ -635,12 +740,18 @@ pub fn global_path(store: &GlobalStore, source: &str, target: &str) -> Result<Op
         if exists {
             return Ok(Some(name.to_string()));
         }
-        let mut stmt = store.db.prepare(
-            "SELECT id FROM nodes WHERE LOWER(label) = LOWER(?1) GROUP BY id HAVING COUNT(*) = 1",
-        )?;
+        let mut stmt = store
+            .db
+            .prepare("SELECT id FROM nodes WHERE LOWER(label) = LOWER(?1) ORDER BY id LIMIT 2")?;
         let mut rows = stmt.query_map(rusqlite::params![name], |r| r.get::<_, String>(0))?;
         if let Some(row) = rows.next() {
-            return Ok(row.ok());
+            let id = row?;
+            if rows.next().is_some() {
+                return Err(astria_core::AstriaError::Graph(format!(
+                    "ambiguous node label {name}; use an exact node id"
+                )));
+            }
+            return Ok(Some(id));
         }
         Ok(None)
     };
@@ -651,9 +762,6 @@ pub fn global_path(store: &GlobalStore, source: &str, target: &str) -> Result<Op
     let Some(goal) = resolve(target)? else {
         return Ok(None);
     };
-    if start == goal {
-        return Ok(Some(format!("{start} (same node)")));
-    }
 
     // BFS over the adjacency (undirected).
     let mut parent: HashMap<String, Option<String>> = HashMap::new();
@@ -690,7 +798,40 @@ pub fn global_path(store: &GlobalStore, source: &str, target: &str) -> Result<Op
         current = prev;
     }
     chain.reverse();
-    Ok(Some(chain.join(" --")))
+    let mut participating = std::collections::HashSet::new();
+    for id in &chain {
+        if let Some(repo) = repo_of(&store.db, id)? {
+            participating.insert(repo);
+        }
+    }
+    let mut out = String::new();
+    for snapshot in global_list(store)?
+        .into_iter()
+        .filter(|s| participating.contains(&s.tag))
+    {
+        out.push_str(&format!(
+            "Snapshot {}: commit={} generation={} state={}\n",
+            snapshot.tag,
+            snapshot.source_commit.as_deref().unwrap_or("unknown"),
+            snapshot.graph_generation.as_deref().unwrap_or("unknown"),
+            snapshot.state
+        ));
+    }
+    if chain.len() == 1 {
+        out.push_str(&format!("{start} (same node)\n"));
+    }
+    for pair in chain.windows(2) {
+        let (relation, confidence, outgoing): (String, String, bool) = store.db.query_row(
+            "SELECT relation,confidence,source=?1 FROM edges WHERE (source=?1 AND target=?2) OR (source=?2 AND target=?1) ORDER BY confidence_score DESC LIMIT 1",
+            rusqlite::params![pair[0],pair[1]], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        let hop = if outgoing {
+            format!("--{relation} [{confidence}]-->")
+        } else {
+            format!("<--{relation} [{confidence}]--")
+        };
+        out.push_str(&format!("{} {hop} {}\n", pair[0], pair[1]));
+    }
+    Ok(Some(out))
 }
 
 #[cfg(test)]

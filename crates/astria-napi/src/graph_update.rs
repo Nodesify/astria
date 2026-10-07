@@ -78,6 +78,16 @@ pub(super) fn publish(
     cli_version: Option<&str>,
 ) -> Result<astria_build::BuildResult> {
     let tx = db.unchecked_transaction()?;
+    let changed_sources: Vec<PathBuf> = detected
+        .changed
+        .iter()
+        .chain(&detected.removed)
+        .map(|entry| root.join(&entry.path))
+        .collect();
+    // Compiler indexes describe an immutable source snapshot. Any changed
+    // indexed document expires the complete index overlay, leaving unrelated
+    // imports intact and requiring explicit reimport of a fresh index.
+    astria_build::external::invalidate_sources(&changed_sources, &tx)?;
     // Deferred files keep their previously published facts: their new
     // extraction did not run (missing tooling/credentials), so publishing
     // an empty replacement would delete valid content until the retry.
@@ -93,7 +103,7 @@ pub(super) fn publish(
     let _ = root;
     for entry in &detected.removed {
         let path = astria_paths::normalize(&root.join(&entry.path));
-        tx.execute("DELETE FROM edges WHERE source_file = ?1", [&path])?;
+        tx.execute("DELETE FROM edges WHERE source_file = ?1 AND (context IS NULL OR context NOT LIKE 'external-index:%')", [&path])?;
         replacements.push(astria_extract::Extraction {
             file_path: root.join(&entry.path),
             language: "removed".into(),

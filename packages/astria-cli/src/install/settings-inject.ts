@@ -304,8 +304,7 @@ export function injectOpenCodePlugin(projectDir: string): boolean {
   // both the plural and the singular directory, so writing `plugins/` works
   // there too. opencode 1.17+ REJECTS a `plugins` key in opencode.json
   // ("Unrecognized key"), so the plugin is a file drop with no config
-  // registration. The 1.0.9-era singular `plugin/` directory and the config
-  // key are cleaned up on inject.
+  // registration. Existing user configuration is retained.
   const pluginDir = path.join(projectDir, '.opencode', 'plugins');
   const pluginPath = path.join(pluginDir, 'astria.js');
   const legacyDir = path.join(projectDir, '.opencode', 'plugin');
@@ -324,20 +323,11 @@ export function injectOpenCodePlugin(projectDir: string): boolean {
       changed = true;
     }
   }
-  // Strip the now-invalid `plugins` key this installer used to write.
-  const configPath = path.join(projectDir, '.opencode', 'opencode.json');
-  const config = readJson(configPath);
-  if (Array.isArray(config.plugins) && config.plugins.length > 0) {
-    delete config.plugins;
-    writeJson(configPath, config);
-    changed = true;
-  }
-
-  if (fs.existsSync(pluginPath)) return changed;
+  if (fs.existsSync(pluginPath) && fs.readFileSync(pluginPath, 'utf8') === OPENCODE_PLUGIN_JS) return changed;
   if (!fs.existsSync(pluginDir)) {
     fs.mkdirSync(pluginDir, { recursive: true });
   }
-  fs.writeFileSync(pluginPath, OPENCODE_PLUGIN_JS, 'utf-8');
+  writeTextAtomic(pluginPath, OPENCODE_PLUGIN_JS);
   return true;
 }
 
@@ -351,13 +341,6 @@ export function removeOpenCodePlugin(projectDir: string): boolean {
         changed = true;
       }
     }
-  }
-  const configPath = path.join(projectDir, '.opencode', 'opencode.json');
-  const config = readJson(configPath);
-  if (Array.isArray(config.plugins)) {
-    delete config.plugins;
-    writeJson(configPath, config);
-    changed = true;
   }
   return changed;
 }
@@ -387,7 +370,7 @@ export function injectCursorRule(projectDir: string): boolean {
   if (!fs.existsSync(ruleDir)) {
     fs.mkdirSync(ruleDir, { recursive: true });
   }
-  fs.writeFileSync(rulePath, CURSOR_RULE, 'utf-8');
+  writeTextAtomic(rulePath, CURSOR_RULE);
   return true;
 }
 
@@ -479,6 +462,21 @@ const MCP_TARGETS: Partial<Record<McpFlavor, {
   // same file as claude; its own flavor so install output stays honest.
   pi: { configPath: '.mcp.json', serverPath: ['mcpServers', 'astria'] },
 };
+
+export function inspectAgentMcp(root: string, flavor: McpFlavor): { file: string; present: boolean; managed: boolean } {
+  if (flavor === 'codex') {
+    const file = codexConfigPath(root);
+    let text: string;
+    try { text = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'); }
+    catch (error: any) { if (error.code === 'ENOENT') return { file, present: false, managed: false }; throw error; }
+    return { file, present: /^\s*\[mcp_servers\.astria\]\s*$/m.test(text), managed: text.includes(CODEX_MCP_BLOCK) };
+  }
+  const target = MCP_TARGETS[flavor]!;
+  const file = path.join(root, target.configPath);
+  const data = readJson(file, { jsonc: flavor === 'vscode' });
+  const entry = target.serverPath.reduce((node: any, key: string) => node?.[key], data);
+  return { file, present: !!entry, managed: isInstallerServer(entry) };
+}
 const LEGACY_MCP_SERVER_NAME = 'graphify';
 
 // ---- Copilot (.github/copilot-mcp.json) ----
@@ -565,17 +563,17 @@ function cleanupLegacyConfigPaths(
 // never touch a hand-written [mcp_servers.astria] section.
 const CODEX_MCP_BLOCK = '[mcp_servers.astria]\ncommand = "astria"\nargs = ["mcp"]';
 
-function codexConfigPath(): string {
-  return path.join(os.homedir(), '.codex', 'config.toml');
+function codexConfigPath(root = os.homedir()): string {
+  return path.join(root, '.codex', 'config.toml');
 }
 
-export function injectCodexMcp(): boolean {
-  const configPath = codexConfigPath();
+export function injectCodexMcp(root?: string): boolean {
+  const configPath = codexConfigPath(root);
   let text = '';
   try {
     text = fs.readFileSync(configPath, 'utf8');
-  } catch {
-    // absent — created below
+  } catch (error: any) {
+    if (error.code !== 'ENOENT') throw error;
   }
   const hasSection = text
     .split('\n')
@@ -590,12 +588,13 @@ export function injectCodexMcp(): boolean {
   return true;
 }
 
-export function removeCodexMcp(): boolean {
-  const configPath = codexConfigPath();
+export function removeCodexMcp(root?: string): boolean {
+  const configPath = codexConfigPath(root);
   let text: string;
   try {
     text = fs.readFileSync(configPath, 'utf8');
-  } catch {
+  } catch (error: any) {
+    if (error.code !== 'ENOENT') throw error;
     return false;
   }
   const lines = text.split('\n');
@@ -623,7 +622,7 @@ export function removeCodexMcp(): boolean {
 
 export function injectAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
   if (flavor === 'codex') {
-    return injectCodexMcp();
+    return injectCodexMcp(projectDir);
   }
   const target = MCP_TARGETS[flavor]!;
   const configPath = path.join(projectDir, target.configPath);
@@ -710,7 +709,7 @@ function migrateLegacyServerPath(
 
 export function removeAgentMcp(projectDir: string, flavor: McpFlavor): boolean {
   if (flavor === 'codex') {
-    return removeCodexMcp();
+    return removeCodexMcp(projectDir);
   }
   const target = MCP_TARGETS[flavor]!;
   const configPath = path.join(projectDir, target.configPath);
@@ -961,23 +960,33 @@ export default function (pi) {
 }
 `;
 
-export function injectPiExtension(): boolean {
-  const dir = path.join(os.homedir(), '.pi', 'agent', 'extensions');
+export function injectPiExtension(projectDir?: string): boolean {
+  const dir = projectDir ? path.join(projectDir, '.pi', 'extensions') : path.join(os.homedir(), '.pi', 'agent', 'extensions');
   const extPath = path.join(dir, 'astria.mjs');
   if (fs.existsSync(extPath)) {
     const current = fs.readFileSync(extPath, 'utf-8');
     if (current === PI_EXTENSION_JS) return false;
   }
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(extPath, PI_EXTENSION_JS, 'utf-8');
+  writeTextAtomic(extPath, PI_EXTENSION_JS);
   return true;
 }
 
-export function removePiExtension(): boolean {
-  const extPath = path.join(os.homedir(), '.pi', 'agent', 'extensions', 'astria.mjs');
+export function removePiExtension(projectDir?: string): boolean {
+  const extPath = projectDir ? path.join(projectDir, '.pi', 'extensions', 'astria.mjs') : path.join(os.homedir(), '.pi', 'agent', 'extensions', 'astria.mjs');
   if (!fs.existsSync(extPath)) return false;
   fs.unlinkSync(extPath);
   return true;
+}
+
+/** Standalone files are wholly owned; merged configs are handled separately. */
+export function generatedIntegrationFiles(root: string, platform: string, user: boolean): Record<string, string> {
+  if (platform === 'pi') return { [path.join(root, '.pi', ...(user ? ['agent'] : []), 'extensions', 'astria.mjs')]: PI_EXTENSION_JS };
+  if (user) return {};
+  if (platform === 'cursor') return { [path.join(root, '.cursor', 'rules', 'astria.mdc')]: CURSOR_RULE };
+  if (platform === 'kiro') return { [path.join(root, '.kiro', 'steering', 'astria.md')]: KIRO_STEERING };
+  if (platform === 'opencode') return { [path.join(root, '.opencode', 'plugins', 'astria.js')]: OPENCODE_PLUGIN_JS };
+  return {};
 }
 
 // ---- Kiro (.kiro/steering/astria.md) ----
@@ -1004,7 +1013,7 @@ export function injectKiroSteering(projectDir: string): boolean {
   if (!fs.existsSync(steerDir)) {
     fs.mkdirSync(steerDir, { recursive: true });
   }
-  fs.writeFileSync(steerPath, KIRO_STEERING, 'utf-8');
+  writeTextAtomic(steerPath, KIRO_STEERING);
   return true;
 }
 

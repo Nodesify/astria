@@ -11,9 +11,26 @@ pub fn repo_map(
     budget: i64,
     min_strength: f64,
 ) -> astria_core::Result<(String, usize)> {
+    let token_budget = usize::try_from(budget)
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| {
+            astria_core::AstriaError::Graph(
+                "budget must be a positive o200k_base token count".into(),
+            )
+        })?;
+    let empty_response = |message: &str| {
+        if count_response_tokens(message) > token_budget {
+            Err(astria_core::AstriaError::Graph(
+                "budget is too small for a repo-map response".into(),
+            ))
+        } else {
+            Ok((message.to_string(), 0))
+        }
+    };
     let loaded = load_graph_snapshot(db, db_path)?;
     if loaded.graph.node_count() == 0 {
-        return Ok(("No nodes in graph.".to_string(), 0));
+        return empty_response("No nodes in graph.");
     }
 
     // Display-form file of each node (indexed by NodeIndex::index()).
@@ -22,10 +39,22 @@ pub fn repo_map(
         .node_indices()
         .map(|idx| loaded.display_path(&loaded.graph[idx].source_file))
         .collect();
-    let mut files: Vec<String> = file_of.clone();
+    let eligible = |idx: NodeIndex| {
+        !file_of[idx.index()].trim().is_empty()
+            && !matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference")
+    };
+    let mut files: Vec<String> = loaded
+        .graph
+        .node_indices()
+        .filter(|&idx| eligible(idx))
+        .map(|idx| file_of[idx.index()].clone())
+        .collect();
     files.sort();
     files.dedup();
     let n = files.len();
+    if n == 0 {
+        return empty_response("No located source files in graph.");
+    }
     let file_rank: HashMap<&str, usize> = files
         .iter()
         .enumerate()
@@ -36,7 +65,8 @@ pub fn repo_map(
     let mut adj: Vec<HashMap<usize, f64>> = vec![HashMap::new(); n];
     let mut out_sum: Vec<f64> = vec![0.0; n];
     for e in loaded.graph.edge_references() {
-        if !e.weight().meets_detail(min_strength) {
+        if !eligible(e.source()) || !eligible(e.target()) || !e.weight().meets_detail(min_strength)
+        {
             continue;
         }
         let sf = &file_of[e.source().index()];
@@ -71,6 +101,9 @@ pub fn repo_map(
     // Top symbols per file by degree (deterministic ties by label).
     let mut file_symbols: Vec<Vec<(NodeIndex, usize)>> = vec![Vec::new(); n];
     for idx in loaded.graph.node_indices() {
+        if !eligible(idx) {
+            continue;
+        }
         let fi = file_rank[file_of[idx.index()].as_str()];
         file_symbols[fi].push((idx, loaded.graph.neighbors(idx).count()));
     }
@@ -83,7 +116,6 @@ pub fn repo_map(
     }
 
     // Emit within budget.
-    let char_budget = (budget.max(1) as usize) * 3;
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|a, b| {
         rank[*b]
@@ -103,15 +135,33 @@ pub fn repo_map(
                 node.label, node.id, deg
             ));
         }
-        if out.len() + block.len() > char_budget && shown > 0 {
-            out.push_str(&format!(
+        let footer = if shown + 1 < n {
+            format!(
+                "\n... (map truncated: {} of {} files; raise --budget for more)\n",
+                shown + 1,
+                n
+            )
+        } else {
+            String::new()
+        };
+        if count_response_tokens(&format!("{out}{block}{footer}")) > token_budget {
+            let footer = format!(
                 "\n... (map truncated: {} of {} files; raise --budget for more)\n",
                 shown, n
-            ));
+            );
+            if count_response_tokens(&format!("{out}{footer}")) <= token_budget {
+                out.push_str(&footer);
+            }
             break;
         }
         out.push_str(&block);
         shown += 1;
+    }
+
+    if count_response_tokens(&out) > token_budget || shown == 0 {
+        return Err(astria_core::AstriaError::Graph(
+            "budget is too small for a complete repo-map record".into(),
+        ));
     }
 
     Ok((out, shown))

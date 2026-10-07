@@ -17,6 +17,8 @@ astria run <path>
 
 ## Install fails or the native binary is missing
 
+Run `astria doctor` (or `astria doctor --scope user`). It distinguishes missing native packages from binaries that are present but cannot load. Check [installation lifecycle](../guides/installation-lifecycle) for scope, permissions, lock recovery and upgrade steps.
+
 - Node.js **>= 22** is required.
 - No Rust toolchain is needed — the native core ships as prebuilt per-platform binaries via the package's optional dependencies. If your npm setup skips optional dependencies (`--no-optional`, an `omit=optional` in `.npmrc`), the binary never downloads; remove that and reinstall.
 
