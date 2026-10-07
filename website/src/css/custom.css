@@ -1,13 +1,45 @@
-/* Global theme: emerald palette, Inter/JetBrains Mono typography, chrome polish */
+/*
+ * Global theme: Singapore Government Design System (SGDS) tokens.
+ * Source of truth: https://www.designsystem.tech.gov.sg/ (foundations >
+ * colour, typography, design tokens). Values below are the published SGDS
+ * primitive scales: product-primary (this site's primary ramp), blue
+ * (accent), the 13-step grey scale, and semantic red/green/yellow.
+ * Typography is unchanged: Inter + JetBrains Mono is the SGDS pairing.
+ */
 
 :root {
-  --ifm-color-primary: #059669;
-  --ifm-color-primary-dark: #047857;
-  --ifm-color-primary-darker: #065f46;
-  --ifm-color-primary-darkest: #064e3b;
-  --ifm-color-primary-light: #10b981;
-  --ifm-color-primary-lighter: #34d399;
-  --ifm-color-primary-lightest: #6ee7b7;
+  /* Primary — SGDS product-primary ramp (600 anchor) */
+  --ifm-color-primary: #6b4feb; /* product-primary-600 */
+  --ifm-color-primary-dark: #523abc; /* product-primary-700 */
+  --ifm-color-primary-darker: #4733a3;
+  --ifm-color-primary-darkest: #3c2b8a; /* product-primary-800 */
+  --ifm-color-primary-light: #8a72ef; /* product-primary-500 */
+  --ifm-color-primary-lighter: #9d87f2;
+  --ifm-color-primary-lightest: #c8bdf7; /* product-primary-300 */
+
+  /* Semantic — SGDS scales */
+  --ifm-color-success: #0e7c3d; /* sgds-green-600 */
+  --ifm-color-info: #0269d0; /* sgds-blue-600 */
+  --ifm-color-danger: #cf2323; /* sgds-red-600 */
+  --ifm-color-warning: #9d841c; /* sgds-yellow-500 */
+
+  /* Neutrals — SGDS grey scale mapped onto the Infima emphasis ladder */
+  --ifm-color-emphasis-0: #ffffff; /* gray-000 */
+  --ifm-color-emphasis-100: #f7f7f7; /* gray-50 */
+  --ifm-color-emphasis-200: #dfdfdf; /* gray-200 — border-muted */
+  --ifm-color-emphasis-300: #c6c6c6; /* gray-300 — border-default */
+  --ifm-color-emphasis-400: #a5a5a5; /* gray-400 */
+  --ifm-color-emphasis-500: #868686; /* gray-500 */
+  --ifm-color-emphasis-600: #6b6b6b; /* gray-600 */
+  --ifm-color-emphasis-700: #525252; /* gray-700 */
+  --ifm-color-emphasis-800: #3b3b3b; /* gray-800 */
+  --ifm-color-emphasis-900: #2a2a2a; /* gray-900 */
+  --ifm-color-emphasis-1000: #1a1a1a; /* gray-1000 */
+
+  --ifm-background-color: #ffffff; /* sgds-bg-default (light) */
+  --ifm-background-surface-color: #ffffff;
+  --ifm-heading-color: #0e0e0e; /* gray-1100 */
+  --ifm-code-background: #f3f3f3; /* gray-100 */
 
   --ifm-font-family-base: 'Inter Variable', system-ui, -apple-system, 'Segoe UI',
     Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -19,27 +51,51 @@
   --ifm-font-size-base: 16px;
   --ifm-line-height-base: 1.68;
 
-  --docusaurus-highlighted-code-line-bg: rgba(5, 150, 105, 0.14);
+  --docusaurus-highlighted-code-line-bg: rgba(107, 79, 235, 0.12);
 
   --ifm-navbar-height: 4rem;
+
+  /* SGDS border-radius scale */
+  --sgds-radius-sm: 4px;
+  --sgds-radius-md: 8px;
+  --sgds-radius-lg: 12px;
+  --sgds-radius-xl: 16px;
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #34d399;
-  --ifm-color-primary-dark: #10b981;
-  --ifm-color-primary-darker: #059669;
-  --ifm-color-primary-darkest: #047857;
-  --ifm-color-primary-light: #6ee7b7;
-  --ifm-color-primary-lighter: #a7f3d0;
-  --ifm-color-primary-lightest: #d1fae5;
+  /* Dark primary: link-colour role lightens (SGDS dark emphasis = 400/300);
+     solid buttons keep the fixed-dark #6b4feb below. */
+  --ifm-color-primary: #a999f3; /* product-primary-400 */
+  --ifm-color-primary-dark: #c8bdf7; /* product-primary-300 — hover */
+  --ifm-color-primary-darker: #d6cdf9;
+  --ifm-color-primary-darkest: #e1dbfb; /* product-primary-200 */
+  --ifm-color-primary-light: #8a72ef; /* product-primary-500 */
+  --ifm-color-primary-lighter: #6b4feb; /* product-primary-600 */
+  --ifm-color-primary-lightest: #523abc; /* product-primary-700 */
 
-  --ifm-background-color: #0b1220;
-  --ifm-background-surface-color: #101a2e;
-  --ifm-color-emphasis-100: #131d33;
-  --ifm-color-emphasis-200: #1e2a44;
-  --ifm-color-emphasis-300: #2a3a5c;
+  --ifm-color-success: #16bd5e; /* sgds-green-400 */
+  --ifm-color-info: #1e87ef; /* sgds-blue-500 */
+  --ifm-color-danger: #e05959; /* sgds-red-500 */
+  --ifm-color-warning: #c2a223; /* sgds-yellow-400 */
 
-  --docusaurus-highlighted-code-line-bg: rgba(52, 211, 153, 0.16);
+  /* SGDS dark greys: bg-default = gray-1100, surfaces gray-1000 */
+  --ifm-background-color: #0e0e0e; /* gray-1100 */
+  --ifm-background-surface-color: #1a1a1a; /* gray-1000 */
+  --ifm-color-emphasis-100: #1a1a1a; /* gray-1000 */
+  --ifm-color-emphasis-200: #242424;
+  --ifm-color-emphasis-300: #2e2e2e;
+  --ifm-color-emphasis-400: #3b3b3b; /* gray-800 */
+  --ifm-color-emphasis-500: #525252; /* gray-700 */
+  --ifm-color-emphasis-600: #6b6b6b; /* gray-600 */
+  --ifm-color-emphasis-700: #868686; /* gray-500 */
+  --ifm-color-emphasis-800: #a5a5a5; /* gray-400 */
+  --ifm-color-emphasis-900: #c6c6c6; /* gray-300 */
+  --ifm-color-emphasis-1000: #dfdfdf; /* gray-200 */
+
+  --ifm-heading-color: #f7f7f7; /* gray-50 */
+  --ifm-code-background: #242424;
+
+  --docusaurus-highlighted-code-line-bg: rgba(169, 153, 243, 0.14);
 }
 
 /* Headings */
@@ -47,17 +103,15 @@ h1, h2, h3, h4 {
   letter-spacing: -0.015em;
 }
 
-/* Navbar */
+/* Navbar — solid surface + crisp border, SGDS chrome style */
 .navbar {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: rgba(255, 255, 255, 0.82);
+  background: #ffffff;
   box-shadow: none;
   border-bottom: 1px solid var(--ifm-color-emphasis-200);
 }
 
 [data-theme='dark'] .navbar {
-  background: rgba(11, 18, 32, 0.82);
+  background: #0e0e0e;
 }
 
 .navbar__title {
@@ -74,6 +128,19 @@ h1, h2, h3, h4 {
   font-weight: 500;
 }
 
+/* Buttons — solid primary keeps the SGDS fixed-dark surface in dark mode
+   (white-on-#6b4feb), while links use the lightened 400 ramp. */
+[data-theme='dark'] .button--primary {
+  background-color: #6b4feb; /* product-primary-600, fixed */
+  color: #fff;
+}
+
+[data-theme='dark'] .button--primary:hover,
+[data-theme='dark'] .button--primary:active {
+  background-color: #7a5fed;
+  color: #fff;
+}
+
 /* Docs body typography */
 article h1 {
   font-size: 2.1rem;
@@ -85,36 +152,36 @@ article h2 {
   margin-top: 2.6rem;
 }
 
-/* Code blocks */
+/* Code blocks — SGDS radius-lg */
 .theme-code-block {
-  border-radius: 12px !important;
-  box-shadow: 0 6px 24px -12px rgba(2, 44, 34, 0.35);
+  border-radius: var(--sgds-radius-lg) !important;
+  box-shadow: 0 6px 24px -12px rgba(14, 14, 14, 0.35);
 }
 
 /* Admonitions */
 .admonition {
-  border-radius: 12px;
+  border-radius: var(--sgds-radius-lg);
   box-shadow: none;
 }
 
-/* Tables */
+/* Tables — SGDS radius-md */
 table {
-  border-radius: 10px;
+  border-radius: var(--sgds-radius-md);
   overflow: hidden;
 }
 
-/* Footer */
+/* Footer — SGDS surface-inverse (gray-1100), fixed across themes */
 .footer {
-  --ifm-footer-background-color: #0d1526;
-  --ifm-footer-link-color: #94a3b8;
-  --ifm-footer-title-color: #e2e8f0;
-  --ifm-footer-color: #64748b;
-  border-top: 1px solid rgba(148, 163, 184, 0.15);
-  background: #0d1526;
+  --ifm-footer-background-color: #0e0e0e;
+  --ifm-footer-link-color: #a5a5a5; /* gray-400 */
+  --ifm-footer-title-color: #f7f7f7; /* gray-50 */
+  --ifm-footer-color: #868686; /* gray-500 */
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0e0e0e;
 }
 
 .footer__link-item:hover {
-  color: #34d399;
+  color: #c8bdf7; /* product-primary-300 */
 }
 
 .footer__title {
@@ -127,9 +194,9 @@ table {
   font-size: 0.85rem;
 }
 
-/* Buttons site-wide */
+/* Buttons site-wide — SGDS radius-md */
 .button {
-  border-radius: 10px;
+  border-radius: var(--sgds-radius-md);
   font-weight: 600;
 }
 

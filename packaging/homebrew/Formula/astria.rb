@@ -1,10 +1,10 @@
 class Astria < Formula
   desc "Knowledge graph builder for codebases"
   homepage "https://nodesify.github.io/astria/"
-  url "https://registry.npmjs.org/@nodesify/astria/-/astria-1.1.0.tgz"
-  sha256 "e250946f5f661a8e5edee4e573608b5807dc5d7599dd2df14e49bdf87a9ca85d"
+  url "https://registry.npmjs.org/@nodesify/astria/-/astria-1.1.1.tgz"
+  sha256 "f6d1cd8b4f1e804ec1dc043dff9925d984b1aa68645394d656ec3b108de4c144"
   license "MIT"
-  version "1.1.0"
+  version "1.1.1"
 
   # astria ships native napi-rs binaries through npm optionalDependencies and
   # needs Node >= 22 (see README).
