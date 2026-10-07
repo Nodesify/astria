@@ -33,7 +33,9 @@ export async function globalListCommand() {
     }
     console.log('Global graph repos:');
     for (const e of entries) {
-      console.log(`  ${e.tag} — ${e.nodes} nodes, ${e.edges} edges`);
+      console.log(`  ${e.tag} — ${e.nodes} nodes, ${e.edges} edges | ${e.state}`);
+      console.log(`    commit: ${e.sourceCommit ?? 'unknown'} | generation: ${e.graphGeneration ?? 'unknown'}`);
+      console.log(`    source: ${e.root || 'unavailable'} | built: ${e.graphBuiltAt ?? 'unknown'}`);
     }
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);

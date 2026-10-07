@@ -360,6 +360,12 @@ pub(super) fn enrich_with_semantics(
     // One merge path gives a cache hit exactly the same graph facts as a call.
     for (idx, path, sem_ext) in ready {
         let ext = &mut extractions[idx];
+        let lifecycle = ext
+            .nodes
+            .iter()
+            .filter_map(|node| node.signature.as_ref())
+            .find(|signature| signature.starts_with("astria-document: "))
+            .cloned();
         for sem_node in &sem_ext.nodes {
             ext.nodes.push(astria_extract::ExtractedNode {
                 id: sem_node.id.clone(),
@@ -367,7 +373,7 @@ pub(super) fn enrich_with_semantics(
                 source_file: path.clone(),
                 source_line: None,
                 docstring: Some(sem_node.summary.clone()),
-                signature: None,
+                signature: lifecycle.clone(),
                 node_type: sem_node.node_type.clone(),
             });
         }

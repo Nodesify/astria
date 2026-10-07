@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1200px;height:480px;background:#0f1218;font-family:'Cascadia Code',Consolas,Menlo,monospace}
+.tb{height:44px;background:#171b24;display:flex;align-items:center;position:relative}
+.dots{display:flex;margin-left:18px;gap:8px}
+.dot{width:12px;height:12px;border-radius:50%}
+.d1{background:#ff5f56}.d2{background:#ffbd2e}.d3{background:#27c93f}
+.t{position:absolute;left:0;right:0;text-align:center;color:#5b6472;font-size:12.5px;font-family:'Segoe UI',sans-serif}
+.out{padding:20px 26px;font-size:13.5px;line-height:22px;color:#c9d1d9;white-space:pre}
+.p{color:#7ee787}.c{color:#e6edf3}.o{color:#8b98a9}.b{color:#79c0ff}.f{color:#ffa657}.g{color:#7ee787}.a{color:#e3b341}.bl{color:#5b6472}
+</style></head><body>
+<div class="tb"><div class="dots"><div class="dot d1"></div><div class="dot d2"></div><div class="dot d3"></div></div><div class="t">astria 1.1.0 · historical formatted output excerpt</div></div>
+<div class="out"><span class="p">$</span> <span class="c">astria query "where is bearer token authentication for the http mcp server implemented"</span>
+
+<span class="o">Traversal: BFS depth=2 | Start: ["</span><span class="f">http.rs</span><span class="o">", "</span><span class="b">run_mcp_http_server()</span><span class="o">", "</span><span class="b">HttpServerConfig</span><span class="o">", …] | 679 nodes found</span>
+<span class="a"># source drift since this build: 57 modified — run `astria update` before trusting answers</span>
+
+<span class="o">NODE </span><span class="f">http.rs</span><span class="o"> [id=crates_astria_mcp_src_http_rs_8aabc5c81c71 src=</span><span class="f">crates/astria-mcp/src/http.rs</span><span class="o"> community=238]</span>
+<span class="o">  summary: MCP Streamable-HTTP transport with multi-project serving…</span>
+<span class="o">NODE </span><span class="b">run_mcp_http_server()</span><span class="o"> [id=crates_astria_napi_src_lib_rs_353b27bf063a::run_mcp_http_server</span>
+<span class="o">  src=</span><span class="f">crates/astria-napi/src/lib.rs:1656</span><span class="o">]</span>
+<span class="o">  sig: pub fn run_mcp_http_server(opts: McpHttpOptions) -> napi::Result&lt;()&gt;</span>
+<span class="o">NODE </span><span class="b">HttpServerConfig</span><span class="o"> [id=…::HttpServerConfig src=</span><span class="f">crates/astria-mcp/src/http.rs:62</span><span class="o">]</span>
+<span class="o">  sig: pub struct HttpServerConfig</span>
+<span class="o">EDGE </span><span class="f">http.rs</span><span class="o"> --contains [</span><span class="g">EXTRACTED:1.00</span><span class="o">]--&gt; </span><span class="b">Head</span><span class="o"> @</span><span class="f">crates/astria-mcp/src/http.rs:136</span>
+<span class="o">NODE </span><span class="b">handle_message_for_db</span><span class="o"> [id=…::handle_message_for_db src=</span><span class="f">crates/astria-mcp/src/http.rs:500</span><span class="o">]</span>
+
+<span class="bl">… 670 more nodes — full output abridged</span></div>
+</body></html>

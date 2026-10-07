@@ -69,6 +69,7 @@ pub fn merge_graphs_with_policy(
     out_root: &Path,
     same_repo: bool,
 ) -> astria_core::Result<MergeResult> {
+    let _writer = astria_core::writer_lock::WriterLock::acquire(out_root)?;
     let db_a = crate::pipeline::load_graph_db(root_a)?;
     let db_b = crate::pipeline::load_graph_db(root_b)?;
 
@@ -94,14 +95,15 @@ pub fn merge_graphs_with_policy(
     let out_astria = out_root.join(".astria");
     std::fs::create_dir_all(&out_astria)?;
     let final_db = out_astria.join("db.sqlite");
-    let staging = out_astria.join("db.sqlite.merging");
-    for stale in [
-        staging.clone(),
-        out_astria.join("db.sqlite.merging-wal"),
-        out_astria.join("db.sqlite.merging-shm"),
-    ] {
-        let _ = std::fs::remove_file(&stale);
-    }
+    let nonce = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let staging = out_astria.join(format!("db.sqlite.merging-{nonce}"));
     let db = astria_core::db::open_db(&staging)?;
 
     let tx = db.unchecked_transaction()?;
@@ -181,10 +183,13 @@ pub fn merge_graphs_with_policy(
     // Artifacts are STAGED under `.new` names and only become visible after
     // the database swap succeeds: a failure anywhere above leaves both the
     // previous database and the previous artifacts in place.
-    let json_new = out_astria.join("graph.json.new");
+    let json_new = out_astria.join(format!("graph.json.new-{nonce}"));
     crate::pipeline::export_json(&db, &json_new)?;
-    let report_new = out_astria.join("graph_report.md.new");
-    std::fs::write(&report_new, report.as_bytes())?;
+    let report_new = out_astria.join(format!("graph_report.md.new-{nonce}"));
+    write_atomic(
+        &report_new,
+        format!("{report}\n---\n\ngeneration: {stamp}\n").as_bytes(),
+    )?;
 
     // Publish the database by rename. The connection must be closed first
     // (Windows keeps open files locked); checkpointing folds the WAL in so
@@ -411,51 +416,20 @@ fn collect_edges(
 /// staging rename then fails, it is moved BACK: the expected database path
 /// exists again on every exit, success or failure.
 fn publish_db(staging: &Path, final_db: &Path) -> astria_core::Result<()> {
-    let previous = final_db.with_extension("sqlite.previous");
-    let _ = std::fs::remove_file(&previous);
-    let had_previous = final_db.exists();
-    if had_previous {
-        std::fs::rename(final_db, &previous)?;
+    // Atomic replacement keeps the previous database visible until the swap.
+    tempfile::TempPath::try_from_path(staging)?
+        .persist(final_db)
+        .map_err(|e| e.error)?;
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(PathBuf::from(format!("{}{suffix}", staging.display())));
     }
-    match std::fs::rename(staging, final_db) {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&previous);
-            // Staging sidecars (checkpointed empty) must not linger next to
-            // the published name.
-            for sidecar in [
-                staging.with_extension("merging-wal"),
-                staging.with_extension("merging-shm"),
-            ] {
-                let _ = std::fs::remove_file(&sidecar);
-            }
-            Ok(())
-        }
-        Err(e) => {
-            if had_previous {
-                if let Err(restore) = std::fs::rename(&previous, final_db) {
-                    return Err(astria_core::AstriaError::Graph(format!(
-                        "publishing {} failed ({e}) and restoring the previous database failed \
-                         ({restore}) — the previous database is preserved at {}",
-                        final_db.display(),
-                        previous.display()
-                    )));
-                }
-            }
-            Err(e.into())
-        }
-    }
+    Ok(())
 }
 
 /// Write a file whole via a temp sibling + rename, so a concurrent reader
 /// never observes a torn artifact.
 fn write_atomic(path: &Path, bytes: &[u8]) -> astria_core::Result<()> {
-    let tmp = path.with_extension(format!(
-        "{}.tmp",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("part")
-    ));
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    astria_core::writer_lock::write_atomic(path, bytes)
 }
 
 pub fn diff_graphs(root_a: &Path, root_b: &Path) -> astria_core::Result<DiffResult> {

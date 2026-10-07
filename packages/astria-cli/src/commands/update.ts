@@ -3,8 +3,11 @@ import { existsSync } from 'fs';
 import { updatePipeline, exportWiki, tokenBenchmark, graphBuildInfo } from '../native';
 import { printLlmSummary } from './llm-summary';
 import { VERSION } from '../version';
+import { indexingOptions } from './indexing-profile';
 
 export interface UpdateOptions {
+  refreshPolicy?: boolean;
+  llmBudget?: string;
   dedup?: boolean;
   backend?: string;
   judge?: string;
@@ -39,10 +42,8 @@ export async function updateCommand(path: string, opts: UpdateOptions = {}) {
     process.exitCode = 1;
     return;
   }
-  if (opts.backend) process.env.ASTRIA_LLM_BACKEND = opts.backend;
-  if (opts.judge) process.env.ASTRIA_LLM_JUDGE = opts.judge;
-  if (opts.model) process.env.ASTRIA_LLM_MODEL = opts.model;
   try {
+    opts = indexingOptions(path, opts, true);
     if (opts.ifStale && opts.ifStale > 0) {
       const age = pipelineAgeMinutes(path);
       if (age !== null && age < opts.ifStale) {

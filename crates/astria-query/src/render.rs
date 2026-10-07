@@ -25,20 +25,18 @@ pub(crate) fn bfs_subgraph(
 ) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = start_nodes.iter().copied().collect();
     let mut frontier: Vec<NodeIndex> = start_nodes.to_vec();
-    let mut edges_seen: Vec<EdgeIndex> = Vec::new();
     let mut distance: HashMap<NodeIndex, u32> = start_nodes.iter().map(|&n| (n, 0)).collect();
 
     for depth in 0..max_depth {
         let mut next_frontier = Vec::new();
         for &node in &frontier {
-            for (neighbor, edge_id) in
+            for (neighbor, _) in
                 iter_neighbors_filtered(&loaded.graph, node, directed, min_strength, semantic_floor)
             {
                 if !visited.contains(&neighbor) {
                     visited.insert(neighbor);
                     distance.insert(neighbor, depth as u32 + 1);
                     next_frontier.push(neighbor);
-                    edges_seen.push(edge_id);
                 }
             }
         }
@@ -47,6 +45,10 @@ pub(crate) fn bfs_subgraph(
         }
         frontier = next_frontier;
     }
+    // Node discovery and relationship selection are separate: a traversal
+    // tree omits calls between seeds, cycles and multiple relations between
+    // the same symbols. Return the qualifying induced subgraph instead.
+    let edges_seen = selected_edges(loaded, &visited, min_strength, semantic_floor);
     (visited, edges_seen, distance)
 }
 
@@ -59,7 +61,6 @@ pub(crate) fn dfs_subgraph(
     semantic_floor: f64,
 ) -> TraversalResult {
     let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut edges_seen: Vec<EdgeIndex> = Vec::new();
     let mut stack: Vec<(NodeIndex, usize)> = start_nodes.iter().rev().map(|&n| (n, 0)).collect();
 
     while let Some((node, depth)) = stack.pop() {
@@ -70,16 +71,35 @@ pub(crate) fn dfs_subgraph(
         if depth == max_depth {
             continue;
         }
-        for (neighbor, edge_id) in
+        for (neighbor, _) in
             iter_neighbors_filtered(&loaded.graph, node, directed, min_strength, semantic_floor)
         {
             if !visited.contains(&neighbor) {
                 stack.push((neighbor, depth + 1));
-                edges_seen.push(edge_id);
             }
         }
     }
+    let edges_seen = selected_edges(loaded, &visited, min_strength, semantic_floor);
     (visited, edges_seen, HashMap::new())
+}
+
+fn selected_edges(
+    loaded: &LoadedGraph,
+    visited: &HashSet<NodeIndex>,
+    min_strength: f64,
+    semantic_floor: f64,
+) -> Vec<EdgeIndex> {
+    let mut edges: Vec<_> = loaded
+        .graph
+        .edge_references()
+        .filter(|edge| visited.contains(&edge.source()) && visited.contains(&edge.target()))
+        .filter(|edge| edge.weight().meets_detail(min_strength))
+        .filter(|edge| !below_semantic_floor(edge.weight(), semantic_floor))
+        .map(|edge| edge.id())
+        .collect();
+    edges.sort_by_key(|edge| edge.index());
+    edges.dedup();
+    edges
 }
 
 /// A label that names a file ("lib.rs", "benchmark.md") rather than a symbol.
@@ -176,12 +196,23 @@ pub(crate) fn subgraph_to_text(
             }
         }
         if let Some(sig) = &node.signature {
-            let short: String = sig.chars().take(140).collect();
-            line.push_str(&format!("  sig: {}\n", short));
-        } else if let Some(ref doc) = node.docstring {
-            if !doc.is_empty() {
-                let summary: String = doc.chars().take(200).collect();
-                line.push_str(&format!("  summary: {}\n", summary));
+            if let Some(lifecycle) = sig.strip_prefix("astria-document: ") {
+                line.push_str(&format!("  lifecycle: {lifecycle}\n"));
+            } else {
+                let short: String = sig.chars().take(140).collect();
+                line.push_str(&format!("  sig: {}\n", short));
+            }
+        }
+        if node
+            .signature
+            .as_ref()
+            .is_none_or(|s| s.starts_with("astria-document: "))
+        {
+            if let Some(ref doc) = node.docstring {
+                if !doc.is_empty() {
+                    let summary: String = doc.chars().take(200).collect();
+                    line.push_str(&format!("  summary: {}\n", summary));
+                }
             }
         }
         records.push(line);

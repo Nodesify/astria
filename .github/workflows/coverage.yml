@@ -30,14 +30,19 @@ jobs:
         with:
           key: ${{ hashFiles('**/Cargo.lock') }}-cov
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2
         with:
           tool: cargo-llvm-cov
       - name: Measure coverage
         run: cargo llvm-cov --workspace --locked --no-fail-fast --lcov --output-path lcov.info
       - name: Per-crate summary
         if: always()
-        run: cargo llvm-cov --workspace --locked --summary-only --fail-under-lines 0
+        # Ratchet: baseline measured 2026-10-07 at 79.46% lines (full
+        # workspace, default features). The floor sits ~4.5 points under
+        # the baseline to absorb cross-platform variance while still
+        # catching real regressions. Raise it as coverage grows; never
+        # lower it.
+        run: cargo llvm-cov --workspace --locked --summary-only --fail-under-lines 75
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

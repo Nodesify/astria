@@ -12,7 +12,9 @@
 [![Node](https://img.shields.io/badge/node-22-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Ask DeepWiki](.github/assets/deepwiki-badge.svg)](https://deepwiki.com/Nodesify/astria)
 
-[Docs](https://nodesify.github.io/astria/) | [Getting started](https://nodesify.github.io/astria/docs/getting-started) | [CLI Reference](https://nodesify.github.io/astria/docs/reference/cli) | [Architecture](ARCHITECTURE.md) | [Worked examples](worked/) | [Changelog](CHANGELOG.md) | [Release notes](https://nodesify.github.io/astria/blog)
+[Docs](https://nodesify.github.io/astria/) | [Getting started](https://nodesify.github.io/astria/docs/getting-started) | [CLI Reference](https://nodesify.github.io/astria/docs/reference/cli) | [Architecture](ARCHITECTURE.md) | [Worked examples](worked/) | [Changelog](CHANGELOG.md) | [Release notes](https://nodesify.github.io/astria/blog) | [Security](SECURITY.md)
+
+Built by [Nodesify](https://nodesify.com)
 
 </div>
 
@@ -83,3 +85,5 @@ Requires Rust 1.88+ (declared as `rust-version` in the workspace) and Node.js >=
 MIT — see [LICENSE](LICENSE).
 
 Contributions are welcome and accepted under the [Contributor License Agreement](CLA.md) — see [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+
+Installation defaults to project scope: `astria install --platform codex --scope project`. Use `--scope user` explicitly for user-wide integrations. Run `astria doctor` after setup or upgrades. See the [installation lifecycle guide](https://nodesify.github.io/astria/docs/guides/installation-lifecycle) for supported platforms, upgrade, backup/restore and complete removal.

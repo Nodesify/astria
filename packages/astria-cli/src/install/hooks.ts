@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { writeTextAtomic } from './atomic';
+import { writeTextAtomic, withInstallLock } from './atomic';
 
 const UPDATE_HELPER = `
 const ASTRIA_HOOK_VERSION = '4';
@@ -284,7 +284,7 @@ function uninstallHook(hooksDir: string, def: HookDef): string {
   return `${def.hookName}: removed`;
 }
 
-export function installGitHooks(projectDir: string): string[] {
+function installGitHooksRaw(projectDir: string): string[] {
   const gitRoot = getGitRoot(projectDir);
   if (!gitRoot) return ['Not a git repository'];
 
@@ -292,7 +292,7 @@ export function installGitHooks(projectDir: string): string[] {
   return HOOK_DEFS.map(def => installHook(hooksDir, def));
 }
 
-export function uninstallGitHooks(projectDir: string): string[] {
+function uninstallGitHooksRaw(projectDir: string): string[] {
   const gitRoot = getGitRoot(projectDir);
   if (!gitRoot) return ['Not a git repository'];
 
@@ -333,3 +333,6 @@ export function statusGitHooks(projectDir: string): string[] {
 // Kept for reference in tests: the legacy marker families this installer
 // recognizes (nodesify-graphify JS hooks, and pre-0.3 shell hooks).
 export { LEGACY_HOOK_PREFIXES };
+
+export function installGitHooks(projectDir: string): string[] { return withInstallLock(() => installGitHooksRaw(projectDir)); }
+export function uninstallGitHooks(projectDir: string): string[] { return withInstallLock(() => uninstallGitHooksRaw(projectDir)); }

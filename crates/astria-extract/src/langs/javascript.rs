@@ -223,7 +223,7 @@ pub(crate) fn walk_javascript_function<'a>(state: &mut ExtractionState<'a>, node
         id: func_id.clone(),
         label: format!("{name}()"),
         source_file: state.file_path.clone(),
-        source_line: Some(node.start_position().row as u32),
+        source_line: Some(node.start_position().row as u32 + 1),
         docstring: javascript_doc(*node, state.source),
         signature: node_signature(node, state.source, state.cfg),
         node_type: "function".to_string(),
@@ -235,7 +235,7 @@ pub(crate) fn walk_javascript_function<'a>(state: &mut ExtractionState<'a>, node
         confidence: "EXTRACTED".to_string(),
         confidence_score: Some(1.0),
         source_file: state.file_path.clone(),
-        source_line: Some(node.start_position().row as u32),
+        source_line: Some(node.start_position().row as u32 + 1),
     });
     if let Some(body) = find_body(node, state.cfg) {
         walk_calls(state, &func_id, &body);

@@ -58,10 +58,18 @@ fn timestamp() -> String {
         .to_string()
 }
 
+mod export;
 #[path = "graph_update.rs"]
 mod graph_update;
+mod profile;
+mod publish;
+pub(crate) use profile::run_pipeline_using_profile_locked;
 #[path = "semantic_pass.rs"]
 mod semantic_pass;
+mod stages;
+pub(crate) use export::*;
+pub(crate) use publish::*;
+pub(crate) use stages::*;
 
 pub fn run_pipeline(root: &Path) -> astria_core::Result<PipelineResult> {
     run_pipeline_with(root, true, false, false, false, None)
@@ -81,6 +89,59 @@ pub fn run_pipeline_with(
     label_communities: bool,
     deep: bool,
     cli_version: Option<&str>,
+) -> astria_core::Result<PipelineResult> {
+    let root = root.canonicalize()?;
+    let guard = astria_core::writer_lock::WriterLock::acquire(&root)?;
+    run_pipeline_with_locked(
+        &root,
+        dedup,
+        embed,
+        label_communities,
+        deep,
+        cli_version,
+        &guard,
+    )
+}
+
+// Backend configuration and usage accounting are process-global. Keep their
+// entire lifetime serialized, after acquiring the project's writer guard.
+static PIPELINE_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) fn lock_pipeline_state() -> std::sync::MutexGuard<'static, ()> {
+    PIPELINE_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The caller holds the writer guard across ingestion and publication.
+pub fn run_pipeline_with_locked(
+    root: &Path,
+    dedup: bool,
+    embed: bool,
+    label_communities: bool,
+    deep: bool,
+    cli_version: Option<&str>,
+    _guard: &astria_core::writer_lock::WriterLock,
+) -> astria_core::Result<PipelineResult> {
+    let _state = lock_pipeline_state();
+    run_pipeline_under_state_lock(
+        root,
+        dedup,
+        embed,
+        label_communities,
+        deep,
+        cli_version,
+        _guard,
+    )
+}
+
+fn run_pipeline_under_state_lock(
+    root: &Path,
+    dedup: bool,
+    embed: bool,
+    label_communities: bool,
+    deep: bool,
+    cli_version: Option<&str>,
+    _guard: &astria_core::writer_lock::WriterLock,
 ) -> astria_core::Result<PipelineResult> {
     let root = if root.exists() {
         root.canonicalize().map_err(astria_core::AstriaError::Io)?
@@ -134,13 +195,6 @@ pub fn run_pipeline_with(
         }
     }
 
-    // Record pipeline start (root is now canonicalized)
-    let run_id: i64 = db.query_row(
-        "INSERT INTO pipeline_runs (started_at, status) VALUES (?1, 'running') RETURNING id",
-        rusqlite::params![timestamp()],
-        |row| row.get(0),
-    )?;
-
     let options = PipelineOptions {
         dedup,
         embed,
@@ -148,6 +202,16 @@ pub fn run_pipeline_with(
         deep,
         cli_version,
     };
+    let indexing_profile = profile::IndexingProfile::capture(&options)?;
+    indexing_profile.validate_change(&root)?;
+
+    // Record pipeline start (root is now canonicalized)
+    let run_id: i64 = db.query_row(
+        "INSERT INTO pipeline_runs (started_at, status) VALUES (?1, 'running') RETURNING id",
+        rusqlite::params![timestamp()],
+        |row| row.get(0),
+    )?;
+
     let result = run_pipeline_inner(&root, &db, &astria_dir, &options);
 
     // Record pipeline completion, including this run's measured LLM spend.
@@ -184,450 +248,10 @@ pub fn run_pipeline_with(
         eprintln!("warning: failed to write cost report: {}", e);
     }
 
+    if result.is_ok() {
+        indexing_profile.save(&root)?;
+    }
     result
-}
-
-/// Semantic similarity stage: embed nodes missing vectors, then regenerate
-/// `similar_to` edges. Runs when explicitly requested, or as a silent
-/// incremental refresh when embeddings already exist and the model cache is
-/// present (never downloads on its own). Explicit requests fail loudly.
-///
-/// A model swap orphans the old vectors: `has_embeddings` is
-/// current-model-scoped, so a graph embedded by an older model counts as
-/// "no embeddings". Foreign-model rows therefore also trigger the silent
-/// refresh — `embed_missing_nodes` re-embeds exactly those rows — so an
-/// ordinary `update` heals a model swap. When the current model is not
-/// cached the heal cannot run offline; the mismatch is then reported
-/// loudly instead of silently disabling semantic recall.
-#[cfg(feature = "embed")]
-fn embed_stage(db: &Connection, requested: bool) -> astria_core::Result<()> {
-    let foreign: Vec<(String, usize)> = astria_embed::stored_embedding_models(db)?
-        .into_iter()
-        .filter(|(model, _)| model != astria_embed::MODEL_NAME)
-        .collect();
-    if !requested && !astria_embed::has_embeddings(db) && foreign.is_empty() {
-        return Ok(());
-    }
-    // The silent refresh path must stay offline: bail unless cached. With
-    // foreign-model rows present the bail would strand the graph with
-    // vectors no query can use — surface that instead of silence.
-    if !requested && !astria_embed::model_cached() {
-        if !foreign.is_empty() {
-            let stored: Vec<String> = foreign
-                .iter()
-                .map(|(model, rows)| format!("{model} ({rows} rows)"))
-                .collect();
-            eprintln!(
-                "[astria] stored embeddings use {}, but the current model is {}; semantic query recall is empty until they are re-embedded. Run once with --embed (downloads the model) to migrate.",
-                stored.join(", "),
-                astria_embed::MODEL_NAME
-            );
-        }
-        return Ok(());
-    }
-    match astria_embed::load_embedder() {
-        Ok(mut embedder) => {
-            if !foreign.is_empty() {
-                let rows: usize = foreign.iter().map(|(_, n)| n).sum();
-                let models: Vec<&str> = foreign.iter().map(|(m, _)| m.as_str()).collect();
-                eprintln!(
-                    "[astria] embedding model changed: migrating {rows} node vectors from {} to {}",
-                    models.join(", "),
-                    astria_embed::MODEL_NAME
-                );
-            }
-            let embedded = astria_embed::embed_missing_nodes(db, &mut embedder, 64)?;
-            let edges = astria_embed::rebuild_similarity_edges(
-                db,
-                astria_embed::DEFAULT_SIMILARITY_THRESHOLD,
-                astria_embed::DEFAULT_TOP_K,
-            )?;
-            let _ = db.execute(
-                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('last_similar_edges', ?1)",
-                rusqlite::params![edges.to_string()],
-            );
-            if requested || embedded > 0 {
-                eprintln!("[astria] semantic: {embedded} nodes embedded, {edges} similar_to edges (local model, no API key)");
-            }
-            Ok(())
-        }
-        Err(e) => {
-            if requested {
-                Err(e)
-            } else {
-                eprintln!("[astria] skipping semantic refresh: {e}");
-                Ok(())
-            }
-        }
-    }
-}
-
-/// Builds without the `embed` feature (release targets with no prebuilt
-/// ONNX Runtime, e.g. x86_64-apple-darwin) reject --embed clearly.
-#[cfg(not(feature = "embed"))]
-fn embed_stage(_db: &Connection, requested: bool) -> astria_core::Result<()> {
-    if requested {
-        return Err(astria_core::AstriaError::Graph(
-            "semantic embeddings are not supported in this build (no local model runtime for this platform)".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// `--label-communities`: one LLM call per changed community replaces the
-/// hub-symbol label with a thematic name plus a one-line summary. Labels
-/// are cached by membership, labels, backend configuration, and prompt;
-/// and failures fall back to the hub label, never to a broken community.
-fn label_communities_stage(
-    db: &Connection,
-    requested: bool,
-) -> astria_core::Result<Option<CommunityLabelStats>> {
-    label_communities_stage_with(db, requested, astria_semantic::backend_from_env)
-}
-
-fn label_communities_stage_with(
-    db: &Connection,
-    requested: bool,
-    backend_factory: fn() -> astria_core::Result<Box<dyn astria_semantic::SemanticBackend>>,
-) -> astria_core::Result<Option<CommunityLabelStats>> {
-    if !requested {
-        return Ok(None);
-    }
-    let backend = backend_factory().map_err(|_| {
-        astria_core::AstriaError::Graph(
-            "--label-communities needs an explicit semantic backend (use --backend or ASTRIA_LLM_BACKEND, and configure its credentials)"
-                .to_string(),
-        )
-    })?;
-    let backend_configuration = astria_semantic::cache_configuration(backend.as_ref());
-    // Call ceiling per run: biggest communities are labeled first, so the
-    // cap degrades gracefully instead of blocking the feature entirely.
-    let max_calls = astria_core::env_var("LLM_COMMUNITY_MAX")
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(48);
-    // Communities smaller than this stay hub-named — naming a 2-symbol
-    // group spends a call to say what the hub symbol already says.
-    const MIN_SIZE: i64 = 3;
-
-    let communities: Vec<(i64, String, i64)> = {
-        let mut stmt =
-            db.prepare("SELECT id, label, size FROM communities ORDER BY size DESC, id ASC")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-            ))
-        })?;
-        rows.filter_map(|r| r.ok()).collect()
-    };
-
-    let mut stats = CommunityLabelStats {
-        labeled: 0,
-        reused: 0,
-        failed: 0,
-    };
-    let mut calls = 0usize;
-    for (id, _stored_label, size) in communities {
-        let members: Vec<(String, String)> = {
-            let mut stmt = db.prepare(
-                "SELECT id, label FROM nodes WHERE community = ?1
-                 ORDER BY degree_centrality DESC, id ASC",
-            )?;
-            let rows = stmt.query_map(rusqlite::params![id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?;
-            rows.filter_map(|r| r.ok()).collect()
-        };
-        if members.is_empty() {
-            continue;
-        }
-
-        // Keep cluster's full membership hash separate from the LLM inputs.
-        let hub_label = members[0].1.clone();
-        let member_labels: Vec<String> = members.iter().map(|(_, label)| label.clone()).collect();
-        let members_json = serde_json::to_string(&members)?;
-        let prompt = astria_semantic::enrichment::community_label_user_prompt(
-            &hub_label,
-            size as usize,
-            &member_labels,
-        );
-        let cache_fingerprint = semantic_pass::fingerprint(&[
-            &backend_configuration,
-            &members_json,
-            astria_semantic::enrichment::community_label_system_prompt(),
-            &prompt,
-        ]);
-        let cache_key = format!("community_label_configuration:{id}");
-        let stored_configuration: Option<String> = db
-            .query_row(
-                "SELECT value FROM _meta WHERE key = ?1",
-                [&cache_key],
-                |r| r.get(0),
-            )
-            .ok();
-        let member_hash = {
-            let mut ids: Vec<&str> = members.iter().map(|(i, _)| i.as_str()).collect();
-            ids.sort_unstable();
-            astria_core::db::community_member_hash(&ids)
-        };
-        let (stored_source, stored_hash): (String, Option<String>) = db
-            .query_row(
-                "SELECT label_source, member_hash FROM communities WHERE id = ?1",
-                rusqlite::params![id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap_or_else(|_| ("hub".to_string(), None));
-        if stored_source == "llm"
-            && stored_hash.as_deref() == Some(member_hash.as_str())
-            && stored_configuration.as_deref() == Some(cache_fingerprint.as_str())
-        {
-            stats.reused += 1;
-            continue;
-        }
-        if size < MIN_SIZE {
-            continue;
-        }
-        if calls >= max_calls {
-            break;
-        }
-        if astria_semantic::enrichment::budget_exceeded() {
-            break;
-        }
-
-        calls += 1;
-        match astria_semantic::enrichment::summarize_community(
-            backend.as_ref(),
-            &hub_label,
-            size as usize,
-            &member_labels,
-        ) {
-            Ok(naming) => {
-                let stored = (|| -> astria_core::Result<()> {
-                    let tx = db.unchecked_transaction()?;
-                    tx.execute(
-                        "UPDATE communities SET label = ?1, summary = ?2, label_source = 'llm', member_hash = ?3 WHERE id = ?4",
-                        rusqlite::params![naming.label, naming.summary, member_hash, id],
-                    )?;
-                    tx.execute(
-                        "INSERT OR REPLACE INTO _meta (key, value) VALUES (?1, ?2)",
-                        rusqlite::params![cache_key, cache_fingerprint],
-                    )?;
-                    tx.commit()?;
-                    Ok(())
-                })();
-                match stored {
-                    Ok(()) => stats.labeled += 1,
-                    Err(e) => {
-                        eprintln!("warning: failed to store label for community {id}: {e}");
-                        stats.failed += 1;
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("warning: community naming failed for [{id}] {hub_label}: {e}");
-                stats.failed += 1;
-            }
-        }
-        // Gentle pacing between auxiliary calls, mirroring extraction.
-        std::thread::sleep(Duration::from_millis(200));
-    }
-
-    let _ = db.execute(
-        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('last_community_labels', ?1)",
-        rusqlite::params![format!(
-            "labeled={} reused={} failed={}",
-            stats.labeled, stats.reused, stats.failed
-        )],
-    );
-    Ok(Some(stats))
-}
-
-/// `--deep`: the second extraction tier. For every file, one LLM call
-/// links the file's code symbols to concept nodes that live in *other*
-/// files — the cross-file concept mesh the AST cannot see. Results are
-/// cached by content, symbols, concept menu, backend, and prompt; written as INFERRED edges tagged
-/// `context='deep'`, so rebuilds are idempotent and free when nothing
-/// changed.
-fn deep_link_stage(
-    db: &Connection,
-    root: &Path,
-    requested: bool,
-) -> astria_core::Result<Option<DeepLinkStats>> {
-    deep_link_stage_with(db, root, requested, astria_semantic::backend_from_env)
-}
-
-fn deep_link_stage_with(
-    db: &Connection,
-    root: &Path,
-    requested: bool,
-    backend_factory: fn() -> astria_core::Result<Box<dyn astria_semantic::SemanticBackend>>,
-) -> astria_core::Result<Option<DeepLinkStats>> {
-    if !requested {
-        return Ok(None);
-    }
-    let backend = backend_factory().map_err(|_| {
-        astria_core::AstriaError::Graph(
-            "--deep needs an explicit semantic backend (use --backend or ASTRIA_LLM_BACKEND, and configure its credentials)"
-                .to_string(),
-        )
-    })?;
-
-    let backend_configuration = astria_semantic::cache_configuration(backend.as_ref());
-    // The concept menu every file links into: semantic concept nodes
-    // (built by extraction), strongest first.
-    let concepts: Vec<(String, String)> = {
-        let mut stmt = db.prepare(
-            "SELECT id, label FROM nodes
-             WHERE file_type IN ('concept', 'entity', 'pattern', 'module', 'function')
-             ORDER BY degree_centrality DESC, id ASC LIMIT 80",
-        )?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        rows.filter_map(|r| r.ok()).collect()
-    };
-    let concept_ids: std::collections::HashSet<String> =
-        concepts.iter().map(|(id, _)| id.clone()).collect();
-    let mut stats = DeepLinkStats {
-        files_linked: 0,
-        links_added: 0,
-        files_cached: 0,
-    };
-    if concepts.is_empty() {
-        eprintln!(
-            "[astria] deep: no concept nodes to link against yet — run with a semantic backend first"
-        );
-        return Ok(Some(stats));
-    }
-
-    let files: Vec<(String, String)> = {
-        let mut stmt = db.prepare("SELECT file_path, content_hash FROM file_manifest")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        rows.filter_map(|r| r.ok()).collect()
-    };
-
-    for (manifest_path, hash) in files {
-        // file_manifest stores root-relative paths; nodes.source_file is
-        // normalized absolute. Join (an already-absolute path joins as-is)
-        // so symbol lookup matches what build wrote.
-        let file_path = astria_paths::normalize(&root.join(&manifest_path));
-        let symbols: Vec<(String, String)> = {
-            let mut stmt = db.prepare(
-                "SELECT id, label FROM nodes WHERE source_file = ?1 AND file_type = 'code'
-                 ORDER BY degree_centrality DESC, id ASC LIMIT 60",
-            )?;
-            let rows = stmt.query_map(rusqlite::params![&file_path], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?;
-            rows.filter_map(|r| r.ok()).collect()
-        };
-        if symbols.is_empty() {
-            continue;
-        }
-        let cache_key = format!("deep:{file_path}");
-        let display = astria_paths::relative_display(&file_path, &root.to_string_lossy());
-        let symbol_labels: Vec<String> = symbols.iter().map(|(_, label)| label.clone()).collect();
-        let symbols_json = serde_json::to_string(&symbols)?;
-        let concepts_json = serde_json::to_string(&concepts)?;
-        let prompt =
-            astria_semantic::enrichment::deep_link_user_prompt(&display, &symbol_labels, &concepts);
-        let cache_fingerprint = semantic_pass::fingerprint(&[
-            &hash,
-            &symbols_json,
-            &concepts_json,
-            &backend_configuration,
-            astria_semantic::enrichment::deep_link_system_prompt(),
-            &prompt,
-        ]);
-        let cached: Option<Vec<astria_semantic::enrichment::ConceptLink>> = db
-            .query_row(
-                "SELECT edges FROM extraction_cache WHERE file_path = ?1 AND content_hash = ?2",
-                rusqlite::params![&cache_key, &cache_fingerprint],
-                |r| r.get::<_, String>(0),
-            )
-            .ok()
-            .and_then(|json| serde_json::from_str(&json).ok());
-        let was_cached = cached.is_some();
-        let result = if let Some(links) = cached {
-            Ok(links)
-        } else {
-            if astria_semantic::enrichment::budget_exceeded() {
-                break;
-            }
-            astria_semantic::enrichment::link_concepts(
-                backend.as_ref(),
-                &display,
-                &symbol_labels,
-                &concepts,
-            )
-        };
-        // Cached and fresh links follow the same persistence path: rebuilding
-        // or deduplicating the base graph can have removed prior deep edges.
-        match result {
-            Ok(links) => {
-                let links_json = serde_json::to_string(&links).unwrap_or_else(|_| "[]".into());
-                let tx = db.unchecked_transaction()?;
-                // Idempotent re-linking: yesterday's deep edges for this
-                // file are replaced wholesale.
-                tx.execute(
-                    "DELETE FROM edges WHERE source_file = ?1 AND context = 'deep'",
-                    rusqlite::params![&file_path],
-                )?;
-                let label_to_id: HashMap<&str, &str> = symbols
-                    .iter()
-                    .map(|(id, label)| (label.as_str(), id.as_str()))
-                    .collect();
-                let mut added = 0usize;
-                for link in &links {
-                    let (Some(&source_id), true) = (
-                        label_to_id.get(link.symbol.as_str()),
-                        concept_ids.contains(&link.concept),
-                    ) else {
-                        continue;
-                    };
-                    if tx.execute(
-                        "INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file, context)
-                         VALUES (?1, ?2, ?3, 'INFERRED', 0.5, ?4, 'deep')",
-                        rusqlite::params![
-                            source_id,
-                            link.concept,
-                            link.relation,
-                            file_path
-                        ],
-                    )
-                    .is_ok()
-                    {
-                        added += 1;
-                    }
-                }
-                tx.execute(
-                    "INSERT OR REPLACE INTO extraction_cache (file_path, content_hash, language, nodes, edges, extracted_at) VALUES (?1, ?2, 'deep', '[]', ?3, ?4)",
-                    rusqlite::params![&cache_key, &cache_fingerprint, links_json, timestamp()],
-                )?;
-                tx.commit()?;
-                if was_cached {
-                    stats.files_cached += 1;
-                } else {
-                    stats.files_linked += 1;
-                }
-                stats.links_added += added;
-            }
-            Err(e) => {
-                eprintln!("warning: deep linking failed for {display}: {e}");
-            }
-        }
-        if !was_cached {
-            std::thread::sleep(Duration::from_millis(200));
-        }
-    }
-
-    let _ = db.execute(
-        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('last_deep_links', ?1)",
-        rusqlite::params![format!(
-            "files={} links={} cached={}",
-            stats.files_linked, stats.links_added, stats.files_cached
-        )],
-    );
-    Ok(Some(stats))
 }
 
 /// Options threaded from the napi bindings into the pipeline driver; kept
@@ -821,8 +445,10 @@ fn run_pipeline_inner(
 
     // Semantic similarity pass (local embeddings, no API key): embed new
     // nodes and regenerate similar_to edges BEFORE clustering so they shape
-    // communities and analysis. Explicit --embed fails loudly; the silent
-    // auto-refresh path never triggers a model download.
+    // communities and analysis. The effective indexing policy controls this
+    // stage; disabled embeddings also retract their vectors and relationships.
+    let embeddings_before: i64 =
+        db.query_row("SELECT COUNT(*) FROM node_embeddings", [], |r| r.get(0))?;
     let similar_before: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM edges WHERE relation = 'similar_to'",
@@ -838,7 +464,9 @@ fn run_pipeline_inner(
             |r| r.get(0),
         )
         .unwrap_or(0);
-    if similar_after != similar_before {
+    let embeddings_after: i64 =
+        db.query_row("SELECT COUNT(*) FROM node_embeddings", [], |r| r.get(0))?;
+    if similar_after != similar_before || embeddings_after != embeddings_before {
         graph_mutated = true;
         advance_generation(db)?;
     }
@@ -939,328 +567,6 @@ fn run_pipeline_inner(
         community_labels: label_stats,
         deep_links: deep_stats,
     })
-}
-
-fn write_report(astria_dir: &Path, report: &str, stamp: &str) -> astria_core::Result<()> {
-    // The generation rides in a footer so a consumer can verify the report,
-    // graph.json, and database all describe the same publication.
-    let body = format!("{report}\n---\n\ngeneration: {stamp}\n");
-    write_artifact_atomic(&astria_dir.join("graph_report.md"), body.as_bytes())
-}
-
-/// Write a published artifact whole: temp sibling + rename, so a concurrent
-/// reader never observes a torn or half-written file.
-fn write_artifact_atomic(path: &Path, bytes: &[u8]) -> astria_core::Result<()> {
-    let tmp = path.with_extension("new");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
-}
-
-/// Fresh publication stamp: node count + wall-clock millis. Every writer
-/// (pipeline, merge, global) mints one at publication so snapshot caches
-/// keyed on it invalidate.
-pub(crate) fn generation_stamp(db: &Connection) -> String {
-    format!(
-        "{}:{}",
-        db.query_row(
-            "SELECT COUNT(*) + COALESCE((SELECT MAX(id) FROM pipeline_runs), 0) FROM nodes",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap_or(0),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-    )
-}
-
-/// Record the generation this publication produced, in the database and in
-/// a sidecar stamp file next to the artifacts. Returns the stamp.
-///
-/// `mint` — when the run mutated the graph, a fresh stamp is minted; when
-/// nothing changed, the existing generation is reused so no-op runs leave
-/// the publication identity (and every cache keyed on it) stable. A missing
-/// stamp is always minted.
-fn stamp_generation(db: &Connection, astria_dir: &Path, mint: bool) -> astria_core::Result<String> {
-    let stamp = if mint {
-        generation_stamp(db)
-    } else {
-        db.query_row(
-            "SELECT value FROM _meta WHERE key = 'graph_generation'",
-            [],
-            |r| r.get::<_, String>(0),
-        )
-        .unwrap_or_else(|_| generation_stamp(db))
-    };
-    db.execute(
-        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', ?1)",
-        [&stamp],
-    )?;
-    write_artifact_atomic(&astria_dir.join("generation.txt"), stamp.as_bytes())?;
-    Ok(stamp)
-}
-
-/// Advance the publication generation immediately after a stage committed a
-/// real content change. The terminal stamp covers the happy path; this
-/// covers the failure path — if a later stage errors after a mutation
-/// committed, snapshot caches keyed on the generation must not keep serving
-/// the previous state. Mid-run stages run in autocommit, so the advance must
-/// follow each mutation, not wait for publication.
-pub(crate) fn advance_generation(db: &Connection) -> astria_core::Result<()> {
-    db.execute(
-        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_generation', ?1)",
-        [&generation_stamp(db)],
-    )?;
-    Ok(())
-}
-
-/// Current community assignment of every node — the before/after comparison
-/// that decides whether a clustering pass actually changed the graph.
-pub(crate) fn community_assignments(db: &Connection) -> HashMap<String, Option<i64>> {
-    let mut map = HashMap::new();
-    if let Ok(mut stmt) = db.prepare("SELECT id, community FROM nodes") {
-        if let Ok(rows) = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))
-        }) {
-            for row in rows.flatten() {
-                map.insert(row.0, row.1);
-            }
-        }
-    }
-    map
-}
-
-/// One publication workflow for the derived artifacts: terminal generation
-/// stamp, report footer, and graph.json all move together, carrying the same
-/// generation. Shared by the pipeline and cluster-only republication so no
-/// surface can drift from the database state it describes.
-pub(crate) fn publish_artifacts(
-    db: &Connection,
-    astria_dir: &Path,
-    report: &str,
-    mint_generation: bool,
-) -> astria_core::Result<String> {
-    let stamp = stamp_generation(db, astria_dir, mint_generation)?;
-    write_report(astria_dir, report, &stamp)?;
-    export_json(db, &astria_dir.join("graph.json"))?;
-    Ok(stamp)
-}
-
-/// Unchanged workspace shortcuts whose remote revision moved since the last
-/// extraction. Freshness = some extraction_cache row for the path carries
-/// the CURRENT revision in its fingerprint (`:gws-rev:<rev>` suffix).
-fn stale_workspace_shortcuts(
-    root: &Path,
-    db: &Connection,
-    unchanged: &[astria_detect::FileEntry],
-) -> usize {
-    let mut stale = 0usize;
-    for entry in unchanged {
-        let is_shortcut = entry
-            .path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| matches!(e.to_lowercase().as_str(), "gdoc" | "gsheet" | "gslides"));
-        if !is_shortcut {
-            continue;
-        }
-        let path = root.join(&entry.path);
-        let Some(rev) = astria_gws::remote_revision(&path) else {
-            continue; // offline / no credentials: local hash stands
-        };
-        let key = astria_paths::normalize(&path);
-        let fresh = db
-            .prepare("SELECT content_hash FROM extraction_cache WHERE file_path = ?1")
-            .and_then(|mut stmt| {
-                let hashes: Vec<String> = stmt
-                    .query_map(rusqlite::params![key], |r| r.get::<_, String>(0))?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                Ok(hashes
-                    .iter()
-                    .any(|h| h.ends_with(&format!(":gws-rev:{rev}"))))
-            })
-            .unwrap_or(false);
-        if !fresh {
-            stale += 1;
-        }
-    }
-    stale
-}
-
-pub fn export_json(db: &Connection, out_path: &Path) -> astria_core::Result<()> {
-    // One read snapshot for every table: without a shared transaction a
-    // concurrent publisher can land between the node and edge reads and the
-    // exported graph would mix two builds.
-    let snapshot = db.unchecked_transaction()?;
-    export_json_snapshot(&snapshot, out_path)
-}
-
-fn export_json_snapshot(
-    snapshot: &rusqlite::Transaction<'_>,
-    out_path: &Path,
-) -> astria_core::Result<()> {
-    let db: &Connection = snapshot;
-    let mut nodes = Vec::new();
-    let mut stmt = db.prepare(
-        "SELECT id, label, file_type, source_file, source_line, docstring, community, signature FROM nodes",
-    )?;
-    #[allow(clippy::type_complexity)]
-    let node_rows: Vec<(
-        String,
-        String,
-        String,
-        String,
-        Option<i64>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-    )> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    for (id, label, ft, sf, line, doc, comm, sig) in &node_rows {
-        nodes.push(serde_json::json!({
-            "id": id,
-            "label": label,
-            "file_type": ft,
-            "source_file": sf,
-            "source_line": line,
-            "docstring": doc,
-            "community": comm,
-            "signature": sig,
-        }));
-    }
-
-    let mut edges = Vec::new();
-    let mut stmt = db.prepare(
-        "SELECT source, target, relation, confidence, confidence_score, source_file, source_line, context FROM edges",
-    )?;
-    #[allow(clippy::type_complexity)]
-    let edge_rows: Vec<(
-        String,
-        String,
-        String,
-        String,
-        Option<f64>,
-        String,
-        Option<i64>,
-        Option<String>,
-    )> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-            ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
-    // Evidence provenance rides with every edge: the line anchor and the
-    // derived-pass ownership ('global'/'deep') are part of the exchange
-    // format, matching what SQLite stores.
-    for (src, tgt, rel, conf, score, sf, line, context) in &edge_rows {
-        edges.push(serde_json::json!({
-            "source": src,
-            "target": tgt,
-            "relation": rel,
-            "confidence": conf,
-            "confidence_score": score,
-            "source_file": sf,
-            "source_line": line,
-            "context": context,
-        }));
-    }
-
-    // Hyperedges (schema-compatible with the official astria consumer).
-    let hyperedges: Vec<serde_json::Value> = match astria_build::hyperedges::load_all(db) {
-        Ok(list) => list
-            .iter()
-            .map(|h| {
-                serde_json::json!({
-                    "id": h.id,
-                    "label": h.label,
-                    "nodes": h.nodes,
-                    "relation": h.relation,
-                    "confidence": h.confidence,
-                    "confidence_score": h.score,
-                })
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-
-    // Communities with their labels: thematic/hub fallback or LLM-named
-    // (label_source='llm'), so agents reading graph.json get group intent,
-    // not just group membership ids.
-    let communities: Vec<serde_json::Value> = {
-        let mut stmt = db.prepare(
-            "SELECT id, label, summary, label_source, cohesion, size FROM communities ORDER BY id",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, Option<String>>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, Option<f64>>(4)?,
-                r.get::<_, i64>(5)?,
-            ))
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .map(|(id, label, summary, source, cohesion, size)| {
-                serde_json::json!({
-                    "id": id,
-                    "label": label,
-                    "summary": summary,
-                    "label_source": source,
-                    "cohesion": cohesion,
-                    "size": size,
-                })
-            })
-            .collect()
-    };
-
-    // Publication metadata: the generation stamped for this build rides with
-    // the export so consumers can detect mismatched artifact/database pairs.
-    let meta: serde_json::Map<String, serde_json::Value> = {
-        let mut stmt = db.prepare("SELECT key, value FROM _meta")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .map(|(k, v)| (k, serde_json::Value::String(v)))
-            .collect()
-    };
-
-    let graph = serde_json::json!({
-        "nodes": nodes,
-        "edges": edges,
-        "hyperedges": hyperedges,
-        "communities": communities,
-        "_meta": meta,
-    });
-    let json = serde_json::to_string_pretty(&graph)?;
-    write_artifact_atomic(out_path, json.as_bytes())?;
-    Ok(())
 }
 
 /// Open an existing graph database. Unlike `db::open_db`, this never creates
