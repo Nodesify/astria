@@ -5,6 +5,32 @@
 
 use std::collections::BTreeMap;
 
+/// Wire-level decode failure: which marker promised what, and what was
+/// missing or invalid. Typed so the crate's public surface never leaks a
+/// bare `String` error; `lib.rs` surfaces it as `AstriaError::Graph`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecodeError(pub String);
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
+impl From<&str> for DecodeError {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for DecodeError {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
@@ -173,7 +199,7 @@ pub fn encode_struct(tag: u8, fields: &[Value], buf: &mut Vec<u8>) {
 
 /// Decode one complete PackStream value from the front of `buf`, returning
 /// it and the number of bytes consumed.
-pub fn decode(buf: &[u8]) -> Result<(Value, usize), String> {
+pub fn decode(buf: &[u8]) -> Result<(Value, usize), DecodeError> {
     if buf.is_empty() {
         return Err("packstream: empty buffer".into());
     }
@@ -204,7 +230,7 @@ pub fn decode(buf: &[u8]) -> Result<(Value, usize), String> {
         0xC9 => (3, 0),
         0xCA => (5, 0),
         0xCB => (9, 0),
-        other => return Err(format!("packstream: unsupported marker 0x{other:02X}")),
+        other => return Err(format!("packstream: unsupported marker 0x{other:02X}").into()),
     };
 
     match marker {
@@ -280,7 +306,7 @@ pub fn decode(buf: &[u8]) -> Result<(Value, usize), String> {
 }
 
 /// Decode a struct's tag + fields (used to classify SUMMARY/RECORD frames).
-pub fn decode_struct(buf: &[u8]) -> Result<(u8, Vec<Value>, usize), String> {
+pub fn decode_struct(buf: &[u8]) -> Result<(u8, Vec<Value>, usize), DecodeError> {
     let marker = *buf.first().ok_or("packstream: empty buffer")?;
     if !(0xB0..=0xBF).contains(&marker) && marker != 0xDC && marker != 0xDD {
         return Err("packstream: not a struct".into());
@@ -320,17 +346,17 @@ fn decode_capacity(buf: &[u8], pos: usize) -> usize {
     buf.len().saturating_sub(pos)
 }
 
-fn slice2(buf: &[u8], at: usize) -> Result<[u8; 2], String> {
+fn slice2(buf: &[u8], at: usize) -> Result<[u8; 2], DecodeError> {
     buf.get(at..at + 2)
         .map(|s| [s[0], s[1]])
         .ok_or_else(|| "packstream: truncated".into())
 }
-fn slice4(buf: &[u8], at: usize) -> Result<[u8; 4], String> {
+fn slice4(buf: &[u8], at: usize) -> Result<[u8; 4], DecodeError> {
     buf.get(at..at + 4)
         .map(|s| [s[0], s[1], s[2], s[3]])
         .ok_or_else(|| "packstream: truncated".into())
 }
-fn slice8(buf: &[u8], at: usize) -> Result<[u8; 8], String> {
+fn slice8(buf: &[u8], at: usize) -> Result<[u8; 8], DecodeError> {
     buf.get(at..at + 8)
         .map(|s| {
             let mut out = [0u8; 8];

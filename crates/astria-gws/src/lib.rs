@@ -36,6 +36,8 @@ impl std::fmt::Display for GwsError {
     }
 }
 
+impl std::error::Error for GwsError {}
+
 /// Export a `.gdoc` / `.gsheet` / `.gslides` shortcut file as markdown.
 pub fn export_to_markdown(path: &Path) -> std::result::Result<String, GwsError> {
     let ext = path
@@ -59,7 +61,7 @@ pub fn export_to_markdown(path: &Path) -> std::result::Result<String, GwsError> 
 
     // Resolved at runtime from ASTRIA_GDRIVE_ACCESS_TOKEN or gcloud ADC -
     // nothing secret is ever embedded in source.
-    let bearer = resolve_access_token().map_err(GwsError::Unavailable)?;
+    let bearer = resolve_access_token()?;
 
     let body = http_get_export(&file_id, mime, &bearer)?;
 
@@ -153,7 +155,7 @@ pub fn id_from_url(haystack: &str) -> Option<&str> {
 
 /// Resolve a Drive API access token: env bearer first, then gcloud ADC
 /// refresh-token flow. Both absent -> Unavailable with actionable text.
-pub fn resolve_access_token() -> std::result::Result<String, String> {
+pub fn resolve_access_token() -> std::result::Result<String, GwsError> {
     if let Ok(tok) = std::env::var("ASTRIA_GDRIVE_ACCESS_TOKEN") {
         if !tok.trim().is_empty() {
             return Ok(tok.trim().to_string());
@@ -186,11 +188,11 @@ pub fn resolve_access_token() -> std::result::Result<String, String> {
             }
         }
     }
-    Err(
+    Err(GwsError::Unavailable(
         "Google Drive credentials not found - set ASTRIA_GDRIVE_ACCESS_TOKEN or run \
          `gcloud auth application-default login` (Drive read-only scope)"
             .to_string(),
-    )
+    ))
 }
 
 /// Minimal CSV -> markdown table (Drive Sheets CSV export).
@@ -379,10 +381,11 @@ mod tests {
         // dev machine, accept it and skip the negative assertion.
         let result = resolve_access_token();
         match result {
-            Err(msg) => {
+            Err(GwsError::Unavailable(msg)) => {
                 assert!(msg.contains("ASTRIA_GDRIVE_ACCESS_TOKEN"));
                 assert!(msg.contains("gcloud"));
             }
+            Err(e) => panic!("unexpected error variant: {e}"),
             Ok(_) => {}
         }
     }
