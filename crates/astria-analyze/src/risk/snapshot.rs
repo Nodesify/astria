@@ -308,7 +308,7 @@ fn read_objects(root: &Path, entries: &[(String, String)], sources: &mut Sources
             }
             let mut newline = [0];
             reader.read_exact(&mut newline)?;
-            if newline != [b'\n'] {
+            if newline != *b"\n" {
                 return Err(AstriaError::Graph("invalid Git batch separator".into()));
             }
         }
