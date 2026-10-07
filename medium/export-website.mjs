@@ -87,6 +87,9 @@ for (const [index, article] of articles.entries()) {
   if (!title) throw new Error(`Missing title: ${article.file}`);
   let body = original
     .replace(/<!--[\s\S]*?-->\s*/g, "")
+    // Complete comments are stripped above; escape any unterminated
+    // opener so it cannot start a comment in the exported markdown.
+    .replace(/<!--/g, "&#60;!--")
     .replace(/^# .+\n\n/, "")
     .replace(/^## .+\n\n/, "")
     .replace(/^\*By .+\n\n/m, "");
