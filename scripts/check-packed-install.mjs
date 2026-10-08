@@ -31,7 +31,12 @@ try {
   mkdirSync(clean);
   writeFileSync(path.join(clean, 'package.json'), JSON.stringify({ private: true }));
   const tarballs = readdirSync(scratch).filter(f => f.endsWith('.tgz')).map(f => path.join(scratch, f));
-  run(npm, [...npmArgs, 'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', ...tarballs], clean);
+  // prefer-offline, not offline: the packed tarballs under test are local files, but
+  // the CLI's declared `commander` dependency must still resolve against the registry.
+  // `npm ci` fills the tarball cache without caching packuments, so a strict --offline
+  // install fails with ENOTCACHED in CI (and always would in the musl container,
+  // whose npm cache starts empty).
+  run(npm, [...npmArgs, 'install', '--prefer-offline', '--ignore-scripts', '--no-audit', '--no-fund', ...tarballs], clean);
   const fixture = path.join(clean, 'fixture');
   mkdirSync(fixture);
   writeFileSync(path.join(fixture, 'example.ts'), 'export function greet(name: string) { return `Hello ${name}`; }\n');
