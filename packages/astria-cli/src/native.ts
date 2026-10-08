@@ -150,6 +150,7 @@ export const runPipeline = fn('runPipeline');
 export const updatePipeline = fn('updatePipeline');
 export const graphStats = fn('graphStats');
 export const graphBuildInfo = fn('graphBuildInfo');
+export const graphFreshness = fn('graphFreshness');
 export const embeddingsSupported = fn('embeddingsSupported');
 export const verifySourceCommit = fn('verifySourceCommit');
 export const godNodes = fn('godNodes');

@@ -96,6 +96,6 @@ Place a `.astriaignore` file in your project root (gitignore syntax) to exclude 
 
 ## Where the token savings come from
 
-Every `run` and `update` prints a size comparison: corpus tokens (from the file manifest) versus the tokens a graph query returns, measured over five fixed questions. The historical v0.8.0 run measured about 333,000 corpus tokens versus 3,000 per query on this repository. That ratio describes delivered text size; it does not measure savings against targeted source search or establish answer correctness. On tiny corpora it may be below 1×.
+Indexing does not run token benchmarks automatically. The historical v0.8.0 benchmark compared about 333,000 corpus tokens versus 3,000 per query on this repository. That ratio describes delivered text size; it does not measure savings against targeted source search or establish answer correctness. On tiny corpora it may be below 1×. Run the explicit retrieval-quality workflow in the repository to measure grounded file and declaration retrieval.
 
 Numbers vary per run and per corpus. See [Benchmarks and evidence](./explanation/benchmarks) for the historical measurements and [Retrieval validation](./explanation/retrieval-validation) for paired file recall, symbol retrieval, budget, and latency results.

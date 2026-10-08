@@ -163,6 +163,8 @@ dependencies = [
  "astria-paths",
  "ignore",
  "rusqlite",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "walkdir",
@@ -355,11 +357,13 @@ name = "astria-query"
 version = "1.0.0"
 dependencies = [
  "astria-core",
+ "astria-detect",
  "astria-embed",
  "astria-paths",
  "jieba-rs",
  "petgraph",
  "rusqlite",
+ "serde",
  "strsim",
  "tempfile",
  "tiktoken-rs",

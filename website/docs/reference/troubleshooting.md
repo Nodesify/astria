@@ -78,9 +78,9 @@ astria query "..." --detail high
 
 or `detail: "high"` on any MCP traversal tool.
 
-## The token benchmark shows `<1×` on my repo
+## A historical token-size benchmark shows `<1×`
 
-That is the benchmark being honest, not broken. On tiny corpora, reading the files directly is cheaper than a graph query — there the graph's value is structure (blast radius, communities, paths), not compression. The output says so; see [Benchmarks and evidence](../explanation/benchmarks).
+The historical comparison measured full-corpus size against delivered query text. On tiny corpora, that ratio may fall below 1×; it does not establish the cost of targeted source search or answer correctness. Current indexing does not print this comparison. Use the explicit retrieval-quality workflow for grounded retrieval measurements; see [Benchmarks and evidence](../explanation/benchmarks).
 
 ## The retrieval-quality numbers look low
 

@@ -8,3 +8,7 @@ website/versioned_docs/
 # Multilanguage parser fixtures: real extraction inputs, orientation noise
 # in the self graph (they used to hold community slots next to real code).
 crates/astria-napi/tests/fixtures/
+# Generated evaluation prompts repeat the golden questions and leak them
+# into retrieval candidates. Keep benchmark implementation sources indexed.
+scripts/bench/quality/promptfoo/tests.generated.yaml
+scripts/bench/quality/out/

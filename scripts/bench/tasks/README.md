@@ -1,10 +1,48 @@
 # Paired downstream task evaluation
 
-This workflow measures completed agent tasks, rather than treating retrieval recall or a smaller retrieved response as task success. It creates no checkouts, changes no Git state itself, installs nothing, and starts no agent unless `--run` is supplied. It has not been exercised against an agent. Requests and Commander reserved suites are neither read nor executed by this workflow.
+This workflow measures completed agent tasks, rather than treating retrieval recall or a smaller retrieved response as task success. The runner inspects supplied copies and starts no agent unless `--run` is supplied. The separate preparation command creates fresh external clones only with explicit `--prepare`; it never changes the shared source checkout, installs dependencies, or starts an agent. It has not been exercised against an agent. Requests and Commander reserved suites are neither read nor executed by this workflow.
 
 The example manifest contains two concrete Astria maintenance tasks at commit `2509bb184a2bd886a8f0492635ea0556af98643d`: failed-run lifetime accounting and watcher startup/spawn completion. These are known diagnostics derived from source inspection, not untouched held-out tasks. Do not generalize their results to arbitrary repositories. Author additional tasks and freeze their prompts/rubrics before observing candidate results.
 
 ## Prepare explicit inputs
+
+The bundled Codex adapter works with the installed Codex CLI (`exec --json`,
+`--ephemeral`, `--ignore-user-config`, `--output-last-message`). Its help and
+version were inspected on CLI 0.140.0; no paid session was started. Authenticate
+Codex through its normal login separately. Set the manifest's model to a model
+your account can use and `codex_binary` to the direct executable (on Windows use
+the installed `codex.exe`, not an npm `.cmd` wrapper). The adapter deliberately
+accepts only supported settings: reasoning effort, network disabled, workspace
+write sandbox, Codex binary and Astria CLI entrypoint. It does not pretend to
+control temperature or output-token limits unsupported by this CLI.
+
+To prepare the example's four independent pinned inputs from an existing Git
+repository that contains the example commit, first build the candidate CLI/native
+artifact, then invoke the explicit setup command:
+
+```powershell
+node scripts/bench/tasks/prepare.mjs scripts/bench/tasks/manifest.example.json C:/Nodesify/nodesify-graphify C:/eval/new-run-001 C:/Nodesify/nodesify-graphify/packages/astria-cli/dist/index.js C:/Nodesify/nodesify-graphify/packages/astria-cli/dist/astria.node --prepare
+node scripts/bench/tasks/run.mjs C:/eval/new-run-001/manifest.json
+```
+
+The destination must not exist and must be outside the shared/source checkout.
+Edit `codex_binary` in a copied template if PATH has no direct executable. Setup
+validates all commit pins and source anchors before copying, clones without
+hardlinks into new directories, selects the pin only in those new clones, and
+runs structural indexing with `--backend none`. It captures actual whole-process
+monotonic build time, CLI/native/graph hashes, and an evidence trace attesting
+that no updates have yet occurred. It generates a ready-to-validate manifest
+with runtime fingerprints and measured indexing artifacts. No setup was run
+during implementation. A failure may leave partial disposable inputs; retain
+them for inspection and use a new destination for another attempt.
+
+For external repositories, author a manifest with real maintenance prompts,
+full commit pins, source grounding, exact allowed paths and frozen rubrics.
+Point this same command at a locally obtained repository containing those pins;
+the setup command never fetches an arbitrary moving remote branch. Every task
+in one preparation uses that source repository. Prepare distinct manifests for
+distinct repositories. The bundled tasks make setup concrete; they remain
+known self-repository diagnostics rather than external generalization evidence.
 
 Copy `manifest.example.json` outside this checkout and set its paths, output, agent executable, model and settings. All paths in a manifest resolve relative to that manifest. Supply **four existing independent Git copies**, one baseline/Astria pair per task. Each must be a repository root with a clean pinned HEAD. No directory may overlap this main checkout, another task input, or another condition. The runner inspects commits and source grounding and refuses dirty inputs. It never clones, resets, switches branches, or uses worktrees. Prepare disposable copies yourself; an agent may edit its supplied copy when explicitly run.
 
@@ -39,12 +77,31 @@ A recorded measurement replaces `null` with `{"value": 1.234, "evidence": ["buil
 
 The command receives one JSON request on stdin. The same request is saved at `ASTRIA_TASK_REQUEST`; `ASTRIA_TASK_RESULT` identifies where the adapter must write its result. The adapter must honor `model`, `settings`, `project`, `prompt`, `graph_access`, and `allowed_edit_paths`. Baseline must use its normal source-reading tools with graph tools disabled; Astria may additionally use the supplied graph. Apply the same source-read and tool restrictions otherwise. Run each request in a **fresh agent session**, with no history from the other condition. Pin the remote model release when the provider supports it. The harness audits adapter attestations, but cannot independently enforce a remote provider's actual model or the agent's tool permissions.
 
+`codex-adapter.mjs` launches one fresh ephemeral `codex exec` per request with
+the exact model and reasoning settings. It ignores user configuration, disables
+configured MCP servers and multi-agent execution, disables sandbox network access,
+and adds only the run evidence directory to the project's writable paths. Baseline
+receives ordinary source-search instructions; Astria also receives the pinned CLI
+query instructions. The task's edit scope is prompted and independently audited
+by Git. Shell commands remain capable of arbitrary project reads, so graph/read
+tool restrictions require trace review; this is not a tool-level access proof.
+
+The adapter records consumed input plus output tokens from completed CLI turn
+usage events, including cached input in input totals rather than adding it twice.
+Incomplete/failed usage stays unknown. It retains sanitized usage and event types,
+runtime/log hashes and the final answer, never raw shell outputs. Source-read
+operation counts remain `null`: a shell command transcript cannot establish
+instrumented reads. Do not infer source-read savings from missing counts.
+`agent.runtime_artifacts` pins the Codex binary, CLI entrypoint and native binding
+for both conditions. A usable runtime, model access, authentication, clean external
+inputs and independent correctness reviews are required before reporting outcomes.
+
 Request fields include `task_id`, `condition`, `commit`, `result_path`, and `evidence_directory`. The adapter result is:
 
 ```json
 {
   "model": "gpt-6.1-sol",
-  "settings": {"reasoning_effort": "high", "temperature": 0, "network": false, "max_output_tokens": 12000},
+  "settings": {"codex_binary": "C:/runtime/codex.exe", "reasoning_effort": "high", "network": false, "sandbox": "workspace-write", "astria_cli": "C:/runtime/dist/index.js"},
   "tokens": null,
   "source_reads": null,
   "answer_evidence": ["answer.md"]
