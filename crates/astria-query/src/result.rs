@@ -47,6 +47,11 @@ pub struct QueryResponse {
 
 impl QueryResponse {
     pub(crate) fn into_output(self) -> super::QueryOutput {
-        (self.text, self.node_count, self.edge_count, self.next_cursor)
+        (
+            self.text,
+            self.node_count,
+            self.edge_count,
+            self.next_cursor,
+        )
     }
 }

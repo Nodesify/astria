@@ -245,15 +245,21 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
         }
     }
 
-    include_transcripts(root, DetectResult {
-        new: new_files,
-        changed: changed_files,
-        unchanged: unchanged_files,
-        removed: removed_files,
-    })
+    include_transcripts(
+        root,
+        DetectResult {
+            new: new_files,
+            changed: changed_files,
+            unchanged: unchanged_files,
+            removed: removed_files,
+        },
+    )
 }
 
-fn include_transcripts(root: &Path, mut detected: DetectResult) -> astria_core::Result<DetectResult> {
+fn include_transcripts(
+    root: &Path,
+    mut detected: DetectResult,
+) -> astria_core::Result<DetectResult> {
     // The normal walker intentionally excludes .astria. Sidecars nevertheless
     // need the same manifest/removal lifecycle as ordinary documents.
     let transcripts = root.join(".astria/transcripts");

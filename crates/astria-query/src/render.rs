@@ -117,7 +117,9 @@ pub(crate) fn display_label(node: &NodeData) -> String {
     if node.source_file.is_empty() && matches!(node.file_type.as_str(), "stub" | "reference") {
         let tail = node.label.rsplit("::").next().unwrap_or(&node.label);
         format!("{} (unresolved)", tail.chars().take(60).collect::<String>())
-    } else { node.label.clone() }
+    } else {
+        node.label.clone()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -143,11 +145,12 @@ pub(crate) fn subgraph_to_text(
         let nb = &loaded.graph[b];
         let sa = relevance.get(&a).copied().unwrap_or(0.0);
         let sb = relevance.get(&b).copied().unwrap_or(0.0);
-        let unresolved = |n: &NodeData| n.source_file.is_empty() && matches!(n.file_type.as_str(), "stub" | "reference");
-        unresolved(na).cmp(&unresolved(nb))
-            .then_with(|| sb.partial_cmp(&sa)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            )
+        let unresolved = |n: &NodeData| {
+            n.source_file.is_empty() && matches!(n.file_type.as_str(), "stub" | "reference")
+        };
+        unresolved(na)
+            .cmp(&unresolved(nb))
+            .then_with(|| sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal))
             // Weakly-reached nodes (best touching edge below the semantic
             // floor) come after strongly-reached ones at equal relevance.
             // Plain graphs hold no such nodes: their edges sit at 0.7+.
@@ -194,12 +197,16 @@ pub(crate) fn subgraph_to_text(
             None => loaded.display_path(&node.source_file),
         };
         let label = display_label(node);
-        let mut line = if node.source_file.is_empty() && matches!(node.file_type.as_str(), "stub" | "reference") {
+        let mut line = if node.source_file.is_empty()
+            && matches!(node.file_type.as_str(), "stub" | "reference")
+        {
             format!("UNRESOLVED {label}\n")
-        } else { format!(
-            "NODE {} [id={} src={} community={}]\n",
-            label, node.id, loc, comm
-        ) };
+        } else {
+            format!(
+                "NODE {} [id={} src={} community={}]\n",
+                label, node.id, loc, comm
+            )
+        };
         // Chunked bodies cite their covered line range so agents can quote
         // exact spans; harness parsers only read the src= token, so the
         // range rides on its own line.
@@ -230,10 +237,20 @@ pub(crate) fn subgraph_to_text(
             }
         }
         node_records.push(QueryNode {
-            id: node.id.clone(), label, file_type: node.file_type.clone(),
-            source_file: loaded.display_path(&node.source_file), source_line: node.source_line,
-            community: node.community, signature: node.signature.as_ref().map(|s| s.chars().take(140).collect()),
-            summary: node.docstring.as_ref().map(|s| s.chars().take(200).collect()),
+            id: node.id.clone(),
+            label,
+            file_type: node.file_type.clone(),
+            source_file: loaded.display_path(&node.source_file),
+            source_line: node.source_line,
+            community: node.community,
+            signature: node
+                .signature
+                .as_ref()
+                .map(|s| s.chars().take(140).collect()),
+            summary: node
+                .docstring
+                .as_ref()
+                .map(|s| s.chars().take(200).collect()),
         });
         records.push(line);
     }
@@ -278,12 +295,21 @@ pub(crate) fn subgraph_to_text(
                 .unwrap_or_default();
             let line = format!(
                 "EDGE {} --{} [{}{}]--> {}{}\n",
-                display_label(src), edge.relation, edge.confidence, score, display_label(tgt), loc
+                display_label(src),
+                edge.relation,
+                edge.confidence,
+                score,
+                display_label(tgt),
+                loc
             );
             typed_edges.push(QueryEdge {
-                source: src.id.clone(), target: tgt.id.clone(), relation: edge.relation.clone(),
-                confidence: edge.confidence.clone(), confidence_score: edge.confidence_score,
-                source_file: loaded.display_path(&edge.source_file), source_line: edge.source_line,
+                source: src.id.clone(),
+                target: tgt.id.clone(),
+                relation: edge.relation.clone(),
+                confidence: edge.confidence.clone(),
+                confidence_score: edge.confidence_score,
+                source_file: loaded.display_path(&edge.source_file),
+                source_line: edge.source_line,
             });
             edge_records.push(line);
         }
@@ -291,23 +317,43 @@ pub(crate) fn subgraph_to_text(
     // Fixed interleaving keeps relationships on the first page while the
     // cursor still addresses every complete node and edge exactly once.
     let mut interleaved = Vec::with_capacity(records.len() + edge_records.len());
-    enum Record { Node(QueryNode), Edge(QueryEdge) }
+    enum Record {
+        Node(QueryNode),
+        Edge(QueryEdge),
+    }
     let mut typed = Vec::with_capacity(records.len() + edge_records.len());
     let mut nodes = records.into_iter().zip(node_records);
     let mut edges = edge_records.into_iter().zip(typed_edges);
     loop {
         let before = interleaved.len();
-        for (text, node) in nodes.by_ref().take(2) { interleaved.push(text); typed.push(Record::Node(node)); }
-        for (text, edge) in edges.by_ref().take(1) { interleaved.push(text); typed.push(Record::Edge(edge)); }
+        for (text, node) in nodes.by_ref().take(2) {
+            interleaved.push(text);
+            typed.push(Record::Node(node));
+        }
+        for (text, edge) in edges.by_ref().take(1) {
+            interleaved.push(text);
+            typed.push(Record::Edge(edge));
+        }
         if interleaved.len() == before {
             break;
         }
     }
     let (text, next_cursor) = render_page(header, &interleaved, skip_records, token_budget)?;
     let end = next_cursor.unwrap_or(typed.len());
-    let mut response = QueryResponse { text, next_cursor, ..Default::default() };
-    for record in typed.into_iter().skip(skip_records).take(end - skip_records) {
-        match record { Record::Node(node) => response.nodes.push(node), Record::Edge(edge) => response.edges.push(edge) }
+    let mut response = QueryResponse {
+        text,
+        next_cursor,
+        ..Default::default()
+    };
+    for record in typed
+        .into_iter()
+        .skip(skip_records)
+        .take(end - skip_records)
+    {
+        match record {
+            Record::Node(node) => response.nodes.push(node),
+            Record::Edge(edge) => response.edges.push(edge),
+        }
     }
     Ok(response)
 }
