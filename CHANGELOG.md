@@ -6,7 +6,10 @@ this file is the per-version summary.
 
 ## [Unreleased]
 
-- **Docs no longer reference the removed `astria migrate` command.** It was removed in [1.0.12] when the compatibility paths were retired, but the npm README and the directory-layout reference kept telling Graphify users to run it — which failed with `unknown command`. Both now state the supported path: there is no migration; delete the old `.graphify/` directory and run `astria run .` for a fresh `.astria/`.
+- **Behavior questions now rank callable declarations first.** A query like "how does authentication work" previously let result types, constants and prose sharing the same vocabulary displace the implementing function; behavior-oriented queries now prioritize located `()` declarations, and a trailing "work"/"works" is treated as question phrasing rather than a symbol hint. Explicit identifier lookups, documentation intent, and docs-majority corpora keep their existing ranking. On the self-corpus quality gate (budget 4000): file recall@5 64.3% → 74.3%, declaration recall@5 0% → 66.7%, gate passing with 0 failed queries and 0 budget violations.
+- **`astria run` and `astria update` no longer run or print the token-size benchmark.** The synthetic corpus-vs-query ratio moves to the explicit retrieval-quality workflow (`scripts/bench/quality/run-quality.mjs`); indexing output stays limited to pipeline facts. The e2e suite now asserts the quiet behavior.
+- **Generated evaluation prompts and benchmark output can no longer leak into the self corpus.** `scripts/bench/quality/promptfoo/tests.generated.yaml` and `scripts/bench/quality/out/` are excluded from the corpus graph, so golden questions repeated in generated eval files cannot become retrieval candidates.
+- Docs no longer reference the removed `astria migrate` command. It was removed in [1.0.12] when the compatibility paths were retired, but the npm README and the directory-layout reference kept telling Graphify users to run it — which failed with `unknown command`. Both now state the supported path: there is no migration; delete the old `.graphify/` directory and run `astria run .` for a fresh `.astria/`.
 
 ## [1.1.1] — 2026-10-06
 
