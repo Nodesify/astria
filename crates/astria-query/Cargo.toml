@@ -15,6 +15,8 @@ embed = ["dep:astria-embed"]
 [dependencies]
 astria-embed = { workspace = true, optional = true }
 astria-core = { workspace = true }
+astria-detect = { workspace = true }
+serde = { workspace = true }
 astria-paths = { workspace = true }
 rusqlite = { workspace = true }
 petgraph = { workspace = true }

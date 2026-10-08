@@ -10,11 +10,13 @@
 //   node scripts/bench/quality/run-quality.mjs [--root <dir>] [--golden <jsonl>]
 //        [--astria <executable-or-js-entrypoint>] [--budget 4000] [--depth 3] [--k 1,3,5,10]
 //        [--out <path>] [--check] [--baseline | --iterative-baseline] [--allow-reserved]
-//        [--min-recall5 50]  (default 50: the CI gate floor)
+//        [--min-recall5 50] [--min-definition-recall5 50]
+//        [--compare measured-reference.json] [--record-only]
 //
 //   --check  validate the golden set only: schema, and that every
 //            expected_files entry matches a real file under --root.
 
+import { contract, gate } from './gate.mjs';
 import { createHash } from 'node:crypto';
 import { lexicalBaseline } from './lexical-baseline.mjs';
 import { loadTokenizer } from '../tokenize.mjs';
@@ -44,6 +46,9 @@ function parseArgs(argv) {
     // exactly one home and cannot drift between callers; override with
     // --min-recall5 for experiments.
     min_recall5: 50,
+    min_definition_recall5: 50,
+    compare: null,
+    recordOnly: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -55,12 +60,16 @@ function parseArgs(argv) {
     else if (a === '--k') opts.k = argv[++i].split(',').map(Number);
     else if (a === '--out') opts.out = path.resolve(argv[++i]);
     else if (a === '--min-recall5') opts.min_recall5 = Number(argv[++i]);
+    else if (a === '--min-definition-recall5') opts.min_definition_recall5 = Number(argv[++i]);
+    else if (a === '--compare') opts.compare = path.resolve(argv[++i]);
+    else if (a === '--record-only') opts.recordOnly = true;
     else if (a === '--baseline') opts.baseline = true;
     else if (a === '--iterative-baseline') { opts.baseline = true; opts.iterative = true; }
     else if (a === '--allow-reserved') opts.allowReserved = true;
     else if (a === '--check') opts.check = true;
     else { console.error(`unknown arg: ${a}`); process.exit(2); }
   }
+  if (![opts.min_recall5, opts.min_definition_recall5].every(n => Number.isFinite(n) && n >= 0 && n <= 100)) throw new Error('Recall floors must be percentages in [0, 100]');
   return opts;
 }
 
@@ -71,9 +80,10 @@ function walkFiles(root) {
   const out = [];
   const visit = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith('.')) continue;
+      if (entry.name.startsWith('.') && entry.name !== '.github') continue;
       if (skip.has(entry.name)) continue;
       const p = path.join(dir, entry.name);
+      if (norm(path.relative(root, p)) === 'scripts/bench/quality/out') continue;
       if (entry.isDirectory()) visit(p);
       else out.push(norm(path.relative(root, p)));
     }
@@ -93,6 +103,11 @@ function loadGolden(file) {
     }
     if (!Array.isArray(o.expected_files) || o.expected_files.length === 0) {
       throw new Error(`${file}:${i + 1} needs non-empty "expected_files"`);
+    }
+    if (items.some(item => item.id === o.id)) throw new Error(`Duplicate golden ID: ${o.id}`);
+    if (!Array.isArray(o.definitions ?? [])) throw new Error(`Invalid definitions: ${o.id}`);
+    for (const definition of o.definitions ?? []) {
+      if (typeof definition.path !== 'string' || path.isAbsolute(definition.path) || norm(definition.path).startsWith('../') || !Number.isInteger(definition.line) || definition.line < 1 || typeof definition.contains !== 'string' || !definition.contains) throw new Error(`Invalid grounded declaration: ${o.id}`);
     }
     items.push({
       split: o.split || null,
@@ -175,9 +190,9 @@ async function main() {
     : spawnSync(cli, args, { cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 32 * 1024 * 1024 });
   const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8' }).stdout?.trim() || null;
   const localEntry = path.join(repoRoot, 'packages/astria-cli/dist/index.js');
-  const nativeArtifact = path.join(repoRoot, 'packages/astria-cli/dist/astria.node');
+  const nativeArtifact = cli.endsWith('.js') ? path.join(path.dirname(path.resolve(cli)), 'astria.node') : null;
   const localBuild = path.resolve(cli) === localEntry;
-  if (localBuild && (existsSync(path.join(repoRoot, 'packages/astria-cli/astria.node')) || !existsSync(nativeArtifact))) throw new Error('Local benchmark requires dist/astria.node and no package-root astria.node; rebuild the intended native artifact');
+  if (localBuild && (existsSync(path.join(repoRoot, 'packages/astria-cli/astria.node')) || !nativeArtifact || !existsSync(nativeArtifact))) throw new Error('Local benchmark requires dist/astria.node and no package-root astria.node; rebuild the intended native artifact');
   const versionResult = invoke(['--version']);
   if (versionResult.error || versionResult.status !== 0) throw new Error('CLI/native binding failed to load');
   const version = versionResult.stdout.trim();
@@ -202,9 +217,9 @@ async function main() {
         if (!line.startsWith('NODE ')) continue;
         const m = line.match(/src=(.*?) (?:loc|community)=/);
         if (!m) continue;
-        const location = Number(line.match(/ loc=L(\d+)/)?.[1] || m[1].match(/:(\d+)(?::\d+)?$/)?.[1]);
+        const location = Number(m[1].match(/:(\d+)$/)?.[1]);
         const file = m[1].replace(/:\d+(?::\d+)?$/, '');
-        records.push({ path: norm(path.isAbsolute(file) ? path.relative(opts.root, file) : file), line: location + 1 });
+        if (Number.isInteger(location) && location > 0) records.push({ path: norm(path.isAbsolute(file) ? path.relative(opts.root, file) : file), line: location });
       }
     }
     return records.filter((record, index) => records.findIndex(other => other.path === record.path && other.line === record.line) === index);
@@ -259,18 +274,22 @@ async function main() {
   }
 
   const definitions = results.flatMap(row => row.definitions || []);
+  summary.delivered_budget_violations = results.filter(r => r.tokens > Number(opts.budget)).length;
+  summary.raw_budget_violations = results.filter(r => r.raw_tokens > Number(opts.budget)).length;
+  summary.clipped_answers = results.filter(r => r.clipped).length;
   summary.baseline_partial_failures = results.filter(row => row.search_cost?.failures.length && !row.error).length;
   summary.definition_count = definitions.length;
+  summary.definition_questions = results.filter(row => row.definitions?.length).length;
   summary.definition_mrr = definitions.length ? definitions.reduce((sum, d) => sum + (d.rank ? 1 / d.rank : 0), 0) / definitions.length : null;
   for (const k of opts.k) summary[`definition_recall@${k}`] = definitions.length ? definitions.filter(d => d.rank && d.rank <= k).length / definitions.length : null;
   const payload = {
-    schema_version: 3,
+    schema_version: 4,
     method: opts.baseline ? (opts.iterative ? 'question-rg-iterative-source-v1' : 'question-rg-single-pass-floor-v2') : 'astria',
     reserved_consumed: reserved,
     baseline_policy: opts.baseline ? { max_rounds: opts.iterative ? 3 : 1, max_reads_per_round: opts.iterative ? 6 : 24, max_read_bytes_per_file: 262144, max_matches_per_round: 2000, max_search_output_bytes: 16777216, search_timeout_ms: 30000, refinement: 'calls and imports in read windows only; expectations unavailable to baseline' } : null,
     tokenizer: tok.name,
     context_policy: 'all methods clipped to the same exact token budget, keeping only complete lines',
-    provenance: { cli_version:version, harness_commit:git(repoRoot,'rev-parse','HEAD'), source_build_commit: localBuild ? git(repoRoot,'rev-parse','HEAD') : null, native_artifact_sha256: localBuild ? createHash('sha256').update(readFileSync(nativeArtifact)).digest('hex') : null, cli_entrypoint_sha256: existsSync(cli) ? createHash('sha256').update(readFileSync(cli)).digest('hex') : null, source_dirty: Boolean(git(repoRoot,'status','--porcelain')), corpus_commit:git(opts.root,'rev-parse','HEAD'), corpus_files:treeFiles.length, golden_sha256:createHash('sha256').update(readFileSync(opts.golden)).digest('hex'), node:process.version, platform:process.platform },
+    provenance: { cli_version:version, harness_commit:git(repoRoot,'rev-parse','HEAD'), source_build_commit: cli.endsWith('.js') ? git(path.dirname(path.resolve(cli)),'rev-parse','HEAD') : null, native_artifact_sha256: nativeArtifact && existsSync(nativeArtifact) ? createHash('sha256').update(readFileSync(nativeArtifact)).digest('hex') : null, cli_entrypoint_sha256: existsSync(cli) ? createHash('sha256').update(readFileSync(cli)).digest('hex') : null, source_dirty: Boolean(git(repoRoot,'status','--porcelain')), corpus_commit:git(opts.root,'rev-parse','HEAD'), corpus_files:treeFiles.length, golden_sha256:createHash('sha256').update(readFileSync(opts.golden)).digest('hex'), node:process.version, platform:process.platform },
     generated_at: new Date().toISOString(),
     corpus_root: norm(opts.root),
     golden_set: path.basename(opts.golden),
@@ -280,22 +299,22 @@ async function main() {
     summary,
     items: results,
   };
+  const corpusHash = createHash('sha256');
+  for (const file of [...treeFiles].sort()) { corpusHash.update(file + '\0'); corpusHash.update(readFileSync(path.join(opts.root, file))); corpusHash.update('\0'); }
+  const harnessHash = createHash('sha256');
+  for (const file of [fileURLToPath(import.meta.url), path.join(scriptDir, 'gate.mjs'), path.join(scriptDir, 'lexical-baseline.mjs'), path.join(scriptDir, '../tokenize.mjs')]) harnessHash.update(readFileSync(file));
+  const graphMeta = opts.baseline ? null : JSON.parse(readFileSync(path.join(opts.root, '.astria/graph.json'), 'utf8'))._meta;
+  payload.comparison_identity = { contract, line_contract: 'one-based-declaration-line', graph_build_configuration: graphMeta?.build_configuration ?? null, extraction_hash_version: graphMeta?.extraction_hash_version ?? null, corpus_sha256: corpusHash.digest('hex'), golden_sha256: payload.provenance.golden_sha256, harness_sha256: harnessHash.digest('hex'), method: payload.method, tokenizer: tok.name, budget: payload.query_budget, depth: payload.query_depth, k: opts.k, context_policy: payload.context_policy, baseline_policy: payload.baseline_policy };
+  payload.gate_failures = gate(payload, { minRecall: opts.min_recall5, minDefinitionRecall: opts.min_definition_recall5, baselineFile: opts.compare });
   mkdirSync(path.dirname(opts.out), { recursive: true });
   writeFileSync(opts.out, JSON.stringify(payload, null, 2) + '\n');
   console.log(`\nsummary: ${JSON.stringify(summary)}`);
   console.log(`results: ${opts.out}`);
 
-  // Blocking gate: a recall@5 floor lets CI fail on ranking regressions
-  // without hard-coding a ceiling on quality.
-  if (opts.min_recall5 > 0) {
-    const r5 = summary['recall@5'] ?? 0;
-    if (r5 < opts.min_recall5 / 100) {
-      console.error(`recall@5 ${r5} is below the required ${(opts.min_recall5 / 100).toFixed(2)}`);
-      process.exitCode = 1;
-    } else {
-      console.log(`recall@5 gate passed (${opts.min_recall5}%)`);
-    }
-  }
+  if (payload.gate_failures.length && !opts.recordOnly) {
+    for (const failure of payload.gate_failures) console.error('quality gate: ' + failure);
+    process.exitCode = 1;
+  } else console.log(opts.recordOnly ? 'measurement recorded; gates not enforced' : 'quality contract passed');
 }
 
 main().catch((e) => { console.error(e.message); process.exit(1); });

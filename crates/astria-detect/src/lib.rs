@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use astria_core::FileType;
 use astria_paths::normalize;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
@@ -199,7 +199,7 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
                 rusqlite::params![rel_str],
                 |row| row.get(0),
             )
-            .ok();
+            .optional()?;
 
         let entry = FileEntry {
             path: relative.to_path_buf(),
@@ -231,8 +231,7 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
                 row.get(4)?,
             ))
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     for (fp, hash, ft, lang, size) in rows {
         if !seen_paths.contains(&fp) {
@@ -246,12 +245,56 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
         }
     }
 
-    Ok(DetectResult {
+    include_transcripts(root, DetectResult {
         new: new_files,
         changed: changed_files,
         unchanged: unchanged_files,
         removed: removed_files,
     })
+}
+
+fn include_transcripts(root: &Path, mut detected: DetectResult) -> astria_core::Result<DetectResult> {
+    // The normal walker intentionally excludes .astria. Sidecars nevertheless
+    // need the same manifest/removal lifecycle as ordinary documents.
+    let transcripts = root.join(".astria/transcripts");
+    if transcripts.is_dir() {
+        for entry in std::fs::read_dir(transcripts)? {
+            let path = entry?.path();
+            if !path.is_file()
+                || !matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("txt" | "md")
+                )
+            {
+                continue;
+            }
+            let bytes = std::fs::read(&path)?;
+            if !astria_core::check_file_size(&path, bytes.len() as u64) {
+                continue;
+            }
+            let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            let stored = detected
+                .removed
+                .iter()
+                .position(|e| e.path == relative)
+                .map(|index| detected.removed.remove(index));
+            let entry = FileEntry {
+                path: relative,
+                file_type: astria_core::FileType::Document,
+                language: None,
+                content_hash: hash_bytes(&bytes),
+                size_bytes: bytes.len() as u64,
+            };
+            match stored {
+                None => detected.new.push(entry),
+                Some(old) if old.content_hash == entry.content_hash => {
+                    detected.unchanged.push(entry)
+                }
+                Some(_) => detected.changed.push(entry),
+            }
+        }
+    }
+    Ok(detected)
 }
 
 /// Update the file manifest from a detection run. `deferred` files (their
@@ -489,3 +532,4 @@ mod tests {
         assert!(error.to_string().contains(".astriaignore"));
     }
 }
+pub mod freshness;

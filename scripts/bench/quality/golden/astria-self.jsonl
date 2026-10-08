@@ -1,6 +1,6 @@
-{"id": "q01", "question": "how does the token reduction benchmark work", "expected_files": ["crates/astria-napi/src/benchmark.rs"], "expected_symbols": ["run_benchmark"]}
-{"id": "q02", "question": "how does community detection work", "expected_files": ["crates/astria-cluster/src/lib.rs"]}
-{"id": "q03", "question": "what does god node analysis rank", "expected_files": ["crates/astria-analyze/src/lib.rs"], "expected_symbols": ["compute_god_nodes"]}
+{"id":"q01","question":"how does the token reduction benchmark work","expected_files":["crates/astria-napi/src/benchmark.rs"],"expected_symbols":["run_benchmark"],"definitions":[{"path":"crates/astria-napi/src/benchmark.rs","line":51,"contains":"pub fn run_benchmark("}]}
+{"id":"q02","question":"how does community detection work","expected_files":["crates/astria-cluster/src/lib.rs"],"definitions":[{"path":"crates/astria-cluster/src/lib.rs","line":73,"contains":"pub fn cluster_with("}]}
+{"id":"q03","question":"what does god node analysis rank","expected_files":["crates/astria-analyze/src/lib.rs"],"expected_symbols":["compute_god_nodes"],"definitions":[{"path":"crates/astria-analyze/src/lib.rs","line":86,"contains":"fn compute_god_nodes("}]}
 {"id": "q04", "question": "how are duplicate entities merged", "expected_files": ["crates/astria-build/src/dedup.rs", "crates/astria-build/src/minhash.rs"]}
 {"id": "q05", "question": "how does incremental change detection work", "expected_files": ["crates/astria-detect/src/lib.rs"]}
 {"id": "q06", "question": "which languages does tree-sitter extraction support", "expected_files": ["crates/astria-extract/src/langs/mod.rs", "crates/astria-extract/src/engine.rs"]}

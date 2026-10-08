@@ -3,58 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use astria_core::Result;
-use astria_detect::{DetectResult, FileEntry};
+use astria_detect::DetectResult;
 use rusqlite::Connection;
-use sha2::{Digest, Sha256};
-
-pub(super) fn detect(root: &Path, db: &Connection) -> Result<DetectResult> {
-    let mut detected = astria_detect::detect(root, db)?;
-    // The normal walker intentionally excludes .astria. Sidecars nevertheless
-    // need the same manifest/removal lifecycle as ordinary documents.
-    let transcripts = root.join(".astria/transcripts");
-    if transcripts.is_dir() {
-        for entry in std::fs::read_dir(transcripts)? {
-            let path = entry?.path();
-            if !path.is_file()
-                || !matches!(
-                    path.extension().and_then(|e| e.to_str()),
-                    Some("txt" | "md")
-                )
-            {
-                continue;
-            }
-            let bytes = std::fs::read(&path)?;
-            if !astria_core::check_file_size(&path, bytes.len() as u64) {
-                continue;
-            }
-            let mut hash = Sha256::new();
-            hash.update(astria_core::EXTRACTION_HASH_VERSION.as_bytes());
-            hash.update([0]);
-            hash.update(&bytes);
-            let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-            let stored = detected
-                .removed
-                .iter()
-                .position(|e| e.path == relative)
-                .map(|index| detected.removed.remove(index));
-            let entry = FileEntry {
-                path: relative,
-                file_type: astria_core::FileType::Document,
-                language: None,
-                content_hash: format!("{:x}", hash.finalize()),
-                size_bytes: bytes.len() as u64,
-            };
-            match stored {
-                None => detected.new.push(entry),
-                Some(old) if old.content_hash == entry.content_hash => {
-                    detected.unchanged.push(entry)
-                }
-                Some(_) => detected.changed.push(entry),
-            }
-        }
-    }
-    Ok(detected)
-}
 
 pub(super) fn corpus(root: &Path, detected: &DetectResult) -> Vec<PathBuf> {
     let mut files: Vec<_> = detected

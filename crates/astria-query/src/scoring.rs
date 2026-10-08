@@ -489,6 +489,7 @@ pub(crate) struct ScoredNodes {
 }
 
 pub(crate) struct LexicalIndex {
+    located_candidates: Vec<NodeIndex>,
     labels_lower: Vec<String>,
     labels_normalized: Vec<String>,
     label_components: Vec<Vec<String>>,
@@ -502,6 +503,7 @@ pub(crate) struct LexicalIndex {
 impl LexicalIndex {
     fn new(loaded: &LoadedGraph) -> Self {
         let mut index = Self {
+            located_candidates: Vec::new(),
             labels_lower: Vec::new(),
             labels_normalized: Vec::new(),
             label_components: Vec::new(),
@@ -511,14 +513,18 @@ impl LexicalIndex {
             docs_lower: Vec::new(),
             document_frequency: HashMap::new(),
         };
-        for node in loaded.graph.node_weights() {
+        for node_idx in loaded.graph.node_indices() {
+            let node = &loaded.graph[node_idx];
+            let located = !node.source_file.is_empty() && !matches!(node.file_type.as_str(), "stub" | "reference");
+            if located { index.located_candidates.push(node_idx); }
             let label = tokenize(&node.label);
             let doc: Vec<_> = node
                 .docstring
                 .as_deref()
                 .map(|d| tokenize(d).into_iter().take(400).collect())
                 .unwrap_or_default();
-            let id = tokenize(&node.id);
+            // Unresolved receiver IDs encode their caller/expression, not a definition.
+            let id = if located { tokenize(&node.id) } else { Vec::new() };
             let unique: HashSet<_> = label
                 .iter()
                 .chain(&doc)
@@ -661,6 +667,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
                     t.as_str(),
                     "implementation"
                         | "implement"
+                        | "implemented"
                         | "implements"
                         | "function"
                         | "method"
@@ -730,7 +737,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
     let mut definition_candidates = HashSet::new();
     let debug_scores = debug_scores_enabled();
     // Per-node (matched_terms, salient_hits) in node-index order, for the dump.
-    let mut debug_rows: Vec<(usize, usize)> = Vec::new();
+    let mut debug_rows: HashMap<NodeIndex, (usize, usize)> = HashMap::new();
     let mut max_salient_hits = 0usize;
     let mut max_matched_terms = 0usize;
     let effective_terms_count = terms
@@ -740,7 +747,11 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             t.len() > 2 && !STOPWORDS.contains(&t.to_lowercase().as_str())
         })
         .count();
-    for (i, idx) in loaded.graph.node_indices().enumerate() {
+    let candidates: Box<dyn Iterator<Item = NodeIndex> + '_> = if code_intent {
+        Box::new(lexical.located_candidates.iter().copied())
+    } else { Box::new(loaded.graph.node_indices()) };
+    for idx in candidates {
+        let i = idx.index();
         let node = &loaded.graph[idx];
         // Code answers rank above documentation and speculative stubs on
         // equal term evidence: without the prior, prose-heavy doc nodes and
@@ -754,6 +765,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
                 .first()
                 .is_some_and(|p| matches!(p.as_str(), "test" | "tests" | "spec" | "bench"))
             || node.id.contains("::tests::");
+        if code_intent && is_test && !wants_tests { continue; }
         let mut prior = if is_test {
             if wants_tests {
                 1.25
@@ -792,8 +804,8 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             } else {
                 0.55
             }
-        } else if node.file_type == "stub" {
-            0.4
+        } else if node.source_file.is_empty() && matches!(node.file_type.as_str(), "stub" | "reference") {
+            0.05
         } else {
             1.0
         };
@@ -961,7 +973,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         max_salient_hits = max_salient_hits.max(salient_hits);
         max_matched_terms = max_matched_terms.max(matched_terms);
         if debug_scores {
-            debug_rows.push((matched_terms, salient_hits));
+            debug_rows.insert(idx, (matched_terms, salient_hits));
         }
     }
     if !definition_candidates.is_empty() && !wants_entry {
@@ -1004,7 +1016,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         );
         for (rank, (score, idx)) in scored.iter().take(15).enumerate() {
             let n = &loaded.graph[*idx];
-            let (matched, salient) = debug_rows.get(idx.index()).copied().unwrap_or((0, 0));
+            let (matched, salient) = debug_rows.get(idx).copied().unwrap_or((0, 0));
             eprintln!(
                 "  #{:<2} score={:<9.3} matched={:<3}/{} salient={:<2}/{} {} [{}]",
                 rank + 1,

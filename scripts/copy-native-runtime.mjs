@@ -1,6 +1,7 @@
 // Collect the DirectML runtime from the exact link-search paths recorded by Cargo.
 import { readdirSync, readFileSync, existsSync, statSync, copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 const [buildDirectory, destination] = process.argv.slice(2);
 if (!buildDirectory || !destination) throw new Error('Pass Cargo build directory and runtime destination.');
 const outputs = readdirSync(buildDirectory).filter(n => n.startsWith('ort-sys-'))
@@ -18,5 +19,8 @@ for (const output of outputs) {
 }
 if (!runtime) throw new Error('The Windows embedding build requires DirectML.dll, but its Cargo link-search directories contain no runtime.');
 mkdirSync(destination, { recursive: true });
-copyFileSync(runtime, path.join(destination, 'DirectML.dll'));
+const target = path.join(destination, 'DirectML.dll');
+const digest = file => createHash('sha256').update(readFileSync(file)).digest('hex');
+// An already-loaded identical runtime needs no replacement on Windows.
+if (!existsSync(target) || digest(runtime) !== digest(target)) copyFileSync(runtime, target);
 console.log('Collected DirectML.dll from the ONNX build cache.');

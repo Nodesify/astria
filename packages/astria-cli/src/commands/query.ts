@@ -14,9 +14,12 @@ export async function queryCommand(question: string, opts: {
 }) {
   try {
     const mode = opts.dfs ? 'dfs' : 'bfs';
-    const depth = parseInt(opts.depth || '2', 10);
-    const budget = parseInt(opts.budget || String(DEFAULT_QUERY_BUDGET), 10);
-    const cursor = parseInt(opts.cursor || '0', 10) || 0;
+    const depth = Number(opts.depth ?? '2');
+    const budget = Number(opts.budget ?? String(DEFAULT_QUERY_BUDGET));
+    const cursor = Number(opts.cursor ?? '0');
+    if (![depth, budget, cursor].every(Number.isSafeInteger) || depth < 0 || cursor < 0) {
+      throw new Error('depth, budget and cursor must be integers; depth and cursor must be nonnegative');
+    }
     // The native layer reads ASTRIA_EMBED at query time; the flag shares the
     // same switch so CLI and MCP callers get identical behavior.
     if (opts.noEmbed) process.env.ASTRIA_EMBED = 'off';
@@ -44,6 +47,13 @@ export async function queryCommand(question: string, opts: {
             // Present when the node list was truncated; pass back as --cursor.
             nextCursor: result.nextCursor ?? null,
             graphBuiltAt: result.graphBuiltAt ?? null,
+            graphGeneration: result.graphGeneration ?? null,
+            freshness: result.freshness ?? null,
+            nodes: result.nodes,
+            edges: result.edges,
+            renderedTokens: result.renderedTokens,
+            elapsedMilliseconds: result.elapsedMilliseconds,
+            snapshotEstimatedBytes: result.snapshotEstimatedBytes,
             text: result.text,
           },
           null,

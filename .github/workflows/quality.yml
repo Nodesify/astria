@@ -8,7 +8,7 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -18,19 +18,46 @@ jobs:
           cache-dependency-path: package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-      # Same build/wire-up sequence as ci.yml's cli-test legs, kept in
-      # lockstep by the shared composite action. The recall floor comes
-      # from run-quality.mjs itself (default 50) instead of a duplicated
-      # flag here.
       - uses: ./.github/actions/build-cli
       - name: Install shared exact tokenizer
         run: npm install --no-save js-tiktoken
-      - name: Build source graph and gate retrieval
+      # Freeze the comparison corpus to the PR base. Two independent copies
+      # avoid replacing graph artifacts or switching the candidate checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: .quality/base-runtime
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: .quality/base-corpus
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: .quality/candidate-corpus
+          persist-credentials: false
+      - name: Build pinned base runtime
+        working-directory: .quality/base-runtime
         run: |
-          node packages/astria-cli/dist/index.js run .
-          node scripts/bench/quality/run-quality.mjs --astria "$GITHUB_WORKSPACE/packages/astria-cli/dist/index.js"
+          (cd packages/astria-cli && npm ci)
+          cargo build --release --locked -p astria-napi
+          mkdir -p packages/astria-cli/dist
+          cp target/release/libastria_napi.so packages/astria-cli/dist/astria.node
+          (cd packages/astria-cli && npm run build)
+      - name: Measure pinned base using the current metric contract
+        run: |
+          BASE="$GITHUB_WORKSPACE/.quality/base-runtime/packages/astria-cli/dist/index.js"
+          node "$BASE" run "$GITHUB_WORKSPACE/.quality/base-corpus" --backend none
+          node scripts/bench/quality/run-quality.mjs --root "$GITHUB_WORKSPACE/.quality/base-corpus" --astria "$BASE" --record-only --out scripts/bench/quality/out/base-results.json
+      - name: Gate candidate against measured base on identical corpus
+        run: |
+          CANDIDATE="$GITHUB_WORKSPACE/packages/astria-cli/dist/index.js"
+          node "$CANDIDATE" run "$GITHUB_WORKSPACE/.quality/candidate-corpus" --backend none
+          node scripts/bench/quality/run-quality.mjs --root "$GITHUB_WORKSPACE/.quality/candidate-corpus" --astria "$CANDIDATE" --compare scripts/bench/quality/out/base-results.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: source-retrieval-quality
-          path: scripts/bench/quality/out/quality-results.json
+          path: scripts/bench/quality/out/*results.json

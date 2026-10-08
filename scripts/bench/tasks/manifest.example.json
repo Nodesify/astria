@@ -3,9 +3,9 @@
   "output": "C:/eval/results/astria-task-evaluation-001",
   "timeout_seconds": 1800,
   "agent": {
-    "command": ["node", "C:/eval/agent-adapter.mjs"],
+    "command": ["node", "C:/Nodesify/nodesify-graphify/scripts/bench/tasks/codex-adapter.mjs"],
     "model": "gpt-6.1-sol",
-    "settings": {"reasoning_effort": "high", "temperature": 0, "network": false, "max_output_tokens": 12000}
+    "settings": {"codex_binary": "codex.exe", "reasoning_effort": "high", "network": false, "sandbox": "workspace-write", "astria_cli": "C:/Nodesify/nodesify-graphify/packages/astria-cli/dist/index.js"}
   },
   "tasks": [
     {

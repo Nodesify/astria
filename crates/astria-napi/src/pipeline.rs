@@ -63,6 +63,7 @@ mod export;
 mod graph_update;
 mod profile;
 mod publish;
+mod performance;
 pub(crate) use profile::run_pipeline_using_profile_locked;
 #[path = "semantic_pass.rs"]
 mod semantic_pass;
@@ -212,7 +213,11 @@ fn run_pipeline_under_state_lock(
         |row| row.get(0),
     )?;
 
-    let result = run_pipeline_inner(&root, &db, &astria_dir, &options);
+    let mut performance = performance::Performance::new();
+    let result = run_pipeline_inner(&root, &db, &astria_dir, &options, &mut performance);
+    if let Err(error) = performance.save(&astria_dir, &db, result.is_ok()) {
+        eprintln!("warning: failed to write performance report: {error}");
+    }
 
     // Record pipeline completion, including this run's measured LLM spend.
     let usage = astria_semantic::enrichment::usage_snapshot();
@@ -270,6 +275,7 @@ fn run_pipeline_inner(
     db: &Connection,
     astria_dir: &Path,
     options: &PipelineOptions,
+    performance: &mut performance::Performance,
 ) -> astria_core::Result<PipelineResult> {
     if (options.label_communities || options.deep) && !astria_semantic::enrichment_enabled() {
         return Err(astria_core::AstriaError::Graph(
@@ -286,7 +292,8 @@ fn run_pipeline_inner(
                 .into(),
         ));
     }
-    let detected = graph_update::detect(root, db)?;
+    let detected = astria_detect::detect(root, db)?;
+    performance.record("discovery");
     let configuration = semantic_pass::configuration()?;
     let build_configuration = format!("{configuration}:dedup={}", options.dedup);
     let previous_configuration: Option<String> = db
@@ -326,13 +333,39 @@ fn run_pipeline_inner(
         || !pending_retry.is_empty()
         || gws_stale > 0
         || previous_configuration.as_deref() != Some(build_configuration.as_str());
+    performance.record("configuration_and_remote_freshness");
+    // Reuse only a fully completed structural pass with unchanged generation,
+    // policy and feedback. Enriched pipelines rerun to retry partial backend work.
+    let derived_key = performance::derived_key(db, options)?;
+    let structural = !options.embed && !options.deep && !options.label_communities
+        && !astria_semantic::enrichment_enabled();
+    let previous_derived: Option<String> = db.query_row("SELECT value FROM _meta WHERE key = 'completed_derived_key'", [], |r| r.get(0)).ok();
+    let current_generation: Option<String> = db.query_row("SELECT value FROM _meta WHERE key = 'graph_generation'", [], |r| r.get(0)).ok();
+    if !needs_build && structural && previous_derived.as_deref() == Some(&derived_key)
+        && current_generation.as_deref().is_some_and(|generation|
+            astria_detect::freshness::artifacts_match(astria_dir, generation))
+    {
+        let cluster_result = performance::stored_cluster(db)?;
+        let analysis = astria_analyze::analyze(db)?;
+        let report = std::fs::read_to_string(astria_dir.join("graph_report.md"))?;
+        performance.reused_derived = true;
+        performance.record("reuse_derived");
+        return Ok(PipelineResult {
+            build_result: astria_build::BuildResult { nodes_added: 0, edges_added: 0, duplicates_merged: 0 },
+            cluster_result, analysis, report, files_processed: 0, semantic_cached: 0, semantic_gated: 0,
+            llm_usage: astria_semantic::enrichment::usage_snapshot(), community_labels: None, deep_links: None,
+        });
+    }
+    let mut derived_complete = true;
     // Resolve against the complete corpus, including cached raw facts for
     // unchanged callers. AST parsing still runs only on cache misses.
     let (build_result, semantic_stats) = if needs_build {
         let files = graph_update::corpus(root, &detected);
         let mut extractions = astria_extract::extract(&files, root, db)?;
+        performance.record("extraction_and_references");
         let semantic_stats =
             semantic_pass::enrich_with_semantics(&files, &mut extractions, db, &configuration)?;
+        performance.record("semantic_extraction");
         // Deferred extractions (unavailable media tooling, missing workspace
         // credentials) publish nothing this run and stay pending: their old
         // facts are preserved and the next run retries them. Only files
@@ -383,6 +416,7 @@ fn run_pipeline_inner(
             },
         )
     };
+    performance.record("core_publication");
 
     // Cross-layer linking: docs→packages, packages→entry files, napi FFI
     // imports→Rust functions. Deterministic DB passes (no LLM) that run over
@@ -401,9 +435,11 @@ fn run_pipeline_inner(
             );
         }
         Err(e) => {
+            derived_complete = false;
             eprintln!("warning: cross-layer linking failed: {e}");
         }
     };
+    performance.record("cross_layer");
 
     // graph_mutated tracks whether THIS run committed a content change; each
     // contributing stage advances the generation immediately (see
@@ -438,6 +474,7 @@ fn run_pipeline_inner(
     // cross-file INFERRED edges shape both: concept nodes bridge files the
     // AST never connected.
     let deep_stats = deep_link_stage(db, root, options.deep)?;
+    performance.record("deduplication_and_deep_links");
     if deep_stats.as_ref().is_some_and(|s| s.links_added > 0) {
         graph_mutated = true;
         advance_generation(db)?;
@@ -470,6 +507,7 @@ fn run_pipeline_inner(
         graph_mutated = true;
         advance_generation(db)?;
     }
+    performance.record("embeddings");
 
     // Feedback loop: promote query pairs that recurred across distinct
     // questions into learned edges. Best-effort — a failure here must not
@@ -484,8 +522,9 @@ fn run_pipeline_inner(
             );
         }
         Ok(_) => {}
-        Err(e) => eprintln!("warning: learned-edge promotion failed: {e}"),
+        Err(e) => { derived_complete = false; eprintln!("warning: learned-edge promotion failed: {e}"); }
     }
+    performance.record("learned_edges");
 
     // Clustering rewrites memberships every run even when the partition is
     // identical; only an assignment that actually CHANGED is a content
@@ -497,11 +536,13 @@ fn run_pipeline_inner(
         graph_mutated = true;
         advance_generation(db)?;
     }
+    performance.record("clustering");
 
     // Thematic community naming runs after clustering (fresh memberships)
     // and before hyperedges/wiki exports so every downstream surface —
     // report, MCP list_communities, graph.json — sees the good names.
     let label_stats = label_communities_stage(db, options.label_communities)?;
+    performance.record("community_labels");
     if let Some(stats) = &label_stats {
         if stats.labeled > 0 || stats.failed > 0 {
             graph_mutated = true;
@@ -519,8 +560,9 @@ fn run_pipeline_inner(
             );
         }
         Ok(_) => {}
-        Err(e) => eprintln!("warning: hyperedge generation failed: {e}"),
+        Err(e) => { derived_complete = false; eprintln!("warning: hyperedge generation failed: {e}"); }
     }
+    performance.record("hyperedges");
     let mut analysis = astria_analyze::analyze(db)?;
     // Optional derived pass: a decision backend (Jev) may re-rank the
     // suggested questions so the report leads with the most useful ones.
@@ -549,11 +591,16 @@ fn run_pipeline_inner(
         }
     }
     let report = astria_report::generate_report(db, &analysis)?;
+    performance.record("analysis_and_report");
 
     // One publication workflow: terminal generation stamp (fresh only when
     // the run mutated the graph), report footer, and graph.json all carry
     // the same generation, and the sidecar stamp lands with them.
     publish_artifacts(db, astria_dir, &report, graph_mutated)?;
+    performance.record("artifacts");
+    if structural && derived_complete {
+        db.execute("INSERT OR REPLACE INTO _meta (key, value) VALUES ('completed_derived_key', ?1)", [performance::derived_key(db, options)?])?;
+    }
 
     Ok(PipelineResult {
         build_result,
