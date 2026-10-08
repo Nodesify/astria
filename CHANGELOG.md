@@ -4,7 +4,9 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## [Unreleased]
+## [1.2.0] — 2026-10-09
+
+Behavior-question retrieval ranking, honest quiet indexing, and evaluation-corpus integrity.
 
 - **Behavior questions now rank callable declarations first.** A query like "how does authentication work" previously let result types, constants and prose sharing the same vocabulary displace the implementing function; behavior-oriented queries now prioritize located `()` declarations, and a trailing "work"/"works" is treated as question phrasing rather than a symbol hint. Explicit identifier lookups, documentation intent, and docs-majority corpora keep their existing ranking. On the self-corpus quality gate (budget 4000): file recall@5 64.3% → 74.3%, declaration recall@5 0% → 66.7%, gate passing with 0 failed queries and 0 budget violations.
 - **`astria run` and `astria update` no longer run or print the token-size benchmark.** The synthetic corpus-vs-query ratio moves to the explicit retrieval-quality workflow (`scripts/bench/quality/run-quality.mjs`); indexing output stays limited to pipeline facts. The e2e suite now asserts the quiet behavior.
@@ -542,6 +544,7 @@ See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
 [1.0.6]: https://github.com/Nodesify/astria/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/Nodesify/astria/compare/v1.0.4...v1.0.5
+[1.2.0]: https://github.com/Nodesify/astria/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/Nodesify/astria/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Nodesify/astria/compare/v1.0.12...v1.1.0
 [1.0.12]: https://github.com/Nodesify/astria/compare/v1.0.11...v1.0.12
