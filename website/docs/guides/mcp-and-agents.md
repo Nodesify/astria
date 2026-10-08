@@ -84,7 +84,7 @@ Binding a non-loopback address requires a token. Command flags, client authentic
 astria hook install|uninstall|status
 ```
 
-Keeps the graph fresh automatically on commit, so agents always see an up-to-date structure without anyone remembering to run `update`. Hook runs are deliberately quiet and cheap: each commit calls `update . --quiet --if-stale 10`, which prints nothing, skips the token benchmark, and does nothing at all when the graph was published less than 10 minutes ago (so a burst of commits rebuilds once, not per commit). Errors never break a commit.
+Keeps the graph fresh automatically on commit. Each commit calls `update . --quiet --if-stale 10`, which suppresses progress output. A recent graph is skipped only when source content and publication artifacts are also fresh; changed files still trigger an update within that ten-minute window. Indexing does not run token benchmarks automatically. Errors never break a commit.
 
 Who should install them: anyone whose AI assistant queries this repo's graph — that's the workflow where staleness silently produces wrong answers. Casual CLI users can skip them without losing anything; `status` still flags a stale graph, and a deliberate `astria update .` refreshes on demand. Hooks are per-machine and per-checkout (only runs on machines where you ran `astria hook install`), and `uninstall` removes them cleanly.
 
