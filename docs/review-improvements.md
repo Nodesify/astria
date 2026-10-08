@@ -2,6 +2,8 @@
 
 Implementation queries select located symbols as starting nodes. Unresolved expressions can still appear as relationship evidence, with compact text labels; typed records retain their exact identities.
 
+Behavior questions in code corpora prioritize matching callable declarations over result types and prose. Trailing "work" in questions such as "how does authentication work" is treated as question phrasing. Explicit documentation requests and document-majority corpora retain their existing ranking. Generated promptfoo questions and benchmark output files are excluded from the self-corpus to prevent evaluation prompts leaking into retrieval.
+
 `astria query --json` and MCP `query_graph` return the same query result fields: `text`, `nodes`, `edges`, total `nodeCount`/`edgeCount`, `nextCursor`, `graphGeneration`, `graphBuiltAt`, `freshness`, `renderedTokens`, `elapsedMilliseconds`, and `snapshotEstimatedBytes`. MCP exposes these as `structuredContent` and declares an output schema. CLI additionally includes the request parameters.
 
 The budget bounds the exact rendered `text`, including headers and pagination instructions. Structured records and JSON transport overhead are additional. Nodes and edges describe records delivered on that page; totals describe the matching subgraph. An edge may reference a node on another page. Reuse `nextCursor` with the same question and options; restart pagination if `graphGeneration` changes. Source lines are one-based. Unlocated nodes have an empty `sourceFile` and a null `sourceLine`.

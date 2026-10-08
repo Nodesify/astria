@@ -515,8 +515,11 @@ impl LexicalIndex {
         };
         for node_idx in loaded.graph.node_indices() {
             let node = &loaded.graph[node_idx];
-            let located = !node.source_file.is_empty() && !matches!(node.file_type.as_str(), "stub" | "reference");
-            if located { index.located_candidates.push(node_idx); }
+            let located = !node.source_file.is_empty()
+                && !matches!(node.file_type.as_str(), "stub" | "reference");
+            if located {
+                index.located_candidates.push(node_idx);
+            }
             let label = tokenize(&node.label);
             let doc: Vec<_> = node
                 .docstring
@@ -524,7 +527,11 @@ impl LexicalIndex {
                 .map(|d| tokenize(d).into_iter().take(400).collect())
                 .unwrap_or_default();
             // Unresolved receiver IDs encode their caller/expression, not a definition.
-            let id = if located { tokenize(&node.id) } else { Vec::new() };
+            let id = if located {
+                tokenize(&node.id)
+            } else {
+                Vec::new()
+            };
             let unique: HashSet<_> = label
                 .iter()
                 .chain(&doc)
@@ -570,13 +577,34 @@ impl LexicalIndex {
 }
 
 pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes {
+    // In a behavior question, trailing "work" is a question cue, not a
+    // request for symbols such as gitWorkTreeStatus. Preserve it in other
+    // contexts (work queues, explicit identifiers, and document questions).
+    let behavior_question = match (terms.first(), terms.get(1)) {
+        (Some(first), Some(second)) => {
+            let action = second.to_lowercase();
+            (first.eq_ignore_ascii_case("how")
+                && matches!(action.as_str(), "does" | "do" | "is" | "are"))
+                || (first.eq_ignore_ascii_case("what") && matches!(action.as_str(), "does" | "do"))
+        }
+        _ => false,
+    };
+    let trimmed_terms = if behavior_question
+        && terms
+            .last()
+            .is_some_and(|term| matches!(term.trim_end_matches(['?', '.', '!']), "work" | "works"))
+    {
+        &terms[..terms.len() - 1]
+    } else {
+        terms
+    };
+    let terms = trimmed_terms;
     // IDF weights + per-node lowercase labels, one shared pre-pass.
     let n_nodes = loaded.graph.node_count().max(1) as f64;
     let ln_nodes = n_nodes.ln().max(1.0);
     let lexical = loaded.lexical.get_or_init(|| LexicalIndex::new(loaded));
     let labels_lower = &lexical.labels_lower;
-    let doc_share = prose_share(loaded);
-    let docs_majority = doc_share >= DOCS_MAJORITY_PROSE_SHARE;
+    let docs_majority = matches!(corpus_mode(loaded), CorpusMode::DocsMajority);
     let label_components = &lexical.label_components;
     // Chunk and document bodies feed the IDF pre-pass too: scoring matches
     // those terms against docstrings, so a term that is common in bodies
@@ -660,8 +688,26 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             "historical" | "history" | "resolved" | "superseded" | "previous" | "past"
         )
     });
+    // A capitalized subject can name a simple type (Parser, Work), even
+    // without a scope separator or a camelCase boundary. Keep exact type
+    // lookup ahead of unrelated functions matching only its module path.
+    let named_type = behavior_question
+        && terms.iter().skip(2).any(|term| {
+            term.chars().next().is_some_and(char::is_uppercase)
+                && lexical.located_candidates.iter().any(|&idx| {
+                    let node = &loaded.graph[idx];
+                    node.source_line.is_some()
+                        && !node.label.ends_with("()")
+                        && !label_is_file(&node.label)
+                        && !is_doc_type(&node.file_type)
+                        && !is_semantic_type(&node.file_type)
+                        && normalized_identifier(term) == lexical.labels_normalized[idx.index()]
+                })
+        });
+    let behavior_intent = behavior_question && !docs_majority && !wants_docs && !named_type;
     let code_intent = !wants_docs
-        && (terms.iter().any(|t| is_explicit_identifier(t))
+        && (behavior_intent
+            || terms.iter().any(|t| is_explicit_identifier(t))
             || question_tokens.iter().any(|t| {
                 matches!(
                     t.as_str(),
@@ -749,7 +795,9 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         .count();
     let candidates: Box<dyn Iterator<Item = NodeIndex> + '_> = if code_intent {
         Box::new(lexical.located_candidates.iter().copied())
-    } else { Box::new(loaded.graph.node_indices()) };
+    } else {
+        Box::new(loaded.graph.node_indices())
+    };
     for idx in candidates {
         let i = idx.index();
         let node = &loaded.graph[idx];
@@ -765,7 +813,9 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
                 .first()
                 .is_some_and(|p| matches!(p.as_str(), "test" | "tests" | "spec" | "bench"))
             || node.id.contains("::tests::");
-        if code_intent && is_test && !wants_tests { continue; }
+        if code_intent && is_test && !wants_tests {
+            continue;
+        }
         let mut prior = if is_test {
             if wants_tests {
                 1.25
@@ -804,11 +854,24 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             } else {
                 0.55
             }
-        } else if node.source_file.is_empty() && matches!(node.file_type.as_str(), "stub" | "reference") {
+        } else if node.source_file.is_empty()
+            && matches!(node.file_type.as_str(), "stub" | "reference")
+        {
             0.05
         } else {
             1.0
         };
+        // Behavior is implemented by callable declarations. Return types,
+        // constants and prose may describe it, but should not displace the
+        // executable symbol when they share the same query vocabulary.
+        if behavior_intent
+            && node.label.ends_with("()")
+            && !is_doc
+            && !is_semantic_type(&node.file_type)
+            && node.source_line.is_some()
+        {
+            prior *= 2.0;
+        }
         if !wants_history
             && node.signature.as_deref().is_some_and(|s| {
                 s.starts_with("astria-document: ")
@@ -926,20 +989,27 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         // Reserve a ranking tier for actual definitions satisfying every written
         // discriminator. Prose mentions and wrong-scope same-name methods cannot
         // enter this tier. Document intent keeps its existing lexical behavior.
-        if code_intent
+        let behavior_definition = behavior_intent
+            && identifiers.is_empty()
+            && bare_symbols.is_empty()
+            && node.label.ends_with("()")
+            && node.source_line.is_some()
+            && matched_terms > 0;
+        let named_definition = code_intent
             && (!identifiers.is_empty() || !bare_symbols.is_empty())
-            && !is_doc
-            && !is_semantic_type(&node.file_type)
-            && node.file_type != "stub"
-            && !label_is_file(&node.label)
-            && (!is_test || wants_tests)
             && bare_symbols
                 .iter()
                 .all(|term| normalized_identifier(term) == normalized_identifier(&node.label))
             && identifiers.iter().all(|term| {
                 definition_identifier_match(term, &node.id, &node.label, &node.source_file)
                     || path_discriminator_match(term, &node.source_file)
-            })
+            });
+        if (behavior_definition || named_definition)
+            && !is_doc
+            && !is_semantic_type(&node.file_type)
+            && node.file_type != "stub"
+            && !label_is_file(&node.label)
+            && (!is_test || wants_tests)
         {
             definition_candidates.insert(idx);
         }

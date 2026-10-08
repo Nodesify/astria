@@ -130,7 +130,7 @@ if (!existsSync(cliEntry) || !existsSync(nativeBin)) {
   const cypher = readFileSync(cypherPath, 'utf-8');
   assert(cypher.includes('MERGE (n:'), 'cypher export should MERGE nodes');
   assert(cypher.includes('MERGE (a)-[r:'), 'cypher export should MERGE relationships');
-  assert(/Reduction:\s+[0-9.]+x/.test(run.stdout), 'run should print the token reduction benchmark');
+  assert(!/Reduction:\s+[0-9.]+x/.test(run.stdout), 'run should leave token benchmarks to explicit benchmark workflows');
 
   // 6c. an unknown format is rejected, not silently exported as JSON
   // (obsidian is a wiki format, a plausible typo for `wiki --format obsidian`)
