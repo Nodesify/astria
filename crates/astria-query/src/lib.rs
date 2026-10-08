@@ -11,9 +11,9 @@ const SUGGESTION_COUNT: usize = 3;
 // Domain modules split out of lib.rs: each owns one cohesive stage of the
 // query pipeline. The public API surface below is unchanged.
 mod render;
+mod result;
 mod scoring;
 mod store;
-mod result;
 pub use result::{QueryEdge, QueryNode, QueryResponse};
 
 #[allow(unused_imports)]
@@ -135,13 +135,27 @@ pub fn query_graph_with_metadata(
             |row| row.get::<_, String>(0),
         )
         .ok();
-    let generation = db.query_row("SELECT value FROM _meta WHERE key = 'graph_generation'", [], |r| r.get::<_, String>(0)).ok();
+    let generation = db
+        .query_row(
+            "SELECT value FROM _meta WHERE key = 'graph_generation'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .ok();
     // Only project databases have one local source manifest. Global/merged
     // graphs do not describe the directory two levels above their database.
-    let local_database = std::path::Path::new(db_path).file_name().is_some_and(|n| n == "db.sqlite")
-        && std::path::Path::new(db_path).parent().and_then(|p| p.file_name()).is_some_and(|n| n == ".astria");
-    let freshness = loaded.root.as_deref().filter(|_| local_database).map(|root|
-        astria_detect::freshness::inspect(db, std::path::Path::new(root), false));
+    let local_database = std::path::Path::new(db_path)
+        .file_name()
+        .is_some_and(|n| n == "db.sqlite")
+        && std::path::Path::new(db_path)
+            .parent()
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n == ".astria");
+    let freshness = loaded
+        .root
+        .as_deref()
+        .filter(|_| local_database)
+        .map(|root| astria_detect::freshness::inspect(db, std::path::Path::new(root), false));
     let snapshot_estimated_bytes = loaded.estimated_bytes();
     // Only use an already cached model: queries never initiate a download.
     #[cfg(feature = "embed")]
@@ -196,12 +210,21 @@ pub fn query_graph_with_metadata(
     })
 }
 
-pub fn validate_query(question: &str, mode: &str, depth: usize, budget: i64) -> astria_core::Result<()> {
+pub fn validate_query(
+    question: &str,
+    mode: &str,
+    depth: usize,
+    budget: i64,
+) -> astria_core::Result<()> {
     if question.trim().is_empty() || question.len() > 16_384 {
-        return Err(astria_core::AstriaError::Graph("question must contain 1..16384 bytes of non-empty text".into()));
+        return Err(astria_core::AstriaError::Graph(
+            "question must contain 1..16384 bytes of non-empty text".into(),
+        ));
     }
     if !matches!(mode, "bfs" | "dfs") || depth > 32 || !(1..=100_000).contains(&budget) {
-        return Err(astria_core::AstriaError::Graph("mode must be bfs/dfs, depth 0..32, and budget 1..100000".into()));
+        return Err(astria_core::AstriaError::Graph(
+            "mode must be bfs/dfs, depth 0..32, and budget 1..100000".into(),
+        ));
     }
     Ok(())
 }
@@ -304,7 +327,10 @@ fn query_graph_loaded(
 ) -> astria_core::Result<QueryResponse> {
     if loaded.graph.node_count() == 0 {
         let (text, _) = render_page("", &["No nodes in graph.\n".into()], 0, budget)?;
-        return Ok(QueryResponse { text, ..Default::default() });
+        return Ok(QueryResponse {
+            text,
+            ..Default::default()
+        });
     }
 
     let terms: Vec<String> = question.split_whitespace().map(|s| s.to_string()).collect();
@@ -371,7 +397,10 @@ fn query_graph_loaded(
             )
         };
         let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
-        return Ok(QueryResponse { text, ..Default::default() });
+        return Ok(QueryResponse {
+            text,
+            ..Default::default()
+        });
     }
 
     // Seed-confidence floor: when no node in the graph matches any of the
@@ -421,7 +450,10 @@ fn query_graph_loaded(
             msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
         }
         let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
-        return Ok(QueryResponse { text, ..Default::default() });
+        return Ok(QueryResponse {
+            text,
+            ..Default::default()
+        });
     }
 
     // Seed quota: at most 2 of 5 seeds may be documentation-type nodes.
@@ -437,7 +469,9 @@ fn query_graph_loaded(
         }
         if let Some(&(_, idx)) = scored.iter().find(|(_, idx)| {
             let node = &loaded.graph[*idx];
-            if node.source_file.is_empty() || matches!(node.file_type.as_str(), "stub" | "reference") {
+            if node.source_file.is_empty()
+                || matches!(node.file_type.as_str(), "stub" | "reference")
+            {
                 return false;
             }
             definition_identifier_match(term, &node.id, &node.label, &node.source_file)
@@ -469,7 +503,9 @@ fn query_graph_loaded(
         if seed_nodes.contains(&idx) {
             continue;
         }
-        if loaded.graph[idx].source_file.is_empty() || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference") {
+        if loaded.graph[idx].source_file.is_empty()
+            || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference")
+        {
             continue;
         }
         if is_doc_type(&loaded.graph[idx].file_type)
@@ -495,8 +531,10 @@ fn query_graph_loaded(
             .iter()
             .filter_map(|(node_id, cosine)| {
                 let &idx = loaded.id_to_idx.get(node_id)?;
-                if seed_nodes.contains(&idx) || loaded.graph[idx].source_file.is_empty()
-                    || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference") {
+                if seed_nodes.contains(&idx)
+                    || loaded.graph[idx].source_file.is_empty()
+                    || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference")
+                {
                     return None;
                 }
                 if token_scores.get(&idx).copied().unwrap_or(0.0) > 0.0 {
@@ -583,7 +621,9 @@ fn query_graph_loaded(
         if let Some(freshness) = freshness {
             if freshness.status != "fresh" {
                 header.push_str(&format!("# source freshness: {} ({} added, {} modified, {} deleted; extraction outdated={}) — run `astria update .`\n", freshness.status, freshness.added, freshness.modified, freshness.deleted, freshness.extraction_outdated));
-                if let Some(error) = &freshness.error { header.push_str(&format!("# freshness unavailable: {error}\n")); }
+                if let Some(error) = &freshness.error {
+                    header.push_str(&format!("# freshness unavailable: {error}\n"));
+                }
             }
         }
     }
@@ -1583,7 +1623,8 @@ at the lake house');",
             None,
             None,
         )
-        .unwrap().into_output();
+        .unwrap()
+        .into_output();
         assert!(
             text.contains("maybe_install_helper"),
             "semantic-only candidate must be seeded and traversed; output:\n{text}"
@@ -1622,7 +1663,8 @@ at the lake house');",
             None,
             None,
         )
-        .unwrap().into_output();
+        .unwrap()
+        .into_output();
         assert!(
             !text.contains("maybe_install_helper"),
             "below-floor semantic candidate must stay out; output:\n{text}"
@@ -1792,7 +1834,6 @@ at the lake house');",
         assert!(confidence_rank("INFERRED") > confidence_rank("SEMANTIC"));
     }
 
-
     #[test]
     fn no_match_suggests_nearest_labels() {
         let db = open_db_in_memory().unwrap();
@@ -1877,7 +1918,8 @@ at the lake house');",
             None,
             None,
         )
-        .unwrap().into_output();
+        .unwrap()
+        .into_output();
         assert_eq!(nodes, 0, "an incidental match must not seed a traversal");
         assert!(
             text.contains("No confident match"),
@@ -1920,7 +1962,8 @@ at the lake house');",
             None,
             None,
         )
-        .unwrap().into_output();
+        .unwrap()
+        .into_output();
         assert!(nodes > 0, "a semantic candidate must still traverse");
         assert!(
             text.contains("sanitize_inputs"),
@@ -1961,7 +2004,8 @@ at the lake house');",
             None,
             None,
         )
-        .unwrap().into_output();
+        .unwrap()
+        .into_output();
         assert_eq!(nodes, 0, "a lone common-word match must not seed");
         assert!(
             text.contains("No confident match"),
@@ -2005,7 +2049,8 @@ at the lake house');",
             None,
             None,
         )
-        .unwrap().into_output();
+        .unwrap()
+        .into_output();
         let first_node = text
             .lines()
             .find(|l| l.starts_with("NODE "))
@@ -2046,7 +2091,8 @@ at the lake house');",
             None,
             None,
         )
-        .unwrap().into_output();
+        .unwrap()
+        .into_output();
         assert!(nodes > 0, "salient evidence must allow the traversal");
         assert!(
             text.contains("handle_message"),
@@ -2283,7 +2329,6 @@ at the lake house');",
         assert!(small.contains("truncated"), "truncation is declared");
         assert!(small.contains("Hub"), "the top-ranked file always fits");
     }
-
 }
 
 #[cfg(test)]

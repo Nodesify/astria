@@ -72,10 +72,22 @@ fn tools() -> Value {
         if let Some(properties) = schema["properties"].as_object_mut() {
             for (key, value) in properties {
                 match key.as_str() {
-                    "depth" => { value["minimum"] = json!(0); value["maximum"] = json!(32); }
-                    "budget" => { value["minimum"] = json!(1); value["maximum"] = json!(100000); }
-                    "cursor" => { value["minimum"] = json!(0); value["maximum"] = json!(i64::MAX); }
-                    "question" => { value["minLength"] = json!(1); value["maxLength"] = json!(16384); }
+                    "depth" => {
+                        value["minimum"] = json!(0);
+                        value["maximum"] = json!(32);
+                    }
+                    "budget" => {
+                        value["minimum"] = json!(1);
+                        value["maximum"] = json!(100000);
+                    }
+                    "cursor" => {
+                        value["minimum"] = json!(0);
+                        value["maximum"] = json!(i64::MAX);
+                    }
+                    "question" => {
+                        value["minLength"] = json!(1);
+                        value["maxLength"] = json!(16384);
+                    }
                     _ => {}
                 }
             }
@@ -104,26 +116,49 @@ fn bool_arg(args: &Value, key: &str) -> Option<bool> {
 
 fn validate_arguments(name: &str, args: &Value) -> std::result::Result<(), String> {
     let definitions = tools();
-    let definition = definitions.as_array().unwrap().iter().find(|tool| tool["name"] == name)
+    let definition = definitions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == name)
         .ok_or_else(|| format!("unknown tool: {name}"))?;
     let schema = &definition["inputSchema"];
     let properties = schema["properties"].as_object().unwrap();
     let arguments = args.as_object().ok_or("arguments must be an object")?;
     if let Some(required) = schema["required"].as_array() {
-        for key in required { if !arguments.contains_key(key.as_str().unwrap()) { return Err(format!("missing required argument: {key}")); } }
+        for key in required {
+            if !arguments.contains_key(key.as_str().unwrap()) {
+                return Err(format!("missing required argument: {key}"));
+            }
+        }
     }
     for (key, value) in arguments {
-        let property = properties.get(key).ok_or_else(|| format!("unknown argument: {key}"))?;
+        let property = properties
+            .get(key)
+            .ok_or_else(|| format!("unknown argument: {key}"))?;
         let valid = match property["type"].as_str() {
-            Some("string") => value.as_str().is_some_and(|text| !text.trim().is_empty() && text.len() <= 16384),
+            Some("string") => value
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty() && text.len() <= 16384),
             Some("boolean") => value.is_boolean(),
-            Some("integer") => value.as_u64().is_some_and(|n| n >= property["minimum"].as_u64().unwrap_or(0)
-                && n <= property["maximum"].as_u64().unwrap_or(i64::MAX as u64)),
+            Some("integer") => value.as_u64().is_some_and(|n| {
+                n >= property["minimum"].as_u64().unwrap_or(0)
+                    && n <= property["maximum"].as_u64().unwrap_or(i64::MAX as u64)
+            }),
             _ => false,
         };
-        if !valid { return Err(format!("invalid argument {key}: expected {} within its declared bounds", property["type"])); }
+        if !valid {
+            return Err(format!(
+                "invalid argument {key}: expected {} within its declared bounds",
+                property["type"]
+            ));
+        }
         if let Some(values) = property["enum"].as_array() {
-            if !values.contains(value) { return Err(format!("invalid argument {key}: expected one of {values:?}")); }
+            if !values.contains(value) {
+                return Err(format!(
+                    "invalid argument {key}: expected one of {values:?}"
+                ));
+            }
         }
     }
     Ok(())
@@ -150,7 +185,9 @@ fn community_label_map(db: &Connection) -> std::collections::HashMap<i64, String
 }
 
 fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value {
-    if let Err(error) = validate_arguments(name, args) { return error_result(error); }
+    if let Err(error) = validate_arguments(name, args) {
+        return error_result(error);
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match name {
         "query_graph" => {
             let question = str_arg(args, "question").unwrap_or_default();
@@ -175,10 +212,12 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 cursor,
                 min_strength_for(&detail) >= 0.9,
             )
-            .map(|response| json!({
-                "content": [{"type": "text", "text": response.text}],
-                "structuredContent": response, "isError": false
-            }))
+            .map(|response| {
+                json!({
+                    "content": [{"type": "text", "text": response.text}],
+                    "structuredContent": response, "isError": false
+                })
+            })
         }
         "repo_map" => {
             let budget = args

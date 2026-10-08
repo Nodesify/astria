@@ -59,9 +59,30 @@ pub(crate) struct LoadedGraph {
 impl LoadedGraph {
     /// Heap estimate for graph records; excludes allocator and lexical-index overhead.
     pub(crate) fn estimated_bytes(&self) -> usize {
-        *self.estimated_bytes.get_or_init(|| self.graph.node_weights().map(|n| std::mem::size_of::<NodeData>() + n.id.len() + n.label.len() + n.file_type.len() + n.source_file.len() + n.docstring.as_ref().map_or(0, String::len) + n.signature.as_ref().map_or(0, String::len)).sum::<usize>()
-            + self.graph.edge_weights().map(|e| std::mem::size_of::<EdgeData>() + e.relation.len() + e.confidence.len() + e.source_file.len()).sum::<usize>()
-        )
+        *self.estimated_bytes.get_or_init(|| {
+            self.graph
+                .node_weights()
+                .map(|n| {
+                    std::mem::size_of::<NodeData>()
+                        + n.id.len()
+                        + n.label.len()
+                        + n.file_type.len()
+                        + n.source_file.len()
+                        + n.docstring.as_ref().map_or(0, String::len)
+                        + n.signature.as_ref().map_or(0, String::len)
+                })
+                .sum::<usize>()
+                + self
+                    .graph
+                    .edge_weights()
+                    .map(|e| {
+                        std::mem::size_of::<EdgeData>()
+                            + e.relation.len()
+                            + e.confidence.len()
+                            + e.source_file.len()
+                    })
+                    .sum::<usize>()
+        })
     }
     /// Root-relative display form of a stored path.
     pub(crate) fn display_path(&self, path: &str) -> String {

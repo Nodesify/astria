@@ -61,9 +61,9 @@ fn timestamp() -> String {
 mod export;
 #[path = "graph_update.rs"]
 mod graph_update;
+mod performance;
 mod profile;
 mod publish;
-mod performance;
 pub(crate) use profile::run_pipeline_using_profile_locked;
 #[path = "semantic_pass.rs"]
 mod semantic_pass;
@@ -337,13 +337,30 @@ fn run_pipeline_inner(
     // Reuse only a fully completed structural pass with unchanged generation,
     // policy and feedback. Enriched pipelines rerun to retry partial backend work.
     let derived_key = performance::derived_key(db, options)?;
-    let structural = !options.embed && !options.deep && !options.label_communities
+    let structural = !options.embed
+        && !options.deep
+        && !options.label_communities
         && !astria_semantic::enrichment_enabled();
-    let previous_derived: Option<String> = db.query_row("SELECT value FROM _meta WHERE key = 'completed_derived_key'", [], |r| r.get(0)).ok();
-    let current_generation: Option<String> = db.query_row("SELECT value FROM _meta WHERE key = 'graph_generation'", [], |r| r.get(0)).ok();
-    if !needs_build && structural && previous_derived.as_deref() == Some(&derived_key)
-        && current_generation.as_deref().is_some_and(|generation|
-            astria_detect::freshness::artifacts_match(astria_dir, generation))
+    let previous_derived: Option<String> = db
+        .query_row(
+            "SELECT value FROM _meta WHERE key = 'completed_derived_key'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    let current_generation: Option<String> = db
+        .query_row(
+            "SELECT value FROM _meta WHERE key = 'graph_generation'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    if !needs_build
+        && structural
+        && previous_derived.as_deref() == Some(&derived_key)
+        && current_generation.as_deref().is_some_and(|generation| {
+            astria_detect::freshness::artifacts_match(astria_dir, generation)
+        })
     {
         let cluster_result = performance::stored_cluster(db)?;
         let analysis = astria_analyze::analyze(db)?;
@@ -351,9 +368,20 @@ fn run_pipeline_inner(
         performance.reused_derived = true;
         performance.record("reuse_derived");
         return Ok(PipelineResult {
-            build_result: astria_build::BuildResult { nodes_added: 0, edges_added: 0, duplicates_merged: 0 },
-            cluster_result, analysis, report, files_processed: 0, semantic_cached: 0, semantic_gated: 0,
-            llm_usage: astria_semantic::enrichment::usage_snapshot(), community_labels: None, deep_links: None,
+            build_result: astria_build::BuildResult {
+                nodes_added: 0,
+                edges_added: 0,
+                duplicates_merged: 0,
+            },
+            cluster_result,
+            analysis,
+            report,
+            files_processed: 0,
+            semantic_cached: 0,
+            semantic_gated: 0,
+            llm_usage: astria_semantic::enrichment::usage_snapshot(),
+            community_labels: None,
+            deep_links: None,
         });
     }
     let mut derived_complete = true;
@@ -522,7 +550,10 @@ fn run_pipeline_inner(
             );
         }
         Ok(_) => {}
-        Err(e) => { derived_complete = false; eprintln!("warning: learned-edge promotion failed: {e}"); }
+        Err(e) => {
+            derived_complete = false;
+            eprintln!("warning: learned-edge promotion failed: {e}");
+        }
     }
     performance.record("learned_edges");
 
@@ -560,7 +591,10 @@ fn run_pipeline_inner(
             );
         }
         Ok(_) => {}
-        Err(e) => { derived_complete = false; eprintln!("warning: hyperedge generation failed: {e}"); }
+        Err(e) => {
+            derived_complete = false;
+            eprintln!("warning: hyperedge generation failed: {e}");
+        }
     }
     performance.record("hyperedges");
     let mut analysis = astria_analyze::analyze(db)?;
@@ -599,7 +633,10 @@ fn run_pipeline_inner(
     publish_artifacts(db, astria_dir, &report, graph_mutated)?;
     performance.record("artifacts");
     if structural && derived_complete {
-        db.execute("INSERT OR REPLACE INTO _meta (key, value) VALUES ('completed_derived_key', ?1)", [performance::derived_key(db, options)?])?;
+        db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('completed_derived_key', ?1)",
+            [performance::derived_key(db, options)?],
+        )?;
     }
 
     Ok(PipelineResult {
