@@ -1,5 +1,7 @@
 pub mod benchmark;
 pub mod cost;
+mod query_contract;
+pub use query_contract::{graph_freshness, QueryResultJs};
 pub use astria_analyze::diagnose;
 pub use astria_export::export_cypher;
 pub use astria_export::export_graphml;
@@ -535,18 +537,6 @@ pub struct CommunityJs {
 pub struct CommunitiesJs {
     pub modularity: Option<f64>,
     pub communities: Vec<CommunityJs>,
-}
-
-#[napi(object)]
-pub struct QueryResultJs {
-    pub text: String,
-    pub node_count: i64,
-    pub edge_count: i64,
-    /// Some when the node list was truncated - pass back as `cursor`.
-    pub next_cursor: Option<i64>,
-    /// Finished-at timestamp of the most recent completed pipeline run,
-    /// lets callers judge how stale the graph is.
-    pub graph_built_at: Option<String>,
 }
 
 #[napi(object)]
@@ -1195,7 +1185,13 @@ pub fn query_graph(
 
     // `--detail high` also prefers file-level nodes when rendering answers.
     let prefer_files = min_strength_for(&detail) >= 0.9;
-    let ((text, node_count, edge_count, next_cursor), graph_built_at) =
+    if depth < 0 || cursor.is_some_and(|value| value < 0) {
+        return Err(napi::Error::from_reason("depth and cursor must be nonnegative"));
+    }
+    if detail.as_deref().is_some_and(|value| !matches!(value, "all" | "high")) {
+        return Err(napi::Error::from_reason("detail must be all or high"));
+    }
+    let response =
         query::query_graph_with_metadata(
             &db,
             &db_path_str,
@@ -1213,16 +1209,10 @@ pub fn query_graph(
         astria_dir.as_deref(),
         "query",
         &question,
-        node_count,
+        response.node_count,
         started.elapsed().as_millis(),
     );
-    Ok(QueryResultJs {
-        text,
-        node_count: node_count as i64,
-        edge_count: edge_count as i64,
-        next_cursor: next_cursor.map(|c| c as i64),
-        graph_built_at,
-    })
+    Ok(response.into())
 }
 
 #[napi]

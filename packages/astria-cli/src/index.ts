@@ -77,7 +77,7 @@ program
   .option('--no-label-communities', 'Disable community naming in the saved policy')
   .option('--deep', 'Second extraction tier: LLM-linked cross-file concept edges, cached per file (requires a semantic backend)')
   .option('--no-deep', 'Disable concept linking in the saved policy')
-  .option('--quiet', 'Suppress progress lines and the token benchmark')
+  .option('--quiet', 'Suppress progress lines')
   .option('--if-stale <minutes>', 'Skip when the graph was updated less than N minutes ago')
   .option('--refresh-policy', 'Explicitly replace the saved indexing policy with the supplied options')
   .option('--llm-budget <n>', 'Maximum LLM tokens for an explicitly selected paid indexing policy')

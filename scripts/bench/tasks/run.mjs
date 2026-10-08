@@ -21,7 +21,8 @@ assert(!agent.command.some(arg => /^(?:-e|-c|--eval|-command)$/i.test(arg)), 'In
 assert(!/(?:api[_-]?key|password|secret|authorization|bearer|credential)/i.test(JSON.stringify(agent)), 'Do not put credentials in agent command/settings; inherit credential environment variables');
 assert(Number.isFinite(manifest.timeout_seconds) && manifest.timeout_seconds > 0, 'Supply a positive timeout_seconds');
 const agentExecutable = executable(agent.command[0]);
-const agentArtifacts = [agentExecutable, ...agent.command.slice(1).filter(arg => path.isAbsolute(arg) && existsSync(arg) && statSync(arg).isFile())]
+assert(!agent.runtime_artifacts || (Array.isArray(agent.runtime_artifacts) && agent.runtime_artifacts.every(file => typeof file === 'string' && path.isAbsolute(file) && existsSync(file) && statSync(file).isFile())), 'Runtime artifacts must be existing absolute file paths');
+const agentArtifacts = [...new Set([agentExecutable, ...agent.command.slice(1).filter(arg => path.isAbsolute(arg) && existsSync(arg) && statSync(arg).isFile()), ...(agent.runtime_artifacts ?? [])])]
   .map(file => ({ path: canonical(file), sha256: hashFile(file) }));
 const roots = [];
 const ids = new Set();
@@ -58,6 +59,7 @@ const prepared = manifest.tasks.map(task => {
   const indexing = readJson(indexingFile);
   assert(indexing.commit === task.commit && indexing.graph_sha256 === pair.astria.graph.sha256 && indexing.astria_binary_sha256?.match(/^[0-9a-f]{64}$/), 'Indexing provenance must pin corpus, actual graph, and Astria binary');
   assert(typeof indexing.astria_binary_path === 'string' && hashFile(path.resolve(path.dirname(indexingFile), indexing.astria_binary_path)) === indexing.astria_binary_sha256, 'Indexing artifact must identify the actual fingerprinted Astria binary');
+  if (indexing.astria_cli_path) assert(hashFile(indexing.astria_cli_path) === indexing.astria_cli_sha256 && indexing.astria_cli_path === agent.settings.astria_cli, 'Indexing must use the same CLI available to the agent');
   const indexRoot = path.dirname(indexingFile);
   pair.astria.indexing = { artifact_path: indexingFile, artifact_sha256: hashFile(indexingFile), astria_binary_sha256: indexing.astria_binary_sha256,
     initial_build_seconds: measurement(indexRoot, indexing.initial_build_seconds), update_seconds: measurement(indexRoot, indexing.update_seconds) };
@@ -85,7 +87,7 @@ if (!execute) {
     const runDir = path.join(output, `${task.id}-${row.condition}`); mkdirSync(runDir);
     row.status = 'running'; save(resultFile, results);
     const request = { schema_version: 1, task_id: task.id, condition: row.condition, project: project.root, commit: task.commit,
-      model: agent.model, settings: agent.settings, prompt: task.prompt, allowed_edit_paths: task.allowed_edit_paths,
+      model: agent.model, settings: agent.settings, timeout_seconds: manifest.timeout_seconds, prompt: task.prompt, allowed_edit_paths: task.allowed_edit_paths,
       graph_access: row.condition === 'astria', result_path: path.join(runDir, 'agent-result.json'), evidence_directory: runDir };
     save(path.join(runDir, 'request.json'), request);
     try {

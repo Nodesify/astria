@@ -1,5 +1,5 @@
 import * as pathMod from 'path';
-import { runPipeline, exportWiki, tokenBenchmark, globalAdd } from '../native';
+import { runPipeline, exportWiki, globalAdd } from '../native';
 import { printLlmSummary } from './llm-summary';
 import { VERSION } from '../version';
 import { indexingOptions } from './indexing-profile';
@@ -31,8 +31,6 @@ export async function runCommand(
       const merged = globalAdd(path, opts.as);
       console.log(`Global graph: repo '${merged.tag}' merged (${merged.nodesAdded} nodes, ${merged.edgesAdded} edges, ${merged.sameTypeEdges} same_type_as, ${merged.crossRepoCallEdges} cross-repo calls)`);
     }
-    const benchmark = tokenBenchmark(path);
-    if (benchmark) console.log(benchmark);
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);
     process.exitCode = 1;

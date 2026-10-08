@@ -1,6 +1,6 @@
 import * as pathMod from 'path';
 import { existsSync } from 'fs';
-import { updatePipeline, exportWiki, tokenBenchmark, graphBuildInfo } from '../native';
+import { updatePipeline, exportWiki, graphBuildInfo, graphFreshness } from '../native';
 import { printLlmSummary } from './llm-summary';
 import { VERSION } from '../version';
 import { indexingOptions } from './indexing-profile';
@@ -15,7 +15,7 @@ export interface UpdateOptions {
   embed?: boolean;
   labelCommunities?: boolean;
   deep?: boolean;
-  /** Suppress progress lines and the token benchmark (used by git hooks). */
+  /** Suppress progress lines (used by git hooks). */
   quiet?: boolean;
   /** Skip when the graph was published less than N minutes ago (used by git hooks). */
   ifStale?: number;
@@ -46,7 +46,7 @@ export async function updateCommand(path: string, opts: UpdateOptions = {}) {
     opts = indexingOptions(path, opts, true);
     if (opts.ifStale && opts.ifStale > 0) {
       const age = pipelineAgeMinutes(path);
-      if (age !== null && age < opts.ifStale) {
+      if (age !== null && age < opts.ifStale && graphFreshness(path).status === 'fresh') {
         if (!opts.quiet) console.log(`Graph is fresh (${age} min old), skipping incremental rebuild`);
         return;
       }
@@ -64,8 +64,6 @@ export async function updateCommand(path: string, opts: UpdateOptions = {}) {
       const articles = exportWiki(path, wikiDir, 25);
       if (!opts.quiet) console.log(`Wiki regenerated: ${articles} articles -> ${pathMod.join(wikiDir, 'index.md')}`);
     }
-    const benchmark = tokenBenchmark(path);
-    if (benchmark && !opts.quiet) console.log(benchmark);
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);
     process.exitCode = 1;

@@ -5,12 +5,14 @@ Build the native module and CLI from the checkout, install `js-tiktoken` at the 
 ```sh
 node scripts/bench/quality/run-quality.mjs --check
 node scripts/bench/quality/run-quality.mjs --astria /absolute/checkout/packages/astria-cli/dist/index.js --budget 4000
-
-The run gates on recall@5 (default floor 50%, override with `--min-recall5`);
-a local run below the floor exits non-zero, same as CI.
 ```
 
-Schema v3 scores exact normalized, case-sensitive corpus-relative file paths. `hit@k` means at least one expected file appears in the first k unique files. `recall@k` is the fraction of all expected files retrieved, averaged across questions. MRR uses the first expected file. Symbol-label matches remain diagnostics. When golden cases include grounded `definitions` (path, one-based declaration line, source anchor), reports add declaration recall@k and MRR separately. Failed cases retain null declaration ranks. Failed, timed-out, nonzero-exit and empty responses remain in every quality denominator as zero. Source paths from NODE records rank before EDGE-only paths.
+The run gates on file and declaration recall@5 (default policy floors 50%), zero
+query/search failures and exact token-budget compliance. `--compare` additionally
+requires comparable corpus/method identity and no recall or MRR regression against
+a measured reference. See [the metric contract and reference workflow](GATE.md).
+
+Schema v4 scores exact normalized, case-sensitive corpus-relative file paths. `hit@k` means at least one expected file appears in the first k unique files. `recall@k` is the fraction of all expected files retrieved, averaged across questions. MRR uses the first expected file. Symbol-label matches remain diagnostics. Grounded `definitions` (path, one-based declaration line, source anchor) add declaration recall@k and MRR separately. Failed cases retain null declaration ranks. Failed, timed-out, nonzero-exit and empty responses remain in every quality denominator as zero. Source paths from NODE records rank before EDGE-only paths. Older schemas require remeasurement; no line-number conversion is guessed from historical artifacts.
 
 Reports include CLI version, checkout commit and dirty state, native and entrypoint SHA-256 hashes for local builds, corpus commit and file count, golden SHA-256, runtime, query budget and depth. Local runs require `dist/astria.node` and reject a package-root `astria.node`, which otherwise takes loader precedence. Missing or unloadable native builds fail instead of using the installed platform package. The source commit identifies the harness checkout; a local built artifact must come from that checkout. CI builds it in the same job. Installed binaries may have different source provenance.
 
