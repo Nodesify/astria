@@ -43,7 +43,7 @@
     "url": "https://github.com/Nodesify/astria/issues"
   },
   "dependencies": {
-    "commander": "^12"
+    "commander": "^15"
   },
   "devDependencies": {
     "tsx": "^4.23.15",
