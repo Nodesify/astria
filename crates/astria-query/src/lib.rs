@@ -735,6 +735,45 @@ mod tests {
     }
 
     #[test]
+    fn camel_case_symbol_queries_match_their_definition() {
+        // An agent pasting a symbol name straight from source ("SensorRecord",
+        // "how does SensorRecord work") must reach that symbol exactly like
+        // the spaced phrasing does. The single camelCase term carries no
+        // spaces, so the graph must compare it via normalized identifier or
+        // its split subtokens — a verbatim substring test returns nothing.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, source_line) VALUES
+                ('rec', 'SensorRecord', 'code', 'src/sensor.py', 3),
+                ('fn', 'normalize_records()', 'code', 'src/sensor.py', 10),
+                ('filler', 'unrelated()', 'code', 'src/other.py', 1);
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('fn', 'rec', 'references', 'EXTRACTED', 'src/sensor.py');",
+        )
+        .unwrap();
+
+        for question in ["SensorRecord", "how does SensorRecord work"] {
+            let (text, node_count, _, _) = query_graph(
+                &db,
+                "camel-case-test",
+                question,
+                "bfs",
+                2,
+                4000,
+                false,
+                0.0,
+                0,
+                false,
+            )
+            .unwrap();
+            assert!(
+                node_count > 0 && text.contains("SensorRecord"),
+                "query {question:?} returned {node_count} nodes; expected the SensorRecord definition"
+            );
+        }
+    }
+
+    #[test]
     fn prefer_files_ranks_file_node_over_equal_symbol() {
         let db = open_db_in_memory().unwrap();
         db.execute_batch(
