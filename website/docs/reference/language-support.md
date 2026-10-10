@@ -13,6 +13,8 @@ Astria registers **42 language configurations**. Discovery and parser selection 
 
 The table lists configured tree-sitter node kinds, not a promise of complete language semantics or successful resolution of every construct. None means no node kind is configured for that category. Classes include language-specific containers such as HCL blocks; parser reuse and shared AST walker rules may limit extraction. Imports and calls are syntax candidates, not guarantees of resolved dependency edges. Closure kinds indicate configured anonymous-function extraction.
 
+AST source lines are one-based. Embedded JavaScript/TypeScript lines in Vue, Svelte, and Astro are translated back to their original component file. Call resolution retains lexical scopes, supported import paths, and language evidence. Unknown instance receivers remain unresolved: a call such as row.get() cannot bind to an unrelated class method named get. Explicit self/this calls use the enclosing class; statically qualified paths and exact assigned JavaScript member declarations can resolve when their evidence selects one declaration. These AST bindings remain name inference, not compiler-proven call targets; use a standard SCIP index for compiler-provided symbol relationships.
+
 | Language | Discovered extensions | Class/container kinds | Function kinds | Import kinds | Call kind | Closure kinds |
 | --- | --- | --- | --- | --- | --- | --- |
 | Python | `.py` | `class_definition` | `function_definition` | `import_statement`, `import_from_statement` | `call` | None |

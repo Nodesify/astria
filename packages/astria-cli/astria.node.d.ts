@@ -47,14 +47,7 @@ export interface DiagnoseReportJs {
 }
 
 export interface RiskReportJs {
-  score: number;
-  level: string;
-  changedFiles: Array<string>;
-  filesWithSymbols: number;
-  impacted: number;
-  byDepth: Array<string>;
-  communities: Array<string>;
-  entries: Array<string>;
+  reportJson: string;
   text: string;
 }
 
@@ -89,6 +82,7 @@ export interface GraphBuildInfoJs {
   extractionHashVersion: string | null;
   buildConfiguration: string | null;
   currentExtractionHashVersion: string;
+  staleExternalIndexes: string[];
 }
 
 export interface SourceCoverageJs {
@@ -141,7 +135,31 @@ export interface QueryResultJs {
   /** Present when the node list was truncated — pass back as `cursor`. */
   nextCursor: number | null;
   graphBuiltAt: string | null;
+  graphGeneration: string | null;
+  freshness: GraphFreshnessJs | null;
+  nodes: QueryNodeJs[];
+  edges: QueryEdgeJs[];
+  renderedTokens: number;
+  elapsedMilliseconds: number;
+  snapshotEstimatedBytes: number;
 }
+
+export interface QueryNodeJs {
+  id: string; label: string; fileType: string; sourceFile: string;
+  sourceLine: number | null; community: number | null;
+  signature: string | null; summary: string | null;
+}
+export interface QueryEdgeJs {
+  source: string; target: string; relation: string; confidence: string;
+  confidenceScore: number | null; sourceFile: string; sourceLine: number | null;
+}
+export interface GraphFreshnessJs {
+  status: string; added: number; modified: number; deleted: number; filesChecked: number;
+  extractionOutdated: boolean; artifactsChecked: boolean; artifactsConsistent: boolean | null;
+  graphGeneration: string | null; graphBuiltAt: string | null; staleExternalIndexes: string[];
+  checkMilliseconds: number; error: string | null;
+}
+export function graphFreshness(root: string): GraphFreshnessJs;
 
 export interface RepoMapJs {
   text: string;
@@ -226,6 +244,11 @@ export interface GlobalListEntryJs {
   tag: string;
   nodes: number;
   edges: number;
+  root: string;
+  sourceCommit?: string;
+  graphGeneration?: string;
+  graphBuiltAt?: string;
+  state: string;
 }
 
 export interface IngestCountsJs {

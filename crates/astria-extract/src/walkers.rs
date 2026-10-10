@@ -180,7 +180,7 @@ pub(crate) struct ExtractionState<'a> {
     /// are stable under line edits — only reordering or inserting a closure
     /// earlier in the same scope shifts later ones.
     pub closure_counts: HashMap<String, usize>,
-    /// JavaScript lexical function/class nesting, independent of class context.
+    /// Lexical function/class nesting, independent of receiver class context.
     pub lexical_scopes: Vec<String>,
 }
 
@@ -259,7 +259,7 @@ fn collect_string_refs(state: &mut ExtractionState<'_>, node: &Node<'_>) {
     if !state.string_refs_seen.insert(literal.to_lowercase()) {
         return;
     }
-    let line = node.start_position().row as u32;
+    let line = node.start_position().row as u32 + 1;
     let ref_id = make_node_id(&["str", literal.to_lowercase().as_str()]);
     state.nodes.push(ExtractedNode {
         id: ref_id.clone(),
@@ -348,7 +348,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                     confidence: "EXTRACTED".to_string(),
                     confidence_score: Some(1.0),
                     source_file: state.file_path.clone(),
-                    source_line: Some(node.start_position().row as u32),
+                    source_line: Some(node.start_position().row as u32 + 1),
                 });
             }
         }
@@ -397,12 +397,11 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                 && kind == "impl_item";
             if let Some(name_node) = name_node {
                 let name = node_text(&name_node, state.source).to_string();
-                let parent_id = if is_javascript(state.cfg) {
-                    state.lexical_scopes.last().unwrap_or(&state.file_id)
-                } else {
-                    &state.file_id
-                }
-                .clone();
+                let parent_id = state
+                    .lexical_scopes
+                    .last()
+                    .unwrap_or(&state.file_id)
+                    .clone();
                 let class_id = make_node_id(&[&parent_id, &name]);
                 let docstring = item_docstring(state, node);
 
@@ -411,7 +410,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                         id: class_id.clone(),
                         label: name.clone(),
                         source_file: state.file_path.clone(),
-                        source_line: Some(node.start_position().row as u32),
+                        source_line: Some(node.start_position().row as u32 + 1),
                         docstring,
                         signature: node_signature(node, state.source, state.cfg),
                         node_type: "class".to_string(),
@@ -424,14 +423,12 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                         confidence: "EXTRACTED".to_string(),
                         confidence_score: Some(1.0),
                         source_file: state.file_path.clone(),
-                        source_line: Some(node.start_position().row as u32),
+                        source_line: Some(node.start_position().row as u32 + 1),
                     });
                 }
 
                 // Walk children inside this class context
-                if is_javascript(state.cfg) {
-                    state.lexical_scopes.push(class_id.clone());
-                }
+                state.lexical_scopes.push(class_id.clone());
                 let prev_class = state.current_class_id.replace(class_id);
                 let prev_label = state.current_class_label.replace(name.clone());
                 let mut cursor = node.walk();
@@ -440,9 +437,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                 }
                 state.current_class_id = prev_class;
                 state.current_class_label = prev_label;
-                if is_javascript(state.cfg) {
-                    state.lexical_scopes.pop();
-                }
+                state.lexical_scopes.pop();
                 return;
             }
         }
@@ -463,7 +458,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
             id: func_id.clone(),
             label: format!("{}()", name),
             source_file: state.file_path.clone(),
-            source_line: Some(node.start_position().row as u32),
+            source_line: Some(node.start_position().row as u32 + 1),
             docstring: extract_docstring(node, state.source, state.cfg),
             signature: node_signature(node, state.source, state.cfg),
             node_type: "function".to_string(),
@@ -476,7 +471,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
             confidence: "EXTRACTED".to_string(),
             confidence_score: Some(1.0),
             source_file: state.file_path.clone(),
-            source_line: Some(node.start_position().row as u32),
+            source_line: Some(node.start_position().row as u32 + 1),
         });
 
         // Pass 2 inline: calls inside attribute to the closure.
@@ -514,7 +509,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                     id: const_id.clone(),
                     label: name.clone(),
                     source_file: state.file_path.clone(),
-                    source_line: Some(node.start_position().row as u32),
+                    source_line: Some(node.start_position().row as u32 + 1),
                     docstring: docstring.clone(),
                     signature: const_signature(node, state.source),
                     node_type: "constant".to_string(),
@@ -527,7 +522,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                     confidence: "EXTRACTED".to_string(),
                     confidence_score: Some(1.0),
                     source_file: state.file_path.clone(),
-                    source_line: Some(node.start_position().row as u32),
+                    source_line: Some(node.start_position().row as u32 + 1),
                 });
 
                 // A const initializer can call functions (`Size::MAX`, const
@@ -588,7 +583,12 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
             if let Some(name_node) = name_node {
                 let name = node_text(&name_node, state.source).to_string();
                 let func_label = format!("{}()", name);
-                let parent_id = state.current_class_id.as_deref().unwrap_or(&state.file_id);
+                let parent_id = state
+                    .lexical_scopes
+                    .last()
+                    .map(String::as_str)
+                    .or(state.current_class_id.as_deref())
+                    .unwrap_or(&state.file_id);
                 let func_id = make_node_id(&[parent_id, &name]);
 
                 let docstring = item_docstring(state, node);
@@ -597,7 +597,7 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                     id: func_id.clone(),
                     label: func_label,
                     source_file: state.file_path.clone(),
-                    source_line: Some(node.start_position().row as u32),
+                    source_line: Some(node.start_position().row as u32 + 1),
                     docstring,
                     signature: node_signature(node, state.source, state.cfg),
                     node_type: if state.cfg.name == "Rust"
@@ -617,13 +617,20 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
                     confidence: "EXTRACTED".to_string(),
                     confidence_score: Some(1.0),
                     source_file: state.file_path.clone(),
-                    source_line: Some(node.start_position().row as u32),
+                    source_line: Some(node.start_position().row as u32 + 1),
                 });
 
                 // Pass 2 inline: walk function body for call expressions
                 if let Some(body) = find_body(node, state.cfg) {
                     walk_calls(state, &func_id, &body);
                 }
+                state.lexical_scopes.push(func_id);
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    walk_structural(state, &child);
+                }
+                state.lexical_scopes.pop();
+                return;
             }
         }
 
@@ -850,9 +857,7 @@ pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, b
     let kind = body.kind();
     // An expression-bodied arrow can return another function directly.
     // That returned function owns its calls, just like a nested declaration.
-    if is_javascript(state.cfg)
-        && (state.cfg.function_types.contains(&kind) || state.cfg.class_types.contains(&kind))
-    {
+    if state.cfg.function_types.contains(&kind) || state.cfg.class_types.contains(&kind) {
         return;
     }
 
@@ -867,7 +872,7 @@ pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, b
             // Skip language builtins: they resolve to bare-name stubs that
             // merge corpus-wide and pollute god-node rankings.
             if !is_language_builtin(&name, state.cfg.name) {
-                let callee_id = make_target_id(&name);
+                let callee_id = call_target(state, caller_id, &name);
                 state.edges.push(ExtractedEdge {
                     source: caller_id.to_string(),
                     target: callee_id,
@@ -875,7 +880,7 @@ pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, b
                     confidence: "INFERRED".to_string(),
                     confidence_score: Some(0.7),
                     source_file: state.file_path.clone(),
-                    source_line: Some(body.start_position().row as u32),
+                    source_line: Some(body.start_position().row as u32 + 1),
                 });
             }
         }
@@ -887,9 +892,8 @@ pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, b
     let mut cursor = body.walk();
     for child in body.children(&mut cursor) {
         if state.cfg.closure_types.contains(&child.kind())
-            || (is_javascript(state.cfg)
-                && (state.cfg.function_types.contains(&child.kind())
-                    || state.cfg.class_types.contains(&child.kind())))
+            || state.cfg.function_types.contains(&child.kind())
+            || state.cfg.class_types.contains(&child.kind())
         {
             continue;
         }
@@ -899,18 +903,55 @@ pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, b
 
 /// Extract the callee name from a call expression.
 fn extract_callee_name(call_node: &Node, source: &[u8]) -> Option<String> {
-    // The first child (field "function") is the callee
+    // Java/Groovy and Ruby split receiver and method into separate fields;
+    // Rust/Python/Go keep their qualified callee in the function field.
+    if let Some(method) = call_node
+        .child_by_field_name("name")
+        .or_else(|| call_node.child_by_field_name("method"))
+    {
+        if let Some(receiver) = call_node
+            .child_by_field_name("object")
+            .or_else(|| call_node.child_by_field_name("receiver"))
+        {
+            return Some(format!(
+                "{}.{}",
+                node_text(&receiver, source),
+                node_text(&method, source)
+            ));
+        }
+        return Some(node_text(&method, source).to_string());
+    }
+    if let Some(function) = call_node.child_by_field_name("function") {
+        return Some(node_text(&function, source).to_string());
+    }
     let mut cursor = call_node.walk();
-    let func_child = call_node.children(&mut cursor).next()?;
+    let func_child = call_node.named_children(&mut cursor).next()?;
 
     let text = node_text(&func_child, source);
-    // For method calls like obj.method(), take the last part
-    let name = if text.contains('.') {
-        text.split('.').next_back().unwrap_or(text)
-    } else {
-        text
-    };
-    Some(name.to_string())
+    // Keep the receiver. A bare method name cannot identify an instance type.
+    Some(text.to_string())
+}
+
+/// Retain unknown instance receivers in a namespace that cannot match a
+/// declaration. Only explicit self/this and static paths provide type evidence.
+fn call_target(state: &ExtractionState<'_>, caller: &str, name: &str) -> String {
+    let qualified = name.replace("->", ".");
+    if let Some((receiver, method)) = qualified.rsplit_once('.') {
+        if matches!(receiver, "self" | "this" | "$this" | "Self") {
+            if let Some(class) = &state.current_class_id {
+                return make_node_id(&[class, method]);
+            }
+        }
+        // JavaScript supports assigned dotted declarations, but an arbitrary
+        // instance must never be interpreted as a module or a bare method.
+        return format!("receiver::{caller}::{}", make_target_id(&qualified));
+    }
+    if let Some(method) = name.strip_prefix("Self::") {
+        if let Some(class) = &state.current_class_id {
+            return make_node_id(&[class, method]);
+        }
+    }
+    make_target_id(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,10 +1057,75 @@ fn find_rationale_tag(line: &str, comment_prefix: &str) -> Option<&'static str> 
 // Single-file extraction
 // ---------------------------------------------------------------------------
 
+/// One-based inclusive declaration ranges for mapping revision hunks onto
+/// extracted symbols. Reject invalid trees so risk analysis can report partial
+/// coverage instead of interpreting a parser recovery as a full analysis.
+pub fn declaration_spans(
+    cfg: &LanguageConfig,
+    source: &[u8],
+) -> Result<Vec<(u32, u32)>, AstriaError> {
+    if !cfg.compiled_in {
+        return Err(AstriaError::Parse {
+            file: "<source>".into(),
+            message: format!("{} grammar is unavailable", cfg.name),
+        });
+    }
+    let mut parser = Parser::new();
+    parser
+        .set_language(&(cfg.language_fn)())
+        .map_err(|e| AstriaError::Parse {
+            file: "<source>".into(),
+            message: e.to_string(),
+        })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| AstriaError::Parse {
+            file: "<source>".into(),
+            message: "parse returned None".into(),
+        })?;
+    if tree.root_node().has_error() {
+        return Err(AstriaError::Parse {
+            file: "<source>".into(),
+            message: "source contains syntax errors".into(),
+        });
+    }
+    let mut spans = Vec::new();
+    let mut pending = vec![tree.root_node()];
+    while let Some(node) = pending.pop() {
+        if cfg.function_types.contains(&node.kind())
+            || cfg.class_types.contains(&node.kind())
+            || cfg.closure_types.contains(&node.kind())
+            || matches!(node.kind(), "const_item" | "static_item")
+        {
+            let end = node.end_position();
+            spans.push((
+                node.start_position().row as u32 + 1,
+                end.row as u32 + u32::from(end.column != 0),
+            ));
+        }
+        let mut cursor = node.walk();
+        pending.extend(node.children(&mut cursor));
+    }
+    spans.sort_unstable();
+    Ok(spans)
+}
+
 pub(crate) fn extract_single(
     path: &Path,
     cfg: &LanguageConfig,
     naming: &Path,
+) -> Result<Extraction, AstriaError> {
+    let source = std::fs::read(path)?;
+    extract_source(path, cfg, naming, &source)
+}
+
+/// Extract code from immutable bytes, preserving the provided source path and
+/// relative naming path. Useful for comparing Git revisions without checkout.
+pub fn extract_source(
+    path: &Path,
+    cfg: &LanguageConfig,
+    naming: &Path,
+    source: &[u8],
 ) -> Result<Extraction, AstriaError> {
     if !cfg.compiled_in {
         warn_once_not_compiled(cfg.name);
@@ -1030,8 +1136,7 @@ pub(crate) fn extract_single(
             edges: Vec::new(),
         });
     }
-    let source = std::fs::read(path)?;
-    let source_ref = source.as_slice();
+    let source_ref = source;
 
     let language = (cfg.language_fn)();
     let mut parser = Parser::new();
@@ -1055,7 +1160,7 @@ pub(crate) fn extract_single(
 
     let mut state = ExtractionState {
         cfg,
-        source: &source,
+        source,
         file_id,
         file_path: path.to_path_buf(),
         nodes: Vec::new(),
@@ -1095,7 +1200,7 @@ pub(crate) fn extract_single(
     }
 
     // Post-pass: extract rationale comments
-    extract_rationale(&mut state, &source);
+    extract_rationale(&mut state, source);
 
     // Drop malformed edges: an unresolved reference can leave an empty
     // endpoint, and an empty target would fail build validation wholesale.

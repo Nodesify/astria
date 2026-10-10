@@ -4,6 +4,16 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.2.0] — 2026-10-09
+
+Behavior-question retrieval ranking, honest quiet indexing, and evaluation-corpus integrity.
+
+- **Behavior questions now rank callable declarations first.** A query like "how does authentication work" previously let result types, constants and prose sharing the same vocabulary displace the implementing function; behavior-oriented queries now prioritize located `()` declarations, and a trailing "work"/"works" is treated as question phrasing rather than a symbol hint. Explicit identifier lookups, documentation intent, and docs-majority corpora keep their existing ranking. On the self-corpus quality gate (budget 4000): file recall@5 64.3% → 74.3%, declaration recall@5 0% → 66.7%, gate passing with 0 failed queries and 0 budget violations.
+- **`astria run` and `astria update` no longer run or print the token-size benchmark.** The synthetic corpus-vs-query ratio moves to the explicit retrieval-quality workflow (`scripts/bench/quality/run-quality.mjs`); indexing output stays limited to pipeline facts. The e2e suite now asserts the quiet behavior.
+- **Generated evaluation prompts and benchmark output can no longer leak into the self corpus.** `scripts/bench/quality/promptfoo/tests.generated.yaml` and `scripts/bench/quality/out/` are excluded from the corpus graph, so golden questions repeated in generated eval files cannot become retrieval candidates.
+- **Linux native artifacts need a GCC-13-era libstdc++ (GLIBCXX_3.4.32, e.g. Ubuntu 24.04+).** The ONNX Runtime prebuilt static C++ references `_M_replace_cold`, so the `linux-x64-gnu` binary fails to `dlopen` on 22.04-class systems. This is unchanged from the already-published 1.1.1 binaries — the new packed-install verification surfaced it, and now verifies against the artifact's real baseline while a static-libstdc++ fix is pursued. The `linux-x64-musl` artifact remains unloadable on Alpine due to the rustc ≥ 1.99 cdylib regression tracked by `musl-probe.yml`; its packed-install check verifies packaging and the JS entry until the toolchain bug is fixed.
+- Docs no longer reference the removed `astria migrate` command. It was removed in [1.0.12] when the compatibility paths were retired, but the npm README and the directory-layout reference kept telling Graphify users to run it — which failed with `unknown command`. Both now state the supported path: there is no migration; delete the old `.graphify/` directory and run `astria run .` for a fresh `.astria/`.
+
 ## [1.1.1] — 2026-10-06
 
 Maintenance release; no user-facing behavior changes.
@@ -535,6 +545,7 @@ See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
 [1.0.6]: https://github.com/Nodesify/astria/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/Nodesify/astria/compare/v1.0.4...v1.0.5
+[1.2.0]: https://github.com/Nodesify/astria/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/Nodesify/astria/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Nodesify/astria/compare/v1.0.12...v1.1.0
 [1.0.12]: https://github.com/Nodesify/astria/compare/v1.0.11...v1.0.12

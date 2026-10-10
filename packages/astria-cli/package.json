@@ -1,6 +1,6 @@
 {
   "name": "@nodesify/astria",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Turn any folder into a queryable knowledge graph",
   "mcpName": "io.github.Nodesify/astria",
   "main": "dist/index.js",
@@ -14,7 +14,8 @@
     "skills/**/*",
     "README.md",
     "LICENSE",
-    "!dist/*.node"
+    "!dist/*.node",
+    "!dist/*.dll"
   ],
   "scripts": {
     "build": "tsc",
@@ -66,10 +67,12 @@
     ]
   },
   "optionalDependencies": {
-    "@nodesify/astria-win32-x64-msvc": "1.1.1",
-    "@nodesify/astria-darwin-x64": "1.1.1",
-    "@nodesify/astria-linux-x64-gnu": "1.1.1",
-    "@nodesify/astria-darwin-arm64": "1.1.1",
-    "@nodesify/astria-linux-arm64-gnu": "1.1.1"
+    "@nodesify/astria-win32-x64-msvc": "1.2.0",
+    "@nodesify/astria-darwin-x64": "1.2.0",
+    "@nodesify/astria-linux-x64-gnu": "1.2.0",
+    "@nodesify/astria-darwin-arm64": "1.2.0",
+    "@nodesify/astria-linux-arm64-gnu": "1.2.0",
+    "@nodesify/astria-linux-x64-musl": "1.2.0",
+    "@nodesify/astria-win32-arm64-msvc": "1.2.0"
   }
 }

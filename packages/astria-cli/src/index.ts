@@ -33,6 +33,7 @@ import { diffCommand } from './commands/diff';
 import { historyCommand } from './commands/history';
 import { statusCommand } from './commands/status';
 import { registerInstallCommand } from './commands/install';
+import { doctorCommand } from './commands/doctor';
 import { registerHookCommand } from './commands/hook';
 import { mergeDriverInstall, mergeDriverRun, mergeDriverUninstall } from './commands/merge-driver';
 import { digestCommand } from './commands/digest';
@@ -63,19 +64,26 @@ program
 
 program
   .command('update')
-  .description('Run incremental AST-only rebuild')
+  .description('Refresh the graph using its saved indexing policy')
   .argument('<path>', 'Directory to update')
   .option('--no-dedup', 'Skip near-duplicate node merging')
+  .option('--dedup', 'Enable near-duplicate merging in the saved policy')
   .option('--backend <name>', 'Semantic LLM backend: claude, openai (any OpenAI-compatible), azure (Azure OpenAI), bedrock (AWS SigV4), kimi (Moonshot), or gemini')
   .option('--judge <name>', 'Decision layer over the backend: jev (TypeSafe System One — gates trivial files, re-judges relations/node types, adds calibrated edge confidence)')
   .option('--model <name>', 'Semantic LLM model name (backend-specific)')
   .option('--embed', 'Compute local embeddings: similar_to edges + semantic query recall (one-time ~615 MB local model download, then offline)')
+  .option('--no-embed', 'Disable local embeddings and remove their vectors and similarity edges')
   .option('--label-communities', 'Name communities thematically with one LLM call per changed community (requires a semantic backend)')
+  .option('--no-label-communities', 'Disable community naming in the saved policy')
   .option('--deep', 'Second extraction tier: LLM-linked cross-file concept edges, cached per file (requires a semantic backend)')
-  .option('--quiet', 'Suppress progress lines and the token benchmark')
+  .option('--no-deep', 'Disable concept linking in the saved policy')
+  .option('--quiet', 'Suppress progress lines')
   .option('--if-stale <minutes>', 'Skip when the graph was updated less than N minutes ago')
-  .action((path, opts) =>
-    updateCommand(path, { ...opts, ifStale: opts.ifStale ? Number(opts.ifStale) : undefined }),
+  .option('--refresh-policy', 'Explicitly replace the saved indexing policy with the supplied options')
+  .option('--llm-budget <n>', 'Maximum LLM tokens for an explicitly selected paid indexing policy')
+  .action((path, opts, command) =>
+    updateCommand(path, { ...opts, dedup: command.getOptionValueSource('dedup') === 'cli' ? opts.dedup : undefined,
+      ifStale: opts.ifStale ? Number(opts.ifStale) : undefined }),
   );
 
 program
@@ -83,6 +91,7 @@ program
   .description('Watch for file changes and auto-rebuild')
   .argument('<path>', 'Directory to watch')
   .option('--debounce <ms>', 'Debounce interval in milliseconds', '3000')
+  .option('--max-wait <ms>', 'Maximum delay before indexing continuous edits', '15000')
   .action(watchCommand);
 
 program
@@ -181,6 +190,8 @@ program
   .description('Blast radius of the current git diff: impacted symbols and communities, with a heuristic risk score for PRs')
   .option('--graph <path>', 'Path to project root', '.')
   .option('--staged', 'Only staged changes (git diff --cached) instead of the whole working tree')
+  .option('--base <ref>', 'Review changes from the merge base with this Git reference')
+  .option('--head <ref>', 'Review this Git revision instead of the working tree')
   .option('--json', 'Emit machine-readable JSON')
   .action(riskCommand);
 
@@ -273,7 +284,7 @@ program
   .description('Map open pull requests onto the knowledge graph: CI state, review status, worktree mapping, ranked review queue, merge-order risk')
   .argument('[count]', 'Number of PRs to analyze', '20')
   .option('--graph <path>', 'Path to project root', '.')
-  .option('--conflicts', 'Flag PRs sharing communities (merge-order risk)')
+  .option('--conflicts', 'Flag shared changed/affected symbols for review coordination')
   .option('--triage', 'Compact per-PR triage lines instead of the full dashboard')
   .option('--queue', 'Print only the ranked review queue')
   .option('--json', 'Emit machine-readable JSON (ranked queue with all signals)')
@@ -300,6 +311,12 @@ program
 
 
 registerInstallCommand(program);
+program.command('doctor')
+  .description('Check installation, native runtime, integrations, permissions and graph compatibility without changing setup')
+  .option('--graph <path>', 'Project root', '.')
+  .option('--scope <scope>', 'project or user', 'project')
+  .option('--json', 'Machine-readable report; exit 1 on errors')
+  .action(doctorCommand);
 registerHookCommand(program);
 
 const mergeDriverCmd = program

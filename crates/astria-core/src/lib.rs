@@ -7,6 +7,7 @@ pub mod ids;
 pub mod languages;
 pub mod security;
 pub mod types;
+pub mod writer_lock;
 
 /// Version tag mixed into every content hash (detect manifest + extraction
 /// cache). Bump when extraction output changes shape (e.g. the id scheme) —
@@ -31,7 +32,7 @@ pub mod types;
 /// previously cached extractions carry the old folded ids and must be
 /// re-extracted.
 /// v15: qualified call boundaries and exact import module paths retained.
-pub const EXTRACTION_HASH_VERSION: &str = "v15";
+pub const EXTRACTION_HASH_VERSION: &str = "v16";
 
 /// Reads `ASTRIA_<name>`. Empty values count as unset. There is no legacy
 /// spelling fallback: pre-1.0 configurations rebuild with current names.

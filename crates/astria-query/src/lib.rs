@@ -11,8 +11,10 @@ const SUGGESTION_COUNT: usize = 3;
 // Domain modules split out of lib.rs: each owns one cohesive stage of the
 // query pipeline. The public API surface below is unchanged.
 mod render;
+mod result;
 mod scoring;
 mod store;
+pub use result::{QueryEdge, QueryNode, QueryResponse};
 
 #[allow(unused_imports)]
 pub use render::count_response_tokens;
@@ -105,7 +107,7 @@ pub fn query_graph(
         cursor,
         prefer_files,
     )
-    .map(|(result, _)| result)
+    .map(QueryResponse::into_output)
 }
 
 /// Query output and build timestamp read from the same SQLite generation.
@@ -121,7 +123,9 @@ pub fn query_graph_with_metadata(
     min_strength: f64,
     cursor: usize,
     prefer_files: bool,
-) -> astria_core::Result<(QueryOutput, Option<String>)> {
+) -> astria_core::Result<QueryResponse> {
+    validate_query(question, mode, depth, budget)?;
+    let started = std::time::Instant::now();
     let transaction = read_snapshot(db)?;
     let loaded = load_graph(db, db_path)?;
     let graph_built_at = db
@@ -131,6 +135,28 @@ pub fn query_graph_with_metadata(
             |row| row.get::<_, String>(0),
         )
         .ok();
+    let generation = db
+        .query_row(
+            "SELECT value FROM _meta WHERE key = 'graph_generation'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .ok();
+    // Only project databases have one local source manifest. Global/merged
+    // graphs do not describe the directory two levels above their database.
+    let local_database = std::path::Path::new(db_path)
+        .file_name()
+        .is_some_and(|n| n == "db.sqlite")
+        && std::path::Path::new(db_path)
+            .parent()
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n == ".astria");
+    let freshness = loaded
+        .root
+        .as_deref()
+        .filter(|_| local_database)
+        .map(|root| astria_detect::freshness::inspect(db, std::path::Path::new(root), false));
+    let snapshot_estimated_bytes = loaded.estimated_bytes();
     // Only use an already cached model: queries never initiate a download.
     #[cfg(feature = "embed")]
     let semantic = if !semantic_seeds_disabled()
@@ -171,8 +197,36 @@ pub fn query_graph_with_metadata(
         &semantic,
         prefer_files,
         graph_built_at.as_deref(),
+        freshness.as_ref(),
     )
-    .map(|result| (result, graph_built_at))
+    .map(|mut result| {
+        result.graph_built_at = graph_built_at;
+        result.graph_generation = generation;
+        result.freshness = freshness;
+        result.rendered_tokens = count_response_tokens(&result.text);
+        result.elapsed_milliseconds = started.elapsed().as_millis() as u64;
+        result.snapshot_estimated_bytes = snapshot_estimated_bytes;
+        result
+    })
+}
+
+pub fn validate_query(
+    question: &str,
+    mode: &str,
+    depth: usize,
+    budget: i64,
+) -> astria_core::Result<()> {
+    if question.trim().is_empty() || question.len() > 16_384 {
+        return Err(astria_core::AstriaError::Graph(
+            "question must contain 1..16384 bytes of non-empty text".into(),
+        ));
+    }
+    if !matches!(mode, "bfs" | "dfs") || depth > 32 || !(1..=100_000).contains(&budget) {
+        return Err(astria_core::AstriaError::Graph(
+            "mode must be bfs/dfs, depth 0..32, and budget 1..100000".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Rescale a raw query→node cosine into the seed-score scale via the
@@ -235,6 +289,7 @@ pub fn query_graph_with_semantic(
     semantic: &[(String, f64)],
     prefer_files: bool,
 ) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
+    validate_query(question, mode, depth, budget)?;
     let loaded = load_graph_snapshot(db, db_path)?;
     query_graph_loaded(
         db,
@@ -249,7 +304,9 @@ pub fn query_graph_with_semantic(
         semantic,
         prefer_files,
         None,
+        None,
     )
+    .map(QueryResponse::into_output)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -266,10 +323,14 @@ fn query_graph_loaded(
     semantic: &[(String, f64)],
     prefer_files: bool,
     graph_built_at: Option<&str>,
-) -> astria_core::Result<(String, usize, usize, Option<usize>)> {
+    freshness: Option<&astria_detect::freshness::GraphFreshness>,
+) -> astria_core::Result<QueryResponse> {
     if loaded.graph.node_count() == 0 {
         let (text, _) = render_page("", &["No nodes in graph.\n".into()], 0, budget)?;
-        return Ok((text, 0, 0, None));
+        return Ok(QueryResponse {
+            text,
+            ..Default::default()
+        });
     }
 
     let terms: Vec<String> = question.split_whitespace().map(|s| s.to_string()).collect();
@@ -336,7 +397,10 @@ fn query_graph_loaded(
             )
         };
         let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
-        return Ok((text, 0, 0, None));
+        return Ok(QueryResponse {
+            text,
+            ..Default::default()
+        });
     }
 
     // Seed-confidence floor: when no node in the graph matches any of the
@@ -386,7 +450,10 @@ fn query_graph_loaded(
             msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
         }
         let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
-        return Ok((text, 0, 0, None));
+        return Ok(QueryResponse {
+            text,
+            ..Default::default()
+        });
     }
 
     // Seed quota: at most 2 of 5 seeds may be documentation-type nodes.
@@ -402,7 +469,9 @@ fn query_graph_loaded(
         }
         if let Some(&(_, idx)) = scored.iter().find(|(_, idx)| {
             let node = &loaded.graph[*idx];
-            if node.file_type == "stub" {
+            if node.source_file.is_empty()
+                || matches!(node.file_type.as_str(), "stub" | "reference")
+            {
                 return false;
             }
             definition_identifier_match(term, &node.id, &node.label, &node.source_file)
@@ -434,6 +503,11 @@ fn query_graph_loaded(
         if seed_nodes.contains(&idx) {
             continue;
         }
+        if loaded.graph[idx].source_file.is_empty()
+            || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference")
+        {
+            continue;
+        }
         if is_doc_type(&loaded.graph[idx].file_type)
             || is_semantic_type(&loaded.graph[idx].file_type)
         {
@@ -457,7 +531,10 @@ fn query_graph_loaded(
             .iter()
             .filter_map(|(node_id, cosine)| {
                 let &idx = loaded.id_to_idx.get(node_id)?;
-                if seed_nodes.contains(&idx) || loaded.graph[idx].file_type == "stub" {
+                if seed_nodes.contains(&idx)
+                    || loaded.graph[idx].source_file.is_empty()
+                    || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference")
+                {
                     return None;
                 }
                 if token_scores.get(&idx).copied().unwrap_or(0.0) > 0.0 {
@@ -523,7 +600,7 @@ fn query_graph_loaded(
 
     let seed_labels: Vec<String> = seed_nodes
         .iter()
-        .map(|&idx| loaded.graph[idx].label.clone())
+        .map(|&idx| display_label(&loaded.graph[idx]))
         .collect();
 
     let mut header = format!(
@@ -539,30 +616,13 @@ fn query_graph_loaded(
         // Source-freshness disclosure (distinct from the graph AGE above):
         // the manifest is the graph's source snapshot, and editors without
         // hooks let the working tree drift from it — an agent that does not
-        // notice answers from the past. Stat-only (no re-hashing), so this
-        // costs milliseconds even on large repos; deletions and
-        // timestamp-preserving edits are included, added files are the
-        // merge gate's job.
-        if let Ok(built) = timestamp.parse::<u64>() {
-            if let Some(drift) = source_drift_since(db, built, loaded.root.as_deref()) {
-                if drift.total() > 0 {
-                    let mut parts = Vec::new();
-                    if drift.modified > 0 {
-                        parts.push(format!("{} modified", drift.modified));
-                    }
-                    if drift.deleted > 0 {
-                        parts.push(format!("{} deleted", drift.deleted));
-                    }
-                    if drift.size_changed > 0 {
-                        parts.push(format!(
-                            "{} size-changed (timestamp preserved)",
-                            drift.size_changed
-                        ));
-                    }
-                    header.push_str(&format!(
-                        "# source drift since this build: {} — run `astria update` before trusting answers\n",
-                        parts.join(", ")
-                    ));
+        // notice answers from the past. Indexing discovery and content hashes
+        // detect added files, deletions, and timestamp-preserving edits.
+        if let Some(freshness) = freshness {
+            if freshness.status != "fresh" {
+                header.push_str(&format!("# source freshness: {} ({} added, {} modified, {} deleted; extraction outdated={}) — run `astria update .`\n", freshness.status, freshness.added, freshness.modified, freshness.deleted, freshness.extraction_outdated));
+                if let Some(error) = &freshness.error {
+                    header.push_str(&format!("# freshness unavailable: {error}\n"));
                 }
             }
         }
@@ -587,7 +647,7 @@ fn query_graph_loaded(
         ));
     }
     let relevance: HashMap<NodeIndex, f64> = scored.iter().map(|(s, i)| (*i, *s)).collect();
-    let (result_text, next_cursor) = subgraph_to_text(
+    let mut response = subgraph_to_text(
         &loaded,
         &visited,
         &edges_seen,
@@ -600,680 +660,26 @@ fn query_graph_loaded(
         &header,
     )?;
 
-    log_query(db, question, &result_text);
+    log_query(db, question, &response.text);
     record_query_pairs(db, &loaded, &seed_nodes, &visited, question);
 
-    Ok((result_text, visited.len(), edges_seen.len(), next_cursor))
+    response.node_count = visited.len();
+    response.edge_count = edges_seen.len();
+    Ok(response)
 }
 
-/// Feedback loop bookkeeping: for one answered query, record which
-/// (seed, discovered) node pairs the traversal connected. Pairs recurring
-/// across DISTINCT questions later promote into `learned` edges — the
-/// graph remembers which connections users actually keep asking about.
-fn record_query_pairs(
-    db: &Connection,
-    loaded: &LoadedGraph,
-    seeds: &[NodeIndex],
-    visited: &HashSet<NodeIndex>,
-    question: &str,
-) {
-    let question: String = question
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(200)
-        .collect();
-    if question.is_empty() {
-        return;
-    }
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .to_string();
+mod callflow;
+mod explain;
+mod learned;
+mod paths;
+mod repo_map;
 
-    // Top seeds by rank; discoveries ranked by degree — the load-bearing
-    // nodes the question actually reached.
-    let top_seeds: Vec<&NodeIndex> = seeds.iter().take(3).collect();
-    let mut discoveries: Vec<(usize, &NodeIndex)> = visited
-        .iter()
-        .filter(|idx| !seeds.contains(idx))
-        .map(|idx| (loaded.graph.neighbors(*idx).count(), idx))
-        .collect();
-    discoveries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
-    let top_discoveries: Vec<&NodeIndex> =
-        discoveries.iter().map(|(_, idx)| *idx).take(5).collect();
-
-    for seed in &top_seeds {
-        for discovery in &top_discoveries {
-            let (source, target) = if loaded.graph[**seed].id <= loaded.graph[**discovery].id {
-                (&loaded.graph[**seed].id, &loaded.graph[**discovery].id)
-            } else {
-                (&loaded.graph[**discovery].id, &loaded.graph[**seed].id)
-            };
-            let _ = db.execute(
-                "INSERT INTO query_pairs (source, target, question, hits, first_seen, last_seen)
-                 VALUES (?1, ?2, ?3, 1, ?4, ?4)
-                 ON CONFLICT (source, target, question)
-                 DO UPDATE SET hits = hits + 1, last_seen = ?4",
-                rusqlite::params![source, target, question, ts],
-            );
-        }
-    }
-}
-
-/// Promote recurring query pairs into `learned` edges: a pair qualifies
-/// when it was connected by at least `min_questions` DISTINCT questions
-/// with at least `min_hits` total repetitions. Existing learned edges are
-/// regenerated (idempotent). Learned edges carry confidence INFERRED with
-/// a hits-based score, so `--detail high` traversals can filter them.
-/// Returns the number of learned edges materialized.
-pub fn promote_learned_edges(
-    db: &Connection,
-    min_questions: usize,
-    min_hits: usize,
-) -> astria_core::Result<usize> {
-    // Drop pairs whose endpoints were deleted by later builds — nodes come
-    // and go with files, and a stale reference would violate the edges FK.
-    db.execute(
-        "DELETE FROM query_pairs WHERE source NOT IN (SELECT id FROM nodes)
-         OR target NOT IN (SELECT id FROM nodes)",
-        [],
-    )?;
-
-    let pairs: Vec<(String, String, i64)> = {
-        let mut stmt = db.prepare(
-            "SELECT source, target, SUM(hits) FROM query_pairs
-             GROUP BY source, target
-             HAVING COUNT(DISTINCT question) >= ?1 AND SUM(hits) >= ?2",
-        )?;
-        let rows = stmt.query_map(
-            rusqlite::params![min_questions as i64, min_hits as i64],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            },
-        )?;
-        rows.flatten().collect()
-    };
-
-    // Promotion is the only writer of `learned` edges and regenerates them
-    // from query_pairs, so drop every learned edge regardless of the
-    // source_file stamp — a stale row from an older convention would
-    // otherwise survive next to its regenerated twin.
-    db.execute("DELETE FROM edges WHERE relation = 'learned'", [])?;
-
-    let tx = db.unchecked_transaction()?;
-    {
-        let mut stmt = tx.prepare(
-            "INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file)
-             VALUES (?1, ?2, 'learned', 'INFERRED', ?3, 'query_history')",
-        )?;
-        for (source, target, hits) in &pairs {
-            // 3 hits -> 0.5, 10+ hits -> 1.0: recency-weighted importance
-            // without letting a single hot pair dominate high-fidelity views.
-            let score = ((*hits as f64 - 1.0) / 9.0).clamp(0.1, 1.0);
-            stmt.execute(rusqlite::params![source, target, score])?;
-        }
-    }
-    tx.commit()?;
-    Ok(pairs.len())
-}
-
-pub fn find_shortest_path(
-    db: &Connection,
-    db_path: &str,
-    source_query: &str,
-    target_query: &str,
-    directed: bool,
-    min_strength: f64,
-) -> astria_core::Result<(bool, usize, String)> {
-    let transaction = read_snapshot(db)?;
-    let loaded = load_graph(db, db_path)?;
-    if loaded.graph.node_count() == 0 {
-        return Ok((false, 0, "No nodes in graph.".to_string()));
-    }
-
-    // Exact ids win over fuzzy scoring, and a stub never shadows a
-    // same-named definition (same rule as affected/explain seeds). Scoring
-    // stays as the fallback for natural-language endpoints.
-    let resolve_endpoint = |query: &str| -> Option<NodeIndex> {
-        if let Some(&idx) = loaded.id_to_idx.get(query) {
-            let is_stub: bool = db
-                .query_row(
-                    "SELECT file_type = 'stub' FROM nodes WHERE id = ?1",
-                    rusqlite::params![query],
-                    |r| r.get(0),
-                )
-                .unwrap_or(false);
-            if !is_stub {
-                return Some(idx);
-            }
-            let bare = query
-                .trim_start_matches('.')
-                .trim_end_matches("()")
-                .to_lowercase();
-            if let Some(id) = astria_core::db::prefer_non_stub_id(db, &bare) {
-                if let Some(&better) = loaded.id_to_idx.get(id.as_str()) {
-                    return Some(better);
-                }
-            }
-            return Some(idx);
-        }
-        None
-    };
-
-    let src_idx = match resolve_endpoint(source_query) {
-        Some(idx) => idx,
-        None => {
-            let src_terms: Vec<String> = source_query
-                .split_whitespace()
-                .map(|s| s.to_string())
-                .collect();
-            let src_scored = score_nodes(&loaded, &src_terms);
-            match src_scored.ranked.first() {
-                Some((_, idx)) => *idx,
-                None => {
-                    let mut msg = format!("No matching node for '{}'.", source_query);
-                    let suggestions = nearest_labels(&loaded, source_query, SUGGESTION_COUNT);
-                    if !suggestions.is_empty() {
-                        msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
-                    }
-                    return Ok((false, 0, msg));
-                }
-            }
-        }
-    };
-    let tgt_idx = match resolve_endpoint(target_query) {
-        Some(idx) => idx,
-        None => {
-            let tgt_terms: Vec<String> = target_query
-                .split_whitespace()
-                .map(|s| s.to_string())
-                .collect();
-            let tgt_scored = score_nodes(&loaded, &tgt_terms);
-            match tgt_scored.ranked.first() {
-                Some((_, idx)) => *idx,
-                None => {
-                    let mut msg = format!("No matching node for '{}'.", target_query);
-                    let suggestions = nearest_labels(&loaded, target_query, SUGGESTION_COUNT);
-                    if !suggestions.is_empty() {
-                        msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
-                    }
-                    return Ok((false, 0, msg));
-                }
-            }
-        }
-    };
-
-    let semantic_floor = std::env::var("ASTRIA_QUERY_MIN_SEMANTIC_CONFIDENCE")
-        .ok()
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .unwrap_or(0.0)
-        .clamp(0.0, 1.0);
-    let path = match shortest_path_bfs(
-        &loaded,
-        src_idx,
-        tgt_idx,
-        directed,
-        min_strength,
-        semantic_floor,
-    ) {
-        Some(p) => p,
-        None => return Ok((false, 0, "No path found.".to_string())),
-    };
-
-    let hops = path.len();
-    let mut text = format!("Shortest path ({} hops):\n", hops);
-
-    for edge_id in path {
-        let (source, target) = loaded
-            .graph
-            .edge_endpoints(edge_id)
-            .expect("traversed edge exists");
-        let edge = &loaded.graph[edge_id];
-        text.push_str(&format!(
-            "  {} --{} [{}]--> {}\n",
-            loaded.graph[source].label, edge.relation, edge.confidence, loaded.graph[target].label
-        ));
-    }
-
-    if let Some(transaction) = transaction {
-        transaction.commit()?;
-    }
-    let answer = format!("path found: {} hops", hops);
-    log_query(
-        db,
-        &format!("{} -> {}", source_query, target_query),
-        &answer,
-    );
-
-    Ok((true, hops, text))
-}
-
-/// Aider-style repo map: files ranked by PageRank over the file-level
-/// reference graph, each with its most-connected symbols. One budgeted
-/// blob that orients an agent over the whole repo — the "orient for a
-/// fixed token cost" artifact that replaces scattered file reading.
-pub fn repo_map(
-    db: &Connection,
-    db_path: &str,
-    budget: i64,
-    min_strength: f64,
-) -> astria_core::Result<(String, usize)> {
-    let loaded = load_graph_snapshot(db, db_path)?;
-    if loaded.graph.node_count() == 0 {
-        return Ok(("No nodes in graph.".to_string(), 0));
-    }
-
-    // Display-form file of each node (indexed by NodeIndex::index()).
-    let file_of: Vec<String> = loaded
-        .graph
-        .node_indices()
-        .map(|idx| loaded.display_path(&loaded.graph[idx].source_file))
-        .collect();
-    let mut files: Vec<String> = file_of.clone();
-    files.sort();
-    files.dedup();
-    let n = files.len();
-    let file_rank: HashMap<&str, usize> = files
-        .iter()
-        .enumerate()
-        .map(|(i, f)| (f.as_str(), i))
-        .collect();
-
-    // File-level adjacency: undirected weight = cross-file edge count.
-    let mut adj: Vec<HashMap<usize, f64>> = vec![HashMap::new(); n];
-    let mut out_sum: Vec<f64> = vec![0.0; n];
-    for e in loaded.graph.edge_references() {
-        if !e.weight().meets_detail(min_strength) {
-            continue;
-        }
-        let sf = &file_of[e.source().index()];
-        let tf = &file_of[e.target().index()];
-        let (a, b) = (file_rank[sf.as_str()], file_rank[tf.as_str()]);
-        if a != b {
-            *adj[a].entry(b).or_insert(0.0) += 1.0;
-            *adj[b].entry(a).or_insert(0.0) += 1.0;
-            out_sum[a] += 1.0;
-            out_sum[b] += 1.0;
-        }
-    }
-
-    // PageRank with dangling-mass redistribution.
-    let damping = 0.85_f64;
-    let mut rank: Vec<f64> = vec![1.0 / n as f64; n];
-    for _ in 0..30 {
-        let dangling: f64 = (0..n).filter(|&i| out_sum[i] <= 0.0).map(|i| rank[i]).sum();
-        let mut next = vec![(1.0 - damping) / n as f64 + damping * dangling / n as f64; n];
-        for i in 0..n {
-            if out_sum[i] <= 0.0 {
-                continue;
-            }
-            let share = damping * rank[i] / out_sum[i];
-            for (&j, &w) in &adj[i] {
-                next[j] += share * w;
-            }
-        }
-        rank = next;
-    }
-
-    // Top symbols per file by degree (deterministic ties by label).
-    let mut file_symbols: Vec<Vec<(NodeIndex, usize)>> = vec![Vec::new(); n];
-    for idx in loaded.graph.node_indices() {
-        let fi = file_rank[file_of[idx.index()].as_str()];
-        file_symbols[fi].push((idx, loaded.graph.neighbors(idx).count()));
-    }
-    for syms in &mut file_symbols {
-        syms.sort_by(|a, b| {
-            b.1.cmp(&a.1)
-                .then_with(|| loaded.graph[a.0].label.cmp(&loaded.graph[b.0].label))
-        });
-        syms.truncate(3);
-    }
-
-    // Emit within budget.
-    let char_budget = (budget.max(1) as usize) * 3;
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|a, b| {
-        rank[*b]
-            .partial_cmp(&rank[*a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| files[*a].cmp(&files[*b]))
-    });
-
-    let mut out = format!("Repo map ({} files, PageRank-ranked):\n", n);
-    let mut shown = 0usize;
-    for &fi in &order {
-        let mut block = format!("\n{} (rank {:.4})\n", files[fi], rank[fi]);
-        for (idx, deg) in &file_symbols[fi] {
-            let node = &loaded.graph[*idx];
-            block.push_str(&format!(
-                "  - {} [id={}] (degree {})\n",
-                node.label, node.id, deg
-            ));
-        }
-        if out.len() + block.len() > char_budget && shown > 0 {
-            out.push_str(&format!(
-                "\n... (map truncated: {} of {} files; raise --budget for more)\n",
-                shown, n
-            ));
-            break;
-        }
-        out.push_str(&block);
-        shown += 1;
-    }
-
-    Ok((out, shown))
-}
-
-pub fn explain_with_neighbors(
-    db: &Connection,
-    db_path: &str,
-    node_id: &str,
-) -> astria_core::Result<Option<ExplainResult>> {
-    let transaction = read_snapshot(db)?;
-    let loaded = load_graph(db, db_path)?;
-
-    // A stub must not shadow a same-named real definition: explaining by a
-    // bare name would otherwise land on a speculative node (no edges, no
-    // provenance) instead of the symbol.
-    let resolved_id = {
-        let bare = node_id
-            .trim_start_matches('.')
-            .trim_end_matches("()")
-            .to_lowercase();
-        let exact_is_stub: bool = db
-            .query_row(
-                "SELECT file_type = 'stub' FROM nodes WHERE id = ?1",
-                rusqlite::params![node_id],
-                |r| r.get(0),
-            )
-            .unwrap_or(false);
-        if exact_is_stub {
-            astria_core::db::prefer_non_stub_id(db, &bare).unwrap_or_else(|| node_id.to_string())
-        } else {
-            node_id.to_string()
-        }
-    };
-
-    let idx = match loaded.id_to_idx.get(resolved_id.as_str()) {
-        Some(&idx) => idx,
-        None => {
-            let terms: Vec<String> = resolved_id
-                .split_whitespace()
-                .map(|s| s.to_string())
-                .collect();
-            let scored = score_nodes(&loaded, &terms);
-            match scored.ranked.first() {
-                Some((_, idx)) => *idx,
-                None => return Ok(None),
-            }
-        }
-    };
-
-    let node = &loaded.graph[idx];
-    // Explain is a lookup, not a traversal: neighbors in both directions.
-    let mut seen: HashSet<NodeIndex> = HashSet::new();
-    let mut neighbors: Vec<EdgeInfoResult> = Vec::new();
-    for neighbor in iter_neighbors(&loaded.graph, idx, false) {
-        if !seen.insert(neighbor) {
-            continue;
-        }
-        let neighbor_data = &loaded.graph[neighbor];
-        // The stored orientation says which way the edge points: outgoing
-        // (this node → neighbor, e.g. it calls the neighbor) or incoming
-        // (neighbor → this node, e.g. the neighbor calls it). Rendering
-        // every connection as if the explained node were the source
-        // inverts caller/callee and misleads agents reading it.
-        let forward = loaded
-            .graph
-            .edges_directed(idx, Direction::Outgoing)
-            .find(|e| e.target() == neighbor)
-            .map(|e| e.weight());
-        let outgoing = forward.is_some();
-        let edge = forward.or_else(|| edge_between(&loaded.graph, idx, neighbor));
-        neighbors.push(EdgeInfoResult {
-            neighbor_id: neighbor_data.id.clone(),
-            neighbor_label: neighbor_data.label.clone(),
-            neighbor_file: loaded.display_path(&neighbor_data.source_file),
-            neighbor_line: neighbor_data.source_line,
-            outgoing,
-            relation: edge.map_or("?".to_string(), |e| e.relation.clone()),
-            confidence: edge.map_or("?".to_string(), |e| e.confidence.clone()),
-            strength: edge.map_or(0.0, |e| e.strength()),
-            confidence_score: edge.and_then(|e| e.confidence_score),
-        });
-    }
-
-    // Strongest connections first; ties broken deterministically.
-    neighbors.sort_by(|a, b| {
-        b.strength
-            .partial_cmp(&a.strength)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.relation.cmp(&b.relation))
-            .then_with(|| a.neighbor_id.cmp(&b.neighbor_id))
-    });
-    let neighbor_count = neighbors.len();
-    neighbors.truncate(20);
-
-    let answer = format!("explain: {} ({} neighbors)", node.label, neighbor_count);
-
-    // Hyperedge membership: which N-ary groups this node belongs to.
-    let hyperedges: Vec<String> = {
-        let mut stmt = db.prepare(
-            "SELECT label FROM hyperedges WHERE EXISTS (
-               SELECT 1 FROM json_each(hyperedges.nodes) WHERE json_each.value = ?1
-             ) LIMIT 5",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![node.id], |r| r.get::<_, String>(0))?;
-        rows.filter_map(|r| r.ok()).collect()
-    };
-
-    if let Some(transaction) = transaction {
-        transaction.commit()?;
-    }
-    log_query(db, node_id, &answer);
-
-    Ok(Some(ExplainResult {
-        id: node.id.clone(),
-        label: node.label.clone(),
-        source_file: loaded.display_path(&node.source_file),
-        source_line: node.source_line,
-        community: node.community,
-        neighbor_count,
-        neighbors,
-        hyperedges,
-    }))
-}
-
-pub struct EdgeInfoResult {
-    pub neighbor_id: String,
-    pub neighbor_label: String,
-    pub neighbor_file: String,
-    pub neighbor_line: Option<i64>,
-    /// True when the stored edge points from the explained node to this
-    /// neighbor (it calls/imports the neighbor); false when the neighbor
-    /// points back (the neighbor calls/imports the explained node).
-    pub outgoing: bool,
-    pub relation: String,
-    pub confidence: String,
-    pub strength: f64,
-    /// The stored numeric score when one exists (Jev keep-probability on
-    /// verified semantic edges); None means the label rank is all there is.
-    pub confidence_score: Option<f64>,
-}
-
-pub struct ExplainResult {
-    pub id: String,
-    pub label: String,
-    pub source_file: String,
-    pub source_line: Option<i64>,
-    pub community: Option<i64>,
-    pub neighbor_count: usize,
-    pub neighbors: Vec<EdgeInfoResult>,
-    /// Labels of hyperedges whose member list contains this node.
-    pub hyperedges: Vec<String>,
-}
-
-/// Mermaid call-flow diagram: breadth-first over `calls` edges from one
-/// seed node. Direction "out" renders what the node calls, "in" renders
-/// what calls it, "both" renders the union. Output is a `flowchart LR`
-/// block - GitHub, Obsidian, and mermaid.js render it natively.
-pub fn callflow_mermaid(
-    db: &Connection,
-    db_path: &str,
-    seed_query: &str,
-    depth: usize,
-    direction: &str,
-) -> astria_core::Result<String> {
-    let _transaction = read_snapshot(db)?;
-    let loaded = load_graph(db, db_path)?;
-    if loaded.graph.node_count() == 0 {
-        return Ok("No nodes in graph.".to_string());
-    }
-
-    // Seed resolution mirrors affected/explain: exact id wins, a stub never
-    // shadows a same-named definition, fuzzy scoring as the last resort.
-    let resolve = |q: &str| -> Option<NodeIndex> {
-        if let Some(&idx) = loaded.id_to_idx.get(q) {
-            let is_stub: bool = db
-                .query_row(
-                    "SELECT file_type = 'stub' FROM nodes WHERE id = ?1",
-                    rusqlite::params![q],
-                    |r| r.get(0),
-                )
-                .unwrap_or(false);
-            if !is_stub {
-                return Some(idx);
-            }
-            let bare = q
-                .trim_start_matches('.')
-                .trim_end_matches("()")
-                .to_lowercase();
-            if let Some(id) = astria_core::db::prefer_non_stub_id(db, &bare) {
-                if let Some(&better) = loaded.id_to_idx.get(id.as_str()) {
-                    return Some(better);
-                }
-            }
-            return Some(idx);
-        }
-        let terms: Vec<String> = q.split_whitespace().map(|s| s.to_string()).collect();
-        score_nodes(&loaded, &terms).ranked.first().map(|(_, i)| *i)
-    };
-
-    let seed = resolve(seed_query).ok_or_else(|| {
-        astria_core::AstriaError::Graph(format!("node not found: '{seed_query}'"))
-    })?;
-
-    let outgoing = direction != "in";
-    let incoming = direction != "out";
-
-    let mut seen: HashSet<NodeIndex> = HashSet::new();
-    seen.insert(seed);
-    let mut frontier: Vec<NodeIndex> = vec![seed];
-    let mut distance: HashMap<NodeIndex, u32> = [(seed, 0)].into_iter().collect();
-    let mut call_edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
-
-    for level in 0..depth {
-        let mut next: Vec<NodeIndex> = Vec::new();
-        for &n in &frontier {
-            let mut consider = |other: NodeIndex| {
-                if !seen.contains(&other) {
-                    seen.insert(other);
-                    distance.insert(other, level as u32 + 1);
-                    next.push(other);
-                }
-            };
-            if outgoing {
-                for e in loaded
-                    .graph
-                    .edges_directed(n, petgraph::Direction::Outgoing)
-                {
-                    if e.weight().relation == "calls" {
-                        let t = e.target();
-                        call_edges.push((n, t));
-                        consider(t);
-                    }
-                }
-            }
-            if incoming {
-                for e in loaded
-                    .graph
-                    .edges_directed(n, petgraph::Direction::Incoming)
-                {
-                    if e.weight().relation == "calls" {
-                        let src = e.source();
-                        call_edges.push((src, n));
-                        consider(src);
-                    }
-                }
-            }
-        }
-        if next.is_empty() {
-            break;
-        }
-        frontier = next;
-    }
-
-    // Stable render order: hop distance from the seed, then label, then id.
-    let mut nodes: Vec<(u32, String, String)> = seen
-        .iter()
-        .map(|idx| {
-            (
-                distance.get(idx).copied().unwrap_or(u32::MAX),
-                loaded.graph[*idx].label.clone(),
-                loaded.graph[*idx].id.clone(),
-            )
-        })
-        .collect();
-    nodes.sort();
-
-    let mermaid_id: HashMap<String, String> = nodes
-        .iter()
-        .enumerate()
-        .map(|(i, (_, _, id))| (id.clone(), format!("n{i}")))
-        .collect();
-
-    let mut out = String::from(
-        "flowchart LR
-",
-    );
-    for (_, label, id) in &nodes {
-        let short: String = label.chars().take(60).collect();
-        let escaped = short.replace('"', "'");
-        out.push_str(&format!(
-            "  {}[\"{}\"]
-",
-            mermaid_id[id], escaped
-        ));
-    }
-
-    let mut rendered: Vec<(String, String)> = call_edges
-        .iter()
-        .filter_map(|(a, b)| {
-            let sa = loaded.graph[*a].id.clone();
-            let sb = loaded.graph[*b].id.clone();
-            let ma = mermaid_id.get(&sa)?;
-            let mb = mermaid_id.get(&sb)?;
-            Some((ma.clone(), mb.clone()))
-        })
-        .collect();
-    rendered.sort();
-    rendered.dedup();
-    for (a, b) in &rendered {
-        out.push_str(&format!(
-            "  {a} --> {b}
-"
-        ));
-    }
-    Ok(out)
-}
+pub use callflow::callflow_mermaid;
+pub use explain::{explain_with_neighbors, EdgeInfoResult, ExplainResult};
+pub use learned::promote_learned_edges;
+pub(crate) use learned::*;
+pub use paths::find_shortest_path;
+pub use repo_map::repo_map;
 
 #[cfg(test)]
 mod tests {
@@ -1326,6 +732,45 @@ mod tests {
             text.contains("validation()"),
             "code symbol must remain present"
         );
+    }
+
+    #[test]
+    fn camel_case_symbol_queries_match_their_definition() {
+        // An agent pasting a symbol name straight from source ("SensorRecord",
+        // "how does SensorRecord work") must reach that symbol exactly like
+        // the spaced phrasing does. The single camelCase term carries no
+        // spaces, so the graph must compare it via normalized identifier or
+        // its split subtokens — a verbatim substring test returns nothing.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file, source_line) VALUES
+                ('rec', 'SensorRecord', 'code', 'src/sensor.py', 3),
+                ('fn', 'normalize_records()', 'code', 'src/sensor.py', 10),
+                ('filler', 'unrelated()', 'code', 'src/other.py', 1);
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('fn', 'rec', 'references', 'EXTRACTED', 'src/sensor.py');",
+        )
+        .unwrap();
+
+        for question in ["SensorRecord", "how does SensorRecord work"] {
+            let (text, node_count, _, _) = query_graph(
+                &db,
+                "camel-case-test",
+                question,
+                "bfs",
+                2,
+                4000,
+                false,
+                0.0,
+                0,
+                false,
+            )
+            .unwrap();
+            assert!(
+                node_count > 0 && text.contains("SensorRecord"),
+                "query {question:?} returned {node_count} nodes; expected the SensorRecord definition"
+            );
+        }
     }
 
     #[test]
@@ -2215,8 +1660,10 @@ at the lake house');",
             &[("target".to_string(), 0.9)],
             false,
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .into_output();
         assert!(
             text.contains("maybe_install_helper"),
             "semantic-only candidate must be seeded and traversed; output:\n{text}"
@@ -2253,8 +1700,10 @@ at the lake house');",
             &[("target".to_string(), 0.5)],
             false,
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .into_output();
         assert!(
             !text.contains("maybe_install_helper"),
             "below-floor semantic candidate must stay out; output:\n{text}"
@@ -2298,7 +1747,7 @@ at the lake house');",
         // w's best touching edge is a below-floor SEMANTIC link; s sits on
         // structural evidence. Equal relevance and distance: w must yield.
         let reach: HashMap<NodeIndex, f64> = [(w, 0.5), (s, 0.9)].into_iter().collect();
-        let (text, _) = subgraph_to_text(
+        let response = subgraph_to_text(
             &g,
             &visited,
             &[],
@@ -2311,6 +1760,7 @@ at the lake house');",
             "",
         )
         .unwrap();
+        let text = response.text;
         let s_pos = text.find("Sprocket").unwrap();
         let w_pos = text.find("Widget").unwrap();
         assert!(
@@ -2424,86 +1874,6 @@ at the lake house');",
     }
 
     #[test]
-    fn stale_graph_discloses_changed_files() {
-        // An agent that cannot tell the graph predicates its answers on an
-        // old build answers confidently from the past. A file in the
-        // manifest modified after publication must be disclosed; a fresh
-        // graph must stay quiet.
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("app.rs");
-        std::fs::write(&file, "fn a() {}\n").unwrap();
-        let db = open_db_in_memory().unwrap();
-        db.execute_batch(
-            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
-                ('a', 'alpha()', 'code', 'src/a.rs');
-             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
-                ('a', 'a', 'calls', 'EXTRACTED', 'src/a.rs');",
-        )
-        .unwrap();
-        db.execute(
-            "INSERT INTO file_manifest (file_path, content_hash, file_type, last_seen_at, size_bytes)
-             VALUES (?1, 'x', 'code', '2026-01-01', 9)",
-            rusqlite::params![file.to_string_lossy().to_string()],
-        )
-        .unwrap();
-
-        // Published long ago, file written now → stale disclosure.
-        db.execute(
-            "INSERT OR REPLACE INTO _meta (key, value) VALUES ('graph_published_at', '1000')",
-            [],
-        )
-        .unwrap();
-        let g = load_graph_snapshot(&db, "stale-yes").unwrap();
-        let (text, _, _, _) = query_graph_loaded(
-            &db,
-            g,
-            "alpha",
-            "bfs",
-            1,
-            2000,
-            false,
-            0.0,
-            0,
-            &[],
-            false,
-            Some("1000"),
-        )
-        .unwrap();
-        assert!(
-            text.contains("source drift since this build") && text.contains("1 modified"),
-            "stale graph must disclose: {text}"
-        );
-
-        // Published in the future (or just now) → quiet.
-        let fresh_ts = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + 60)
-            .to_string();
-        let g2 = load_graph_snapshot(&db, "stale-no").unwrap();
-        let (text2, _, _, _) = query_graph_loaded(
-            &db,
-            g2,
-            "alpha",
-            "bfs",
-            1,
-            2000,
-            false,
-            0.0,
-            0,
-            &[],
-            false,
-            Some(fresh_ts.as_str()),
-        )
-        .unwrap();
-        assert!(
-            !text2.contains("changed since this build"),
-            "fresh graph must stay quiet: {text2}"
-        );
-    }
-
-    #[test]
     fn no_match_suggests_nearest_labels() {
         let db = open_db_in_memory().unwrap();
         let key = seed(&db);
@@ -2585,8 +1955,10 @@ at the lake house');",
             &[],
             false,
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .into_output();
         assert_eq!(nodes, 0, "an incidental match must not seed a traversal");
         assert!(
             text.contains("No confident match"),
@@ -2627,8 +1999,10 @@ at the lake house');",
             &[("s".to_string(), 0.9)],
             false,
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .into_output();
         assert!(nodes > 0, "a semantic candidate must still traverse");
         assert!(
             text.contains("sanitize_inputs"),
@@ -2667,8 +2041,10 @@ at the lake house');",
             &[],
             false,
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .into_output();
         assert_eq!(nodes, 0, "a lone common-word match must not seed");
         assert!(
             text.contains("No confident match"),
@@ -2710,8 +2086,10 @@ at the lake house');",
             &[("target".to_string(), 0.9)],
             false,
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .into_output();
         let first_node = text
             .lines()
             .find(|l| l.starts_with("NODE "))
@@ -2750,8 +2128,10 @@ at the lake house');",
             &[],
             false,
             None,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .into_output();
         assert!(nodes > 0, "salient evidence must allow the traversal");
         assert!(
             text.contains("handle_message"),
@@ -2975,81 +2355,18 @@ at the lake house');",
         assert!(map1.contains("Orphan"), "isolated files still appear");
         assert_eq!(shown1, 3);
 
-        let (small, small_shown) = repo_map(&db, key, 1, 0.0).unwrap();
+        assert!(repo_map(&db, key, 1, 0.0).is_err());
+        let (budget, small, small_shown) = (2..count_response_tokens(&map1))
+            .find_map(|budget| {
+                repo_map(&db, key, budget as i64, 0.0)
+                    .ok()
+                    .map(|(map, shown)| (budget, map, shown))
+            })
+            .expect("a complete first record fits below the full map budget");
         assert!(small_shown < shown1, "tiny budget shows fewer files");
+        assert!(count_response_tokens(&small) <= budget);
         assert!(small.contains("truncated"), "truncation is declared");
         assert!(small.contains("Hub"), "the top-ranked file always fits");
-    }
-
-    #[test]
-    fn source_drift_counts_modified_deleted_and_size_changed() {
-        let db = open_db_in_memory().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_string_lossy().replace('\\', "/");
-        let modified_f = dir.path().join("modified.py");
-        let deleted_f = dir.path().join("deleted.py");
-        let forged_f = dir.path().join("forged.py");
-        std::fs::write(
-            &modified_f,
-            "x = 1
-",
-        )
-        .unwrap();
-        std::fs::write(
-            &deleted_f, "x = 2
-",
-        )
-        .unwrap();
-        std::fs::write(&forged_f, "short").unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        // Manifest rows carry RELATIVE paths, as the pipeline writes them;
-        // the probe must resolve them against the supplied root.
-        for (name, size) in [("modified.py", 6), ("deleted.py", 6), ("forged.py", 5)] {
-            db.execute(
-                "INSERT INTO file_manifest (file_path, content_hash, file_type, language, last_seen_at, size_bytes)
-                 VALUES (?1, 'h', 'code', NULL, ?2, ?3)",
-                rusqlite::params![name, now.to_string(), size],
-            )
-            .unwrap();
-        }
-        // built_at far in the past: the two freshly written files that still
-        // exist count as modified; deleted.py exists for the stat, so
-        // remove it first.
-        std::fs::remove_file(&deleted_f).unwrap();
-        let drift = source_drift_since(&db, now - 3600, Some(&root)).unwrap();
-        assert_eq!(
-            drift.modified, 2,
-            "fresh mtimes after an old build (modified.py and forged.py)"
-        );
-        assert_eq!(drift.deleted, 1, "missing file is a deletion");
-        assert_eq!(drift.size_changed, 0);
-        assert_eq!(drift.total(), 3);
-        // Without the root, relative rows cannot be resolved: nothing is
-        // provably deleted (the old behavior from a foreign cwd — no
-        // disclosure, never a false one).
-        let unresolved = source_drift_since(&db, now - 3600, None).unwrap();
-        assert_eq!(
-            unresolved.deleted, 3,
-            "relative rows do not resolve without a root"
-        );
-        // Same-second build (cutoff in the future): mtimes look fresh, so
-        // only a size mismatch can reveal the edit — the manifest claims a
-        // size the file does not have.
-        db.execute(
-            "UPDATE file_manifest SET size_bytes = 999 WHERE file_path = 'forged.py'",
-            [],
-        )
-        .unwrap();
-        let drift = source_drift_since(&db, now + 60, Some(&root)).unwrap();
-        assert_eq!(drift.modified, 0);
-        assert_eq!(
-            drift.size_changed, 1,
-            "size mismatch exposes a preserved-timestamp edit"
-        );
-        assert_eq!(drift.deleted, 1);
     }
 }
 

@@ -28,7 +28,7 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const problems = [];
 
-const read = (p) => readFileSync(path.join(repoRoot, p), 'utf8');
+const read = (p) => readFileSync(path.join(repoRoot, p), 'utf8').replace(/\r\n/g, '\n');
 
 // 1. Every workspace crate is documented in ARCHITECTURE.md's crate table.
 const cargo = read('Cargo.toml');

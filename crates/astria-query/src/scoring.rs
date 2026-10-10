@@ -488,45 +488,136 @@ pub(crate) struct ScoredNodes {
     pub(crate) missing_terms: Vec<String>,
 }
 
+pub(crate) struct LexicalIndex {
+    located_candidates: Vec<NodeIndex>,
+    labels_lower: Vec<String>,
+    labels_normalized: Vec<String>,
+    label_components: Vec<Vec<String>>,
+    doc_components: Vec<Vec<String>>,
+    id_components: Vec<Vec<String>>,
+    file_components: Vec<Vec<String>>,
+    docs_lower: Vec<Option<String>>,
+    document_frequency: HashMap<String, usize>,
+}
+
+impl LexicalIndex {
+    fn new(loaded: &LoadedGraph) -> Self {
+        let mut index = Self {
+            located_candidates: Vec::new(),
+            labels_lower: Vec::new(),
+            labels_normalized: Vec::new(),
+            label_components: Vec::new(),
+            doc_components: Vec::new(),
+            id_components: Vec::new(),
+            file_components: Vec::new(),
+            docs_lower: Vec::new(),
+            document_frequency: HashMap::new(),
+        };
+        for node_idx in loaded.graph.node_indices() {
+            let node = &loaded.graph[node_idx];
+            let located = !node.source_file.is_empty()
+                && !matches!(node.file_type.as_str(), "stub" | "reference");
+            if located {
+                index.located_candidates.push(node_idx);
+            }
+            let label = tokenize(&node.label);
+            let doc: Vec<_> = node
+                .docstring
+                .as_deref()
+                .map(|d| tokenize(d).into_iter().take(400).collect())
+                .unwrap_or_default();
+            // Unresolved receiver IDs encode their caller/expression, not a definition.
+            let id = if located {
+                tokenize(&node.id)
+            } else {
+                Vec::new()
+            };
+            let unique: HashSet<_> = label
+                .iter()
+                .chain(&doc)
+                .chain(&id)
+                .map(|t| stem(t).to_string())
+                .collect();
+            for term in unique {
+                *index.document_frequency.entry(term).or_default() += 1;
+            }
+            index.labels_lower.push(node.label.to_lowercase());
+            index
+                .labels_normalized
+                .push(normalized_identifier(&node.label));
+            index
+                .docs_lower
+                .push(node.docstring.as_deref().map(str::to_lowercase));
+            index.file_components.push(tokenize(&node.source_file));
+            index.label_components.push(label);
+            index.doc_components.push(doc);
+            index.id_components.push(id);
+        }
+        index
+    }
+
+    fn frequency(&self, parts: &[String]) -> usize {
+        if parts.len() == 1 {
+            return self
+                .document_frequency
+                .get(stem(&parts[0]))
+                .copied()
+                .unwrap_or(0);
+        }
+        self.label_components
+            .iter()
+            .zip(self.doc_components.iter().zip(&self.id_components))
+            .filter(|(label, (doc, id))| {
+                component_coverage(parts, label) == 1.0
+                    || component_coverage(parts, doc) == 1.0
+                    || component_coverage(parts, id) == 1.0
+            })
+            .count()
+    }
+}
+
 pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes {
+    // In a behavior question, trailing "work" is a question cue, not a
+    // request for symbols such as gitWorkTreeStatus. Preserve it in other
+    // contexts (work queues, explicit identifiers, and document questions).
+    let behavior_question = match (terms.first(), terms.get(1)) {
+        (Some(first), Some(second)) => {
+            let action = second.to_lowercase();
+            (first.eq_ignore_ascii_case("how")
+                && matches!(action.as_str(), "does" | "do" | "is" | "are"))
+                || (first.eq_ignore_ascii_case("what") && matches!(action.as_str(), "does" | "do"))
+        }
+        _ => false,
+    };
+    let trimmed_terms = if behavior_question
+        && terms
+            .last()
+            .is_some_and(|term| matches!(term.trim_end_matches(['?', '.', '!']), "work" | "works"))
+    {
+        &terms[..terms.len() - 1]
+    } else {
+        terms
+    };
+    let terms = trimmed_terms;
     // IDF weights + per-node lowercase labels, one shared pre-pass.
     let n_nodes = loaded.graph.node_count().max(1) as f64;
     let ln_nodes = n_nodes.ln().max(1.0);
-    let labels_lower: Vec<String> = loaded
-        .graph
-        .node_indices()
-        .map(|idx| loaded.graph[idx].label.to_lowercase())
-        .collect();
-    let doc_share = prose_share(loaded);
-    let docs_majority = doc_share >= DOCS_MAJORITY_PROSE_SHARE;
-    let label_components: Vec<Vec<String>> = loaded
-        .graph
-        .node_indices()
-        .map(|idx| tokenize(&loaded.graph[idx].label))
-        .collect();
+    let lexical = loaded.lexical.get_or_init(|| LexicalIndex::new(loaded));
+    let labels_lower = &lexical.labels_lower;
+    let docs_majority = matches!(corpus_mode(loaded), CorpusMode::DocsMajority);
+    let label_components = &lexical.label_components;
     // Chunk and document bodies feed the IDF pre-pass too: scoring matches
     // those terms against docstrings, so a term that is common in bodies
     // but rare in first lines ("group", "friends" in transcripts) would
     // otherwise get near-max weight and let any node that merely mentions
     // it outrank the node whose text actually answers.
-    let doc_components: Vec<Vec<String>> = loaded
-        .graph
-        .node_indices()
-        .map(|idx| {
-            loaded.graph[idx]
-                .docstring
-                .as_deref()
-                .map(|d| tokenize(d).into_iter().take(400).collect())
-                .unwrap_or_default()
-        })
-        .collect();
     // Qualified ids participate in IDF like labels and bodies: id tokens
     // repeat across a repo ("src", "core", "tests") and must not act as
     // rare discriminators.
-    let id_components: Vec<Vec<String>> = loaded
-        .graph
-        .node_indices()
-        .map(|idx| tokenize(&loaded.graph[idx].id))
+    let id_components = &lexical.id_components;
+    let term_components: HashMap<&str, Vec<String>> = terms
+        .iter()
+        .map(|term| (term.trim(), tokenize(term.trim())))
         .collect();
     let mut idf: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
     let mut effective: Vec<&String> = Vec::new();
@@ -541,16 +632,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
     // vocabulary the graph does not share, named in a refusal message.
     let mut missing_terms: Vec<String> = Vec::new();
     for term in &effective {
-        let parts = tokenize(term);
-        let hits = label_components
-            .iter()
-            .zip(doc_components.iter().zip(id_components.iter()))
-            .filter(|(label, (doc, id))| {
-                component_coverage(&parts, label) == 1.0
-                    || component_coverage(&parts, doc) == 1.0
-                    || component_coverage(&parts, id) == 1.0
-            })
-            .count();
+        let hits = lexical.frequency(&term_components[term.trim()]);
         let w = if hits == 0 {
             missing_terms.push((*term).clone());
             1.0
@@ -600,13 +682,38 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         )
     });
     let wants_docs = wants_docs(terms);
+    let wants_history = question_tokens.iter().any(|t| {
+        matches!(
+            t.as_str(),
+            "historical" | "history" | "resolved" | "superseded" | "previous" | "past"
+        )
+    });
+    // A capitalized subject can name a simple type (Parser, Work), even
+    // without a scope separator or a camelCase boundary. Keep exact type
+    // lookup ahead of unrelated functions matching only its module path.
+    let named_type = behavior_question
+        && terms.iter().skip(2).any(|term| {
+            term.chars().next().is_some_and(char::is_uppercase)
+                && lexical.located_candidates.iter().any(|&idx| {
+                    let node = &loaded.graph[idx];
+                    node.source_line.is_some()
+                        && !node.label.ends_with("()")
+                        && !label_is_file(&node.label)
+                        && !is_doc_type(&node.file_type)
+                        && !is_semantic_type(&node.file_type)
+                        && normalized_identifier(term) == lexical.labels_normalized[idx.index()]
+                })
+        });
+    let behavior_intent = behavior_question && !docs_majority && !wants_docs && !named_type;
     let code_intent = !wants_docs
-        && (terms.iter().any(|t| is_explicit_identifier(t))
+        && (behavior_intent
+            || terms.iter().any(|t| is_explicit_identifier(t))
             || question_tokens.iter().any(|t| {
                 matches!(
                     t.as_str(),
                     "implementation"
                         | "implement"
+                        | "implemented"
                         | "implements"
                         | "function"
                         | "method"
@@ -676,7 +783,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
     let mut definition_candidates = HashSet::new();
     let debug_scores = debug_scores_enabled();
     // Per-node (matched_terms, salient_hits) in node-index order, for the dump.
-    let mut debug_rows: Vec<(usize, usize)> = Vec::new();
+    let mut debug_rows: HashMap<NodeIndex, (usize, usize)> = HashMap::new();
     let mut max_salient_hits = 0usize;
     let mut max_matched_terms = 0usize;
     let effective_terms_count = terms
@@ -686,7 +793,13 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             t.len() > 2 && !STOPWORDS.contains(&t.to_lowercase().as_str())
         })
         .count();
-    for (i, idx) in loaded.graph.node_indices().enumerate() {
+    let candidates: Box<dyn Iterator<Item = NodeIndex> + '_> = if code_intent {
+        Box::new(lexical.located_candidates.iter().copied())
+    } else {
+        Box::new(loaded.graph.node_indices())
+    };
+    for idx in candidates {
+        let i = idx.index();
         let node = &loaded.graph[idx];
         // Code answers rank above documentation and speculative stubs on
         // equal term evidence: without the prior, prose-heavy doc nodes and
@@ -700,7 +813,10 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
                 .first()
                 .is_some_and(|p| matches!(p.as_str(), "test" | "tests" | "spec" | "bench"))
             || node.id.contains("::tests::");
-        let prior = if is_test {
+        if code_intent && is_test && !wants_tests {
+            continue;
+        }
+        let mut prior = if is_test {
             if wants_tests {
                 1.25
             } else {
@@ -738,17 +854,38 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             } else {
                 0.55
             }
-        } else if node.file_type == "stub" {
-            0.4
+        } else if node.source_file.is_empty()
+            && matches!(node.file_type.as_str(), "stub" | "reference")
+        {
+            0.05
         } else {
             1.0
         };
+        // Behavior is implemented by callable declarations. Return types,
+        // constants and prose may describe it, but should not displace the
+        // executable symbol when they share the same query vocabulary.
+        if behavior_intent
+            && node.label.ends_with("()")
+            && !is_doc
+            && !is_semantic_type(&node.file_type)
+            && node.source_line.is_some()
+        {
+            prior *= 2.0;
+        }
+        if !wants_history
+            && node.signature.as_deref().is_some_and(|s| {
+                s.starts_with("astria-document: ")
+                    && (s.contains("status=resolved") || s.contains("status=superseded"))
+            })
+        {
+            prior *= 0.25;
+        }
         // Consecutive question tokens that appear verbatim in a node's label
         // or docstring ("blast radius") mark the node as the concept's home;
         // token-level scoring alone treats the words as unrelated and loses
         // to weaker-but-lexically-luckier matches.
-        let doc_lower = node.docstring.as_deref().map(|d| d.to_lowercase());
-        let label_lower_full = labels_lower[i].clone();
+        let doc_lower = &lexical.docs_lower[i];
+        let label_lower_full = &labels_lower[i];
         let mut phrase_bonus = 0.0f64;
         for w in terms.windows(2) {
             let phrase = format!("{} {}", w[0].to_lowercase(), w[1].to_lowercase());
@@ -760,14 +897,10 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         }
         let phrase_bonus = phrase_bonus.min(1.0);
         let label_tokens = &label_components[i];
-        let file_tokens = tokenize(&node.source_file);
+        let file_tokens = &lexical.file_components[i];
         // Chunked prose bodies live in the docstring; 400 tokens keeps
         // whole-chunk scoring affordable while matching deep into the chunk.
-        let doc_tokens: Vec<String> = node
-            .docstring
-            .as_deref()
-            .map(|d| tokenize(d).into_iter().take(400).collect())
-            .unwrap_or_default();
+        let doc_tokens = &lexical.doc_components[i];
         let mut score = 0.0;
         let mut matched_terms = 0usize;
         let mut salient_hits = 0usize;
@@ -784,10 +917,10 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             if STOPWORDS.contains(&term_lower.as_str()) {
                 continue;
             }
-            let term_tokens = tokenize(term);
+            let term_tokens = &term_components[term];
             let normalized = normalized_identifier(term);
-            let label_normalized = normalized_identifier(&node.label);
-            let coverage = component_coverage(&term_tokens, label_tokens);
+            let label_normalized = &lexical.labels_normalized[i];
+            let coverage = component_coverage(term_tokens, label_tokens);
             // Chunk labels are a truncated first line of the chunk's own
             // body, which the docstring below scores in full. Amplifying
             // that prefix at label weight double-counts body text, so a
@@ -795,21 +928,21 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
             // outranks the chunk whose body actually answers the question.
             let label_score = if is_chunk {
                 0.0
-            } else if normalized == label_normalized {
+            } else if &normalized == label_normalized {
                 4.0
             } else if coverage == 1.0 {
                 2.0
             } else {
                 0.5 * coverage * coverage
             };
-            let doc_coverage = component_coverage(&term_tokens, &doc_tokens);
-            let path_coverage = component_coverage(&term_tokens, &file_tokens);
+            let doc_coverage = component_coverage(term_tokens, doc_tokens);
+            let path_coverage = component_coverage(term_tokens, file_tokens);
             // A qualified question term ("BaseCommand.get_usage") matches a
             // node's scope-qualified id even though every same-name symbol
             // shares one bare label ("get_usage()"); without id evidence the
             // tie falls to degree and a same-name symbol from the wrong
             // class wins the answer slot.
-            let id_coverage = component_coverage(&term_tokens, &id_components[i]);
+            let id_coverage = component_coverage(term_tokens, &id_components[i]);
             let scope_match = is_explicit_identifier(term)
                 && definition_identifier_match(term, &node.id, &node.label, &node.source_file);
             let path_match =
@@ -856,20 +989,27 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         // Reserve a ranking tier for actual definitions satisfying every written
         // discriminator. Prose mentions and wrong-scope same-name methods cannot
         // enter this tier. Document intent keeps its existing lexical behavior.
-        if code_intent
+        let behavior_definition = behavior_intent
+            && identifiers.is_empty()
+            && bare_symbols.is_empty()
+            && node.label.ends_with("()")
+            && node.source_line.is_some()
+            && matched_terms > 0;
+        let named_definition = code_intent
             && (!identifiers.is_empty() || !bare_symbols.is_empty())
-            && !is_doc
-            && !is_semantic_type(&node.file_type)
-            && node.file_type != "stub"
-            && !label_is_file(&node.label)
-            && (!is_test || wants_tests)
             && bare_symbols
                 .iter()
                 .all(|term| normalized_identifier(term) == normalized_identifier(&node.label))
             && identifiers.iter().all(|term| {
                 definition_identifier_match(term, &node.id, &node.label, &node.source_file)
                     || path_discriminator_match(term, &node.source_file)
-            })
+            });
+        if (behavior_definition || named_definition)
+            && !is_doc
+            && !is_semantic_type(&node.file_type)
+            && node.file_type != "stub"
+            && !label_is_file(&node.label)
+            && (!is_test || wants_tests)
         {
             definition_candidates.insert(idx);
         }
@@ -903,7 +1043,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         max_salient_hits = max_salient_hits.max(salient_hits);
         max_matched_terms = max_matched_terms.max(matched_terms);
         if debug_scores {
-            debug_rows.push((matched_terms, salient_hits));
+            debug_rows.insert(idx, (matched_terms, salient_hits));
         }
     }
     if !definition_candidates.is_empty() && !wants_entry {
@@ -946,7 +1086,7 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         );
         for (rank, (score, idx)) in scored.iter().take(15).enumerate() {
             let n = &loaded.graph[*idx];
-            let (matched, salient) = debug_rows.get(idx.index()).copied().unwrap_or((0, 0));
+            let (matched, salient) = debug_rows.get(idx).copied().unwrap_or((0, 0));
             eprintln!(
                 "  #{:<2} score={:<9.3} matched={:<3}/{} salient={:<2}/{} {} [{}]",
                 rank + 1,

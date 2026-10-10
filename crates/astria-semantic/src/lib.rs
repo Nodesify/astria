@@ -405,7 +405,11 @@ where
                         // Backend unavailable on this worker: fail the chunk's
                         // files explicitly instead of dropping them.
                         let message = e.to_string();
-                        let mut guard = results.lock().unwrap();
+                        // Poison recovery: the results vec is append-only, so
+                        // a panicked sibling leaves no broken invariant.
+                        let mut guard = results
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         for f in chunk {
                             guard.push((f.clone(), Err(AstriaError::Graph(message.clone()))));
                         }
@@ -422,7 +426,10 @@ where
                     })
                     .collect();
                 let local = extract_semantic_with_sources(&list, backend.as_ref());
-                let mut guard = results.lock().unwrap();
+                // Poison recovery: append-only vec, no broken invariant.
+                let mut guard = results
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard.extend(local);
             });
         }
@@ -433,7 +440,10 @@ where
     for (i, f) in files.iter().enumerate() {
         order.insert(f, i);
     }
-    let mut results = results.into_inner().unwrap();
+    // Poison recovery: same append-only argument as the worker guards.
+    let mut results = results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     results.sort_by_key(|(path, _)| order.get(path).copied().unwrap_or(usize::MAX));
     results
 }

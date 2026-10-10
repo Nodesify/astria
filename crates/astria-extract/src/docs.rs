@@ -16,6 +16,12 @@ pub(crate) fn extract_markdown(path: &Path, naming: &Path) -> Result<Extraction,
     ))
 }
 
+static MD_HEADING_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"^(#{1,6})\s+(.+)$").expect("static regex"));
+static MD_LINK_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").expect("static regex")
+});
+
 /// Extract markdown-style structure from a string. Used for both .md/.mdx files
 /// and PDF files (converted to markdown).
 pub(crate) fn extract_markdown_from_string(
@@ -45,9 +51,6 @@ pub(crate) fn extract_markdown_from_string(
         node_type: "document".to_string(),
     });
 
-    let heading_re = regex::Regex::new(r"^(#{1,6})\s+(.+)$").unwrap();
-    let link_re = regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
-
     // Track heading nesting: stack of (level, id)
     let mut heading_stack: Vec<(usize, String)> = Vec::new();
     // Repeated section titles in one file (e.g. several "## Changes") get
@@ -74,7 +77,7 @@ pub(crate) fn extract_markdown_from_string(
 
     for (line_no, line) in content.lines().enumerate() {
         // Parse headings
-        if let Some(caps) = heading_re.captures(line) {
+        if let Some(caps) = MD_HEADING_RE.captures(line) {
             flush_pending(&mut pending, &mut nodes, &mut edges);
             let hashes = caps.get(1).unwrap().as_str().len();
             let title = caps.get(2).unwrap().as_str().trim().to_string();
@@ -164,7 +167,7 @@ pub(crate) fn extract_markdown_from_string(
         }
 
         // Parse links (only local .md references)
-        for cap in link_re.captures_iter(line) {
+        for cap in MD_LINK_RE.captures_iter(line) {
             let link_target = cap.get(2).unwrap().as_str();
             // Only reference local markdown files
             if link_target.starts_with("http") || link_target.starts_with('#') {
@@ -211,11 +214,62 @@ pub(crate) fn extract_markdown_from_string(
         );
     }
 
+    apply_document_lifecycle(content, &mut nodes);
+
     Extraction {
         file_path: path.to_path_buf(),
         language: language.to_string(),
         nodes,
         edges,
+    }
+}
+
+/// Explicit document lifecycle is inherited by every section and chunk. Keep
+/// it in signature metadata, not body text, so source spans remain exact.
+fn apply_document_lifecycle(content: &str, nodes: &mut [ExtractedNode]) {
+    let mut status = None;
+    let mut replacement = None;
+    let mut resolution = None;
+    let mut frontmatter = false;
+    for (index, line) in content.lines().enumerate() {
+        if index == 0 && line.trim() == "---" {
+            frontmatter = true;
+            continue;
+        }
+        if !frontmatter {
+            break;
+        }
+        if line.trim() == "---" {
+            break;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value
+            .trim()
+            .trim_matches(['\'', '"'])
+            .replace(['\n', '\r', ';'], " ");
+        match key.trim() {
+            "status" if matches!(value.as_str(), "current" | "resolved" | "superseded") => {
+                status = Some(value)
+            }
+            "superseded_by" => replacement = Some(value),
+            "resolution" => resolution = Some(value),
+            _ => {}
+        }
+    }
+    let Some(status) = status else {
+        return;
+    };
+    let mut metadata = format!("astria-document: status={status}");
+    if let Some(replacement) = replacement {
+        metadata.push_str(&format!("; replacement={replacement}"));
+    }
+    if let Some(resolution) = resolution {
+        metadata.push_str(&format!("; resolution={resolution}"));
+    }
+    for node in nodes {
+        node.signature = Some(metadata.clone());
     }
 }
 

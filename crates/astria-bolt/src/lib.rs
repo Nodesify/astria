@@ -69,7 +69,7 @@ fn encode_version(major: u8, minor: u8) -> u32 {
     ((minor as u32) << 8) | major as u32
 }
 
-pub fn parse_url(url: &str) -> Result<ParsedUrl, String> {
+pub fn parse_url(url: &str) -> astria_core::Result<ParsedUrl> {
     let (scheme, rest) = [
         ("bolt://", Scheme::Plain),
         ("neo4j://", Scheme::Plain),
@@ -81,7 +81,9 @@ pub fn parse_url(url: &str) -> Result<ParsedUrl, String> {
     .into_iter()
     .find_map(|(prefix, scheme)| url.strip_prefix(prefix).map(|rest| (scheme, rest)))
     .ok_or_else(|| {
-        format!("not a bolt URL (expected bolt://, bolt+s:// or bolt+ssc://...): {url}")
+        astria_core::AstriaError::Graph(format!(
+            "not a bolt URL (expected bolt://, bolt+s:// or bolt+ssc://...): {url}"
+        ))
     })?;
     let (userinfo, hostport) = match rest.split_once('@') {
         Some((userinfo, hostport)) => (Some(userinfo.to_string()), hostport),
@@ -91,12 +93,14 @@ pub fn parse_url(url: &str) -> Result<ParsedUrl, String> {
         Some((host, port)) => (
             host.to_string(),
             port.parse::<u16>()
-                .map_err(|e| format!("bad port in {url}: {e}"))?,
+                .map_err(|e| astria_core::AstriaError::Graph(format!("bad port in {url}: {e}")))?,
         ),
         None => (hostport.to_string(), 7687),
     };
     if host.is_empty() {
-        return Err(format!("missing host in bolt URL: {url}"));
+        return Err(astria_core::AstriaError::Graph(format!(
+            "missing host in bolt URL: {url}"
+        )));
     }
     let credentials = userinfo.map(|info| match info.split_once(':') {
         Some((user, pass)) => (user.to_string(), pass.to_string()),
@@ -166,7 +170,7 @@ impl BoltClient {
     /// Connect, negotiate the protocol version, and authenticate. The URL
     /// scheme selects plaintext or verified/unverified TLS.
     pub fn connect(url: &str, user: &str, pass: &str) -> astria_core::Result<Self> {
-        let parsed = parse_url(url).map_err(astria_core::AstriaError::Graph)?;
+        let parsed = parse_url(url)?;
         let (principal, credentials) = parsed
             .credentials
             .unwrap_or_else(|| (user.to_string(), pass.to_string()));
@@ -333,8 +337,8 @@ impl BoltClient {
     fn read_response(&mut self) -> astria_core::Result<(u8, Vec<Value>)> {
         let message =
             frame::read_message(&mut self.stream).map_err(astria_core::AstriaError::Io)?;
-        let (response_tag, fields, _) =
-            packstream::decode_struct(&message).map_err(astria_core::AstriaError::Graph)?;
+        let (response_tag, fields, _) = packstream::decode_struct(&message)
+            .map_err(|e| astria_core::AstriaError::Graph(e.0))?;
         Ok((response_tag, fields))
     }
 }

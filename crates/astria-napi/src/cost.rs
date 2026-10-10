@@ -50,7 +50,7 @@ fn fetch_run(db: &Connection, run_id: i64) -> Result<RunRow> {
     .map_err(astria_core::AstriaError::from)
 }
 
-/// Cumulative totals across completed runs — the lifetime spend of this
+/// Cumulative totals across completed and failed runs — the lifetime spend of this
 /// graph, the number a budget alert would threshold on.
 fn fetch_cumulative(db: &Connection) -> Result<(i64, i64, i64, i64)> {
     db.query_row(
@@ -58,7 +58,7 @@ fn fetch_cumulative(db: &Connection) -> Result<(i64, i64, i64, i64)> {
                 COALESCE(SUM(llm_input_tokens), 0),
                 COALESCE(SUM(llm_output_tokens), 0),
                 COALESCE(SUM(llm_api_calls), 0)
-         FROM pipeline_runs WHERE status = 'completed'",
+         FROM pipeline_runs WHERE status IN ('completed', 'failed')",
         [],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )
@@ -131,7 +131,7 @@ pub fn write_cost_report(
     }
 
     let out = astria_dir.join("cost.json");
-    std::fs::write(&out, serde_json::to_vec_pretty(&report)?)?;
+    astria_core::writer_lock::write_atomic(&out, &serde_json::to_vec_pretty(&report)?)?;
     Ok(out)
 }
 

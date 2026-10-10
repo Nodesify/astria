@@ -18,10 +18,11 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_QUERY_BUDGET: u64 = 2000;
 
 mod http;
+mod query_schema;
 pub use http::{serve_http, HttpServerConfig};
 
 fn tools() -> Value {
-    json!([
+    let mut definitions = json!([
         {"name": "query_graph", "description": "Answer code-locating questions (where/how/what-breaks) with a ranked subgraph: NODE records carry id + src=file:line anchors, EDGE records carry provenance (EXTRACTED/RESOLVED/INFERRED). Prefer over grep for architecture and cross-module questions. An explicit \"No confident match\" means the question's vocabulary is absent from the graph — rephrase toward symbol names or file paths. The header discloses graph age and any files changed since the build.",
          "inputSchema": {"type": "object", "properties": {
             "question": {"type": "string"},
@@ -63,7 +64,36 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "health", "description": "Code-health report: unreachable-symbol candidates, circular file dependencies, hub concentration, graph staleness — one heuristic score (0-100).",
          "inputSchema": {"type": "object", "properties": {}}}
-    ])
+    ]);
+    definitions[0]["outputSchema"] = query_schema::output_schema();
+    for tool in definitions.as_array_mut().unwrap() {
+        let schema = &mut tool["inputSchema"];
+        schema["additionalProperties"] = json!(false);
+        if let Some(properties) = schema["properties"].as_object_mut() {
+            for (key, value) in properties {
+                match key.as_str() {
+                    "depth" => {
+                        value["minimum"] = json!(0);
+                        value["maximum"] = json!(32);
+                    }
+                    "budget" => {
+                        value["minimum"] = json!(1);
+                        value["maximum"] = json!(100000);
+                    }
+                    "cursor" => {
+                        value["minimum"] = json!(0);
+                        value["maximum"] = json!(i64::MAX);
+                    }
+                    "question" => {
+                        value["minLength"] = json!(1);
+                        value["maxLength"] = json!(16384);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    definitions
 }
 
 fn text_result(text: String) -> Value {
@@ -82,6 +112,56 @@ fn str_arg(args: &Value, key: &str) -> Option<String> {
 
 fn bool_arg(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(|v| v.as_bool())
+}
+
+fn validate_arguments(name: &str, args: &Value) -> std::result::Result<(), String> {
+    let definitions = tools();
+    let definition = definitions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .ok_or_else(|| format!("unknown tool: {name}"))?;
+    let schema = &definition["inputSchema"];
+    let properties = schema["properties"].as_object().unwrap();
+    let arguments = args.as_object().ok_or("arguments must be an object")?;
+    if let Some(required) = schema["required"].as_array() {
+        for key in required {
+            if !arguments.contains_key(key.as_str().unwrap()) {
+                return Err(format!("missing required argument: {key}"));
+            }
+        }
+    }
+    for (key, value) in arguments {
+        let property = properties
+            .get(key)
+            .ok_or_else(|| format!("unknown argument: {key}"))?;
+        let valid = match property["type"].as_str() {
+            Some("string") => value
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty() && text.len() <= 16384),
+            Some("boolean") => value.is_boolean(),
+            Some("integer") => value.as_u64().is_some_and(|n| {
+                n >= property["minimum"].as_u64().unwrap_or(0)
+                    && n <= property["maximum"].as_u64().unwrap_or(i64::MAX as u64)
+            }),
+            _ => false,
+        };
+        if !valid {
+            return Err(format!(
+                "invalid argument {key}: expected {} within its declared bounds",
+                property["type"]
+            ));
+        }
+        if let Some(values) = property["enum"].as_array() {
+            if !values.contains(value) {
+                return Err(format!(
+                    "invalid argument {key}: expected one of {values:?}"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts (strength
@@ -105,6 +185,9 @@ fn community_label_map(db: &Connection) -> std::collections::HashMap<i64, String
 }
 
 fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value {
+    if let Err(error) = validate_arguments(name, args) {
+        return error_result(error);
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match name {
         "query_graph" => {
             let question = str_arg(args, "question").unwrap_or_default();
@@ -117,7 +200,7 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             let directed = bool_arg(args, "directed").unwrap_or(false);
             let detail = str_arg(args, "detail");
             let cursor = args.get("cursor").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            astria_query::query_graph(
+            astria_query::query_graph_with_metadata(
                 db,
                 db_path,
                 &question,
@@ -129,7 +212,12 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 cursor,
                 min_strength_for(&detail) >= 0.9,
             )
-            .map(|(text, _, _, _)| text_result(text))
+            .map(|response| {
+                json!({
+                    "content": [{"type": "text", "text": response.text}],
+                    "structuredContent": response, "isError": false
+                })
+            })
         }
         "repo_map" => {
             let budget = args

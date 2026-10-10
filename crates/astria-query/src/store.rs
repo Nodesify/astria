@@ -51,9 +51,39 @@ pub(crate) struct LoadedGraph {
     /// Project root derived from the DB path (`root/.astria/db.sqlite`),
     /// used to shorten stored absolute paths in agent-facing output.
     pub(crate) root: Option<String>,
+    /// Immutable lexical corpus index, built once for this generation.
+    pub(crate) lexical: std::sync::OnceLock<LexicalIndex>,
+    estimated_bytes: std::sync::OnceLock<usize>,
 }
 
 impl LoadedGraph {
+    /// Heap estimate for graph records; excludes allocator and lexical-index overhead.
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        *self.estimated_bytes.get_or_init(|| {
+            self.graph
+                .node_weights()
+                .map(|n| {
+                    std::mem::size_of::<NodeData>()
+                        + n.id.len()
+                        + n.label.len()
+                        + n.file_type.len()
+                        + n.source_file.len()
+                        + n.docstring.as_ref().map_or(0, String::len)
+                        + n.signature.as_ref().map_or(0, String::len)
+                })
+                .sum::<usize>()
+                + self
+                    .graph
+                    .edge_weights()
+                    .map(|e| {
+                        std::mem::size_of::<EdgeData>()
+                            + e.relation.len()
+                            + e.confidence.len()
+                            + e.source_file.len()
+                    })
+                    .sum::<usize>()
+        })
+    }
     /// Root-relative display form of a stored path.
     pub(crate) fn display_path(&self, path: &str) -> String {
         match &self.root {
@@ -169,7 +199,11 @@ pub(crate) fn load_graph(
         .replace('\\', "/");
     let generation = generation_of(db);
     if let Some(generation) = generation.as_ref() {
-        let mut cache = snapshot_cache().lock().unwrap();
+        // Poison recovery: entries are complete Arc snapshots keyed by
+        // (path, generation), so a panicked sibling leaves no broken state.
+        let mut cache = snapshot_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(snapshot) = cache.get(&normalized_path, generation) {
             return Ok(snapshot);
         }
@@ -177,11 +211,10 @@ pub(crate) fn load_graph(
 
     let loaded = std::sync::Arc::new(load_graph_uncached(db, db_path)?);
     if let Some(generation) = generation {
-        snapshot_cache().lock().unwrap().insert(
-            normalized_path,
-            generation,
-            std::sync::Arc::clone(&loaded),
-        );
+        snapshot_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(normalized_path, generation, std::sync::Arc::clone(&loaded));
     }
     Ok(loaded)
 }
@@ -290,6 +323,8 @@ fn load_graph_uncached(db: &Connection, db_path: &str) -> astria_core::Result<Lo
         graph,
         id_to_idx,
         root,
+        lexical: std::sync::OnceLock::new(),
+        estimated_bytes: std::sync::OnceLock::new(),
     })
 }
 

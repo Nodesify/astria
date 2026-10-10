@@ -1,0 +1,37 @@
+[
+  {
+    "question": "click1",
+    "path": "src/click/core.py",
+    "line": 737,
+    "symbol": "Context.invoke",
+    "contains": "def invoke"
+  },
+  {
+    "question": "click1",
+    "path": "src/click/core.py",
+    "line": 959,
+    "symbol": "BaseCommand.invoke",
+    "contains": "def invoke"
+  },
+  {
+    "question": "click1",
+    "path": "src/click/core.py",
+    "line": 1432,
+    "symbol": "Command.invoke",
+    "contains": "def invoke"
+  },
+  {
+    "question": "click1",
+    "path": "src/click/core.py",
+    "line": 1663,
+    "symbol": "MultiCommand.invoke",
+    "contains": "def invoke"
+  },
+  {
+    "question": "click2",
+    "path": "src/click/core.py",
+    "line": 1731,
+    "symbol": "MultiCommand.resolve_command",
+    "contains": "def resolve_command"
+  }
+]

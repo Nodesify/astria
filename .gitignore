@@ -3,6 +3,8 @@
 node_modules/
 packages/astria-cli/dist/
 *.node
+# Local Windows native-runtime sidecar (the distribution output lives in dist).
+/packages/astria-cli/DirectML.dll
 .claude/
 .codex/
 .cursor/
@@ -50,3 +52,11 @@ graphify-out/
 
 # local-only: OpenRouter judge key for promptfoo smoke runs (never commit)
 .env.local
+
+# local-only: marketing article drafts (never commit)
+medium/
+
+# Per-machine installation ownership record
+.astria-install.json
+# Native runtime sidecars are generated for package assembly.
+/packages/astria-cli/npm/**/*.dll

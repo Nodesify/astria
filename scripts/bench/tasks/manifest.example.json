@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "output": "C:/eval/results/astria-task-evaluation-001",
+  "timeout_seconds": 1800,
+  "agent": {
+    "command": ["node", "C:/Nodesify/nodesify-graphify/scripts/bench/tasks/codex-adapter.mjs"],
+    "model": "gpt-6.1-sol",
+    "settings": {"codex_binary": "codex.exe", "reasoning_effort": "high", "network": false, "sandbox": "workspace-write", "astria_cli": "C:/Nodesify/nodesify-graphify/packages/astria-cli/dist/index.js"}
+  },
+  "tasks": [
+    {
+      "id": "failed-run-lifetime-spend",
+      "commit": "2509bb184a2bd886a8f0492635ea0556af98643d",
+      "projects": {"baseline": "C:/eval/corpora/spend-baseline", "astria": "C:/eval/corpora/spend-astria"},
+      "indexing": {"artifact": "C:/eval/indexing/spend.json"},
+      "prompt": "Fix the lifetime LLM spend report so measured input tokens, output tokens, and API calls from failed pipeline runs are included alongside completed runs. Preserve per-run reporting and omit unfinished running rows from lifetime totals. Update the explanatory comment. Make no other changes. Do not add or run tests; a compile check is permitted. Explain the affected query and the behavior of running rows in the final answer.",
+      "allowed_edit_paths": ["crates/astria-napi/src/cost.rs"],
+      "grounding": [{"path": "crates/astria-napi/src/cost.rs", "contains": "FROM pipeline_runs WHERE status = 'completed'"}],
+      "rubric": [
+        {"id": "include-failed", "criterion": "fetch_cumulative includes completed and failed pipeline_runs in all three usage sums and run count."},
+        {"id": "exclude-running", "criterion": "The lifetime query excludes running or unfinished status rows; per-run query and fields retain their existing meaning."},
+        {"id": "scope-and-comment", "criterion": "Only cost.rs is edited, its cumulative-spend comment describes failed runs, and no tests are added or executed."}
+      ]
+    },
+    {
+      "id": "watch-startup-and-spawn-failure",
+      "commit": "2509bb184a2bd886a8f0492635ea0556af98643d",
+      "projects": {"baseline": "C:/eval/corpora/watch-baseline", "astria": "C:/eval/corpora/watch-astria"},
+      "indexing": {"artifact": "C:/eval/indexing/watch.json"},
+      "prompt": "Improve the watcher so it runs one initial incremental reconciliation after registering the file watcher, and a failed child-process spawn cannot leave rebuildInFlight permanently true. Use one idempotent completion function for child error and exit so duplicate events cannot start multiple queued rebuilds. Preserve asynchronous rebuilding and event queue behavior. Edit only watch.ts. Do not add or run tests; a TypeScript compile check is permitted. Explain why the watcher remains responsive while rebuilding.",
+      "allowed_edit_paths": ["packages/astria-cli/src/commands/watch.ts"],
+      "grounding": [{"path": "packages/astria-cli/src/commands/watch.ts", "contains": "child.on('error'"}],
+      "rubric": [
+        {"id": "startup-reconciliation", "criterion": "An initial update is launched after fs.watch registration; incoming startup events can still queue the next update."},
+        {"id": "idempotent-completion", "criterion": "Both error and exit release in-flight state through one guarded completion path; at most one queued rebuild starts when both events occur."},
+        {"id": "responsiveness-and-scope", "criterion": "The pipeline still runs in a spawned child, only watch.ts is edited, and no tests are added or executed."}
+      ]
+    }
+  ]
+}

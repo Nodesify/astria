@@ -105,10 +105,12 @@ pub fn extract_component(path: &Path, naming: &Path) -> Result<Extraction> {
                 continue;
             }
             node.source_file = path.to_path_buf();
+            node.source_line = node.source_line.map(|line| line + segment.line_offset);
             nodes.push(node);
         }
         for mut edge in extraction.edges {
             edge.source_file = path.to_path_buf();
+            edge.source_line = edge.source_line.map(|line| line + segment.line_offset);
             edges.push(edge);
         }
     }
@@ -130,16 +132,26 @@ pub fn extract_component(path: &Path, naming: &Path) -> Result<Extraction> {
 struct Segment {
     body: String,
     is_typescript: bool,
+    line_offset: u32,
 }
+
+static ASTRO_FRONTMATTER_RE: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"(?s)\A---\r?\n(.*?)\r?\n---").expect("static regex"));
+static SCRIPT_SEGMENT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"(?is)<script\b([^>]*)>(.*?)</script>"#).expect("static regex")
+});
 
 fn segments(source: &str, ext: &str) -> Vec<Segment> {
     if ext == "astro" {
         // Astro frontmatter: a `---` fenced TS block at the top of the file.
-        let re = Regex::new(r"(?s)\A---\r?\n(.*?)\r?\n---").expect("static regex");
-        return match re.captures(source) {
+        return match ASTRO_FRONTMATTER_RE.captures(source) {
             Some(caps) => vec![Segment {
                 body: caps[1].to_string(),
                 is_typescript: true,
+                line_offset: source[..caps.get(1).unwrap().start()]
+                    .bytes()
+                    .filter(|b| *b == b'\n')
+                    .count() as u32,
             }],
             None => Vec::new(),
         };
@@ -148,14 +160,17 @@ fn segments(source: &str, ext: &str) -> Vec<Segment> {
     static TS_LANG_ATTR: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(r##"lang\s*=\s*["']?ts["']?"##).expect("static regex")
     });
-    let re = Regex::new(r#"(?is)<script\b([^>]*)>(.*?)</script>"#).expect("static regex");
     let mut out = Vec::new();
-    for caps in re.captures_iter(source) {
+    for caps in SCRIPT_SEGMENT_RE.captures_iter(source) {
         let attrs = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
         let is_typescript = TS_LANG_ATTR.is_match(attrs);
         out.push(Segment {
             body: caps[2].to_string(),
             is_typescript,
+            line_offset: source[..caps.get(2).unwrap().start()]
+                .bytes()
+                .filter(|b| *b == b'\n')
+                .count() as u32,
         });
     }
     out

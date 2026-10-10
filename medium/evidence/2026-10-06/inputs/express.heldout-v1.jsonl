@@ -1,0 +1,2 @@
+{"id": "heldout-js-binding", "question": "Where is the response attachment binding implemented?", "expected_files": ["lib/response.js"], "definitions": [{"path": "lib/response.js", "line": 719, "contains": "res.attachment =", "symbol": "res.attachment"}], "evidence": []}
+{"id": "heldout-test-intent", "question": "Find tests for response format content negotiation and invoking another formatter.", "expected_files": ["test/res.format.js"], "definitions": [], "evidence": [{"path": "test/res.format.js", "contains": "should be able to invoke other formatter"}]}

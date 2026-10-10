@@ -1,0 +1,2 @@
+{"id": "express1", "question": "How does json send a JSON response?", "expected_files": ["lib/response.js"], "evidence": [{"path": "lib/response.js", "contains": "res.json =", "url": "https://github.com/expressjs/express/blob/1faf228935aa0a13111f92c28ee795be64ce3f0f/lib/response.js"}]}
+{"id": "express2", "question": "How does sendFile transfer a file?", "expected_files": ["lib/response.js"], "evidence": [{"path": "lib/response.js", "contains": "res.sendFile =", "url": "https://github.com/expressjs/express/blob/1faf228935aa0a13111f92c28ee795be64ce3f0f/lib/response.js"}]}

@@ -15,14 +15,14 @@ The tables below are historical measurements with the methodology and limitation
 
 ## How the token benchmark works
 
-Every `run` and `update` prints a measured comparison:
+The historical token-size benchmark measured this comparison:
 
 - **Corpus side** — the real file sizes from the extraction manifest, converted with a fixed chars-per-token estimate. This is a full-corpus size reference; agents typically use targeted search and read only selected files.
 - **Query side** — five fixed questions are run through the actual query engine and the answer text is counted. No sampling, no hand-picked best case.
 
-The ratio is printed even when it is unflattering: on tiny corpora the benchmark honestly reports &lt;1× and says so — there the graph's value is structure, not compression.
+On tiny corpora this ratio can fall below 1×. Indexing no longer runs or prints this synthetic benchmark automatically; current retrieval checks run through the explicit quality workflow below.
 
-The printed estimate uses a 4-chars-per-token heuristic. The [live snapshot](#live-benchmark-snapshot) additionally reports a `token_parity` block: both tools' corpus and query tokens re-counted with **one shared tokenizer** (o200k_base via js-tiktoken), so the snapshot's absolute numbers are directly comparable — the divergence between the two tools' own corpus estimates (~87k vs ~158k on the same files) is estimator, not bytes.
+The historical estimate used a 4-chars-per-token heuristic. The [live snapshot](#live-benchmark-snapshot) additionally reports a `token_parity` block: both tools' corpus and query tokens re-counted with **one shared tokenizer** (o200k_base via js-tiktoken), so the snapshot's absolute numbers are directly comparable — the divergence between the two tools' own corpus estimates (~87k vs ~158k on the same files) is estimator, not bytes.
 
 ## Canonical numbers (v0.8.0)
 
@@ -155,7 +155,8 @@ npm install -g @nodesify/astria
 
 # self corpus
 git clone https://github.com/Nodesify/astria && cd astria
-astria run .            # prints the benchmark at the end
+astria run . --backend none
+node scripts/bench/quality/run-quality.mjs --astria astria
 astria run . --embed    # embedding experiment
 
 # Graphify's repository — the head-to-head corpus

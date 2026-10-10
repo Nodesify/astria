@@ -1,0 +1,73 @@
+{
+  "output": "bench-work/medium-reproduction-20261006",
+  "python": "PATH_TO_GRAPHIFY_PYTHON",
+  "graphify_source": "PATH_TO_PINNED_GRAPHIFY_CHECKOUT",
+  "graphify_commit": "5c7b84792f453582676548185aaec3824d51dfe2",
+  "astria_cli": "packages/astria-cli/dist/index.js",
+  "astria_native": "target/release/astria_napi.dll",
+  "profile": "release",
+  "corpora": [
+    {
+      "name": "astria-self",
+      "source": ".",
+      "commit": "5e69c63cee176a7addc3b5c4414280bba3d2d815",
+      "golden": "medium/evidence/2026-10-06/inputs/astria-self.jsonl",
+      "split": "frozen-v1"
+    },
+    {
+      "name": "astria-self-v2",
+      "source": ".",
+      "commit": "5e69c63cee176a7addc3b5c4414280bba3d2d815",
+      "golden": "medium/evidence/2026-10-06/inputs/astria-self.v2.jsonl",
+      "split": "corrected-v2"
+    },
+    {
+      "name": "click",
+      "source": "PATH_TO_CLICK_GIT_CLONE",
+      "commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+      "golden": "medium/evidence/2026-10-06/inputs/click.jsonl",
+      "split": "frozen-v1",
+      "definitions": "medium/evidence/2026-10-06/inputs/click.diagnostic-definitions.json"
+    },
+    {
+      "name": "click-heldout",
+      "source": "PATH_TO_CLICK_GIT_CLONE",
+      "commit": "934813e4d421071a1b3db3973c02fe2721359a6e",
+      "golden": "medium/evidence/2026-10-06/inputs/click.heldout-v1.jsonl",
+      "split": "additional-validation-v1"
+    },
+    {
+      "name": "express",
+      "source": "PATH_TO_EXPRESS_GIT_CLONE",
+      "commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+      "golden": "medium/evidence/2026-10-06/inputs/express.jsonl",
+      "split": "frozen-v1",
+      "definitions": "medium/evidence/2026-10-06/inputs/express.diagnostic-definitions.json"
+    },
+    {
+      "name": "express-heldout",
+      "source": "PATH_TO_EXPRESS_GIT_CLONE",
+      "commit": "1faf228935aa0a13111f92c28ee795be64ce3f0f",
+      "golden": "medium/evidence/2026-10-06/inputs/express.heldout-v1.jsonl",
+      "split": "additional-validation-v1"
+    },
+    {
+      "name": "ripgrep",
+      "source": "PATH_TO_RIPGREP_GIT_CLONE",
+      "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+      "golden": "medium/evidence/2026-10-06/inputs/ripgrep.jsonl",
+      "split": "frozen-v1"
+    },
+    {
+      "name": "ripgrep-heldout",
+      "source": "PATH_TO_RIPGREP_GIT_CLONE",
+      "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+      "golden": "medium/evidence/2026-10-06/inputs/ripgrep.heldout-v1.jsonl",
+      "split": "additional-validation-v1"
+    }
+  ],
+  "budgets": [
+    1000,
+    4000
+  ]
+}
