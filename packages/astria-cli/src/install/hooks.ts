@@ -83,6 +83,41 @@ try {
 // astria-checkout-hook-end
 `;
 
+// post-merge runs after `git merge` — including the merge commits `git pull`
+// creates when it cannot fast-forward. Fast-forward pulls reach no hook at
+// all (replayed remote commits do not fire post-commit), so staleness
+// surfacing (the hook-guard read guard, `astria status`) covers those;
+// squash merges end in an ordinary commit handled by post-commit.
+const POST_MERGE_SCRIPT = `// astria-merge-hook-start
+const { execSync } = require('child_process');
+const { existsSync } = require('fs');
+const path = require('path');
+${UPDATE_HELPER}
+if (!existsSync('.astria')) process.exit(0);
+
+try {
+  // No shell redirects — see the note in the post-commit script.
+  const gitDir = execSync('git rev-parse --git-dir', { encoding: 'utf-8' }).trim();
+  if (existsSync(path.join(gitDir, 'rebase-merge')) || existsSync(path.join(gitDir, 'rebase-apply'))) process.exit(0);
+
+  // The first-parent diff is what the merge brought in relative to the
+  // pre-merge branch state (post-merge only fires on true merges, so HEAD
+  // always has a second parent by the time this runs). HEAD~1 is used over
+  // the equivalent HEAD^1: execSync spawns cmd.exe on Windows, where ^ is
+  // an escape character and would silently mangle the revision.
+  const changed = execSync('git diff --name-only HEAD~1 HEAD || git diff --name-only HEAD', { encoding: 'utf-8' }).trim();
+  if (!changed) process.exit(0);
+
+  const codeExts = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.go', '.java', '.c', '.h', '.cpp', '.cc', '.cxx', '.hpp']);
+  const hasCode = changed.split(/\\r?\\n/).some(f => codeExts.has(path.extname(f)));
+  if (hasCode) {
+    console.log('[astria] Merge completed - refreshing knowledge graph...');
+    runAstriaUpdate();
+  }
+} catch {}
+// astria-merge-hook-end
+`;
+
 interface HookDef {
   hookName: string;
   script: string;
@@ -120,6 +155,15 @@ const HOOK_DEFS: HookDef[] = [
       { startMarker: '// nodesify-graphify-checkout-hook-start', endMarker: '// nodesify-graphify-checkout-hook-end' },
       { startMarker: '# nodesify-graphify-checkout-hook-start', endMarker: '# nodesify-graphify-checkout-hook-end' },
     ],
+  },
+  {
+    hookName: 'post-merge',
+    script: POST_MERGE_SCRIPT,
+    startMarker: '// astria-merge-hook-start',
+    endMarker: '// astria-merge-hook-end',
+    // No legacy release ever shipped a post-merge hook, so there is no
+    // earlier marker family to recognize or replace here.
+    legacyMarkers: [],
   },
 ];
 

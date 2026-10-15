@@ -249,7 +249,7 @@ Repeated queries leave a trace: node pairs that keep coming up across distinct q
 
 ### Git hooks
 
-`astria hook install|uninstall|status` — per-machine git hooks that run a quiet, freshness-throttled `astria update .` after every code commit and branch switch, so the graph stays current without anyone remembering to run `update`. Skips during rebase/merge; re-run `astria hook install` after upgrading astria to refresh the installed template. `astria hook-guard <mode>` installs the editor PreToolUse guard (`search | read | gemini`).
+`astria hook install|uninstall|status` — per-machine git hooks that run a quiet, freshness-throttled `astria update .` after every code commit, branch switch, and merge (including the merges `git pull` creates), so the graph stays current without anyone remembering to run `update`. Skips while a rebase is in progress; re-run `astria hook install` after upgrading astria to refresh the installed template. `astria hook-guard <mode>` installs the editor PreToolUse guard (`search | read | gemini`); when the graph has evidence for the tool call, the guard names matching symbols with their `file:line` locations and a ready-to-run query instead of a generic reminder (disable with `ASTRIA_HOOK_CONTEXT=0`).
 
 
 ### `astria stats [options]`
@@ -287,7 +287,7 @@ astria wiki --format obsidian --out my-vault   # Obsidian vault + canvas
 
 ## Post-Edit Protocol
 
-With git hooks installed (`astria hook install`), the graph refreshes itself after every commit — nothing to do.
+With git hooks installed (`astria hook install`), the graph refreshes itself after every commit and merge — nothing to do.
 
 After modifying code files in a session with an active graph (no hooks):
 

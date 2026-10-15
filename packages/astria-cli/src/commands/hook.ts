@@ -6,7 +6,7 @@ export function registerHookCommand(program: Command) {
 
   hook
     .command('install')
-    .description('Install post-commit and post-checkout hooks')
+    .description('Install post-commit, post-checkout, and post-merge hooks')
     .action(() => {
       try {
         const results = installGitHooks('.');
