@@ -10,6 +10,7 @@ export async function queryCommand(question: string, opts: {
   detail?: string;
   cursor?: string;
   noEmbed?: boolean;
+  seed?: string[];
   json?: boolean;
 }) {
   try {
@@ -23,6 +24,7 @@ export async function queryCommand(question: string, opts: {
     // The native layer reads ASTRIA_EMBED at query time; the flag shares the
     // same switch so CLI and MCP callers get identical behavior.
     if (opts.noEmbed) process.env.ASTRIA_EMBED = 'off';
+    const seeds = (opts.seed ?? []).map((s) => s.trim()).filter((s) => s.length > 0);
     const result = queryGraph(
       opts.graph,
       question,
@@ -31,7 +33,8 @@ export async function queryCommand(question: string, opts: {
       budget,
       opts.directed ?? false,
       opts.detail,
-      cursor
+      cursor,
+      seeds.length > 0 ? seeds : null
     );
     if (opts.json) {
       console.log(
@@ -42,6 +45,7 @@ export async function queryCommand(question: string, opts: {
             depth,
             budget,
             directed: opts.directed ?? false,
+            seeds,
             nodeCount: result.nodeCount,
             edgeCount: result.edgeCount,
             // Present when the node list was truncated; pass back as --cursor.
@@ -54,6 +58,7 @@ export async function queryCommand(question: string, opts: {
             renderedTokens: result.renderedTokens,
             elapsedMilliseconds: result.elapsedMilliseconds,
             snapshotEstimatedBytes: result.snapshotEstimatedBytes,
+            unresolvedSeeds: result.unresolvedSeeds ?? [],
             text: result.text,
           },
           null,

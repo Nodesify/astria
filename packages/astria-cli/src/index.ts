@@ -114,6 +114,7 @@ program
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
   .option('--cursor <n>', 'Continuation token from a previous truncated query', '0')
   .option('--no-embed', 'Skip auto-merged embedding seeds even when the graph has vectors')
+  .option('--seed <symbol>', 'Explicit seed node (repeatable): id, label, or source path. The traversal starts from these instead of keyword ranking; unresolved seeds are reported', (value: string, previous: string[]) => [...previous, value], [] as string[])
   .option('--json', 'Emit machine-readable JSON')
   .action(queryCommand);
 

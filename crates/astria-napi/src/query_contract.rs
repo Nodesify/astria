@@ -87,6 +87,9 @@ pub struct QueryResultJs {
     pub rendered_tokens: i64,
     pub elapsed_milliseconds: i64,
     pub snapshot_estimated_bytes: i64,
+    /// Explicitly supplied seeds that resolved to no node. Empty unless
+    /// seeds were requested; all-unresolved seeds yield an explicit miss.
+    pub unresolved_seeds: Vec<String>,
 }
 impl From<astria_query::QueryResponse> for QueryResultJs {
     fn from(r: astria_query::QueryResponse) -> Self {
@@ -128,6 +131,7 @@ impl From<astria_query::QueryResponse> for QueryResultJs {
             rendered_tokens: r.rendered_tokens as i64,
             elapsed_milliseconds: r.elapsed_milliseconds as i64,
             snapshot_estimated_bytes: r.snapshot_estimated_bytes as i64,
+            unresolved_seeds: r.unresolved_seeds,
         }
     }
 }
