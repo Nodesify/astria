@@ -336,8 +336,17 @@ pub fn extract(
         crate::naming::disambiguate_duplicate_ids(result);
     }
 
-    // Cross-file resolution: try to match call/import targets to known node IDs
-    resolve_cross_file_references(&mut results);
+    // Cross-file resolution: try to match call/import targets to known node
+    // IDs, with the project's declared import mappings (tsconfig paths,
+    // workspace entries) in scope. Resolution runs over the full corpus on
+    // every build — including unchanged files served from the extraction
+    // cache — so a config change refreshes every affected binding even
+    // though no importing file changed.
+    let imports = crate::project::load_import_context(root);
+    crate::refs::resolve_cross_file_references_with(
+        &mut results,
+        (!imports.is_empty()).then_some(&imports),
+    );
 
     Ok(results)
 }
