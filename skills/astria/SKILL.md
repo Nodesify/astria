@@ -60,7 +60,7 @@ astria update .    # incremental refresh after code changes
 
 If the project has no `.astria/` yet, run `astria run .` first (ask the user if the repo is large). Supported languages include Python, JS, TS, Rust, Go, Java, C, C++, Ruby, Swift, Kotlin, Scala, PHP, C#, Lua, Haskell, Elixir, Shell, Dart, Zig, CSS, Terraform/HCL, PowerShell, Verilog/SystemVerilog, and Metal (25 configurations).
 
-After editing code in a session with an active graph, run `astria update .` so later answers reflect the change. `astria hook install` automates this as a post-commit git hook; semantic enrichment backends accept `--judge jev` for a calibrated second opinion on the generated graph.
+After editing code in a session with an active graph, run `astria update .` so later answers reflect the change. `astria hook install` automates this as post-commit/post-merge git hooks; semantic enrichment backends accept `--judge jev` for a calibrated second opinion on the generated graph.
 
 ## Command quick reference
 

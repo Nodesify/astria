@@ -25,7 +25,7 @@ astria merge <pathA> <pathB> <outPath>       # Merge two graphs
 astria diff <pathA> <pathB>                  # Compare two graphs
 astria history [--limit 20] [--graph .]      # Show recent query history
 astria install [--platform claude]           # Install skill files for AI coding assistants
-astria hook install                          # Install git post-commit/post-checkout hooks
+astria hook install                          # Install git post-commit/post-checkout/post-merge hooks
 ```
 
 Running `astria run .` creates `.astria/` with:
