@@ -299,8 +299,17 @@ pub fn extract(
             }
         };
 
+        // AST extractions depend on the grammar build: the cache key mixes
+        // the parser fingerprint, so a grammar upgrade re-extracts only the
+        // affected language's files — never the whole corpus, never other
+        // languages.
+        let ast_hash = crate::cache::file_hash_tagged(
+            file_path,
+            &crate::cache::grammar_fingerprint(cfg.name),
+        )?;
+
         // Check cache
-        if let Some(cached) = check_cache(db, file_path, &hash) {
+        if let Some(cached) = check_cache(db, file_path, &ast_hash) {
             results.push(cached);
             continue;
         }
@@ -309,7 +318,7 @@ pub fn extract(
         let extraction = extract_single(file_path, cfg, naming)?;
 
         // Save to cache
-        save_cache(db, file_path, &hash, &extraction);
+        save_cache(db, file_path, &ast_hash, &extraction);
 
         results.push(extraction);
     }
