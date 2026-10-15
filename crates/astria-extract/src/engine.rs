@@ -265,8 +265,11 @@ pub fn extract(
         }
 
         // Component files carry their logic in embedded TS/JS blocks;
-        // extract those with the JavaScript/TypeScript grammars.
-        if matches!(ext, "vue" | "svelte" | "astro") {
+        // extract those with the JavaScript/TypeScript grammars. A project
+        // extension override reroutes the suffix to a real parser instead.
+        if astria_core::languages::extension_override(ext).is_none()
+            && matches!(ext, "vue" | "svelte" | "astro")
+        {
             results.push(crate::langs::embedded::extract_component(
                 file_path, naming,
             )?);
@@ -275,11 +278,14 @@ pub fn extract(
 
         // VB.NET and Pascal have no tree-sitter grammar crate; use the
         // regex-fallback extractors (same approach as upstream graphify).
-        if ext == "vb" {
+        // Extensions remapped by a project override go to the mapped
+        // parser below instead of these defaults.
+        let overridden = astria_core::languages::extension_override(ext).is_some();
+        if !overridden && ext == "vb" {
             results.push(crate::langs::vb_net::extract_regex(file_path, naming)?);
             continue;
         }
-        if matches!(ext, "pas" | "dpr" | "dpk" | "inc") {
+        if !overridden && matches!(ext, "pas" | "dpr" | "dpk" | "inc") {
             results.push(crate::langs::pascal::extract_regex(file_path, naming)?);
             continue;
         }

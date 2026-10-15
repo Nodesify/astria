@@ -30,12 +30,16 @@ pub fn file_hash(path: &Path) -> Result<String, AstriaError> {
 }
 
 /// Parser fingerprint for one extraction language: the tree-sitter core
-/// version (a runtime upgrade affects every grammar) plus the grammar
-/// crate that parses the language. Languages with no grammar dependency
-/// get a stable placeholder, so their cache keys stay content-driven.
+/// version (a runtime upgrade affects every grammar), the grammar crate
+/// that parses the language, and the language name itself — a project
+/// extension override can remap a suffix between languages that share a
+/// grammar crate (C and Metal both parse with tree-sitter-cpp), and the
+/// remap must still invalidate the affected files. Languages with no
+/// grammar dependency get a stable placeholder, so their cache keys stay
+/// content-driven.
 pub fn grammar_fingerprint(language: &str) -> String {
     match GRAMMAR_VERSIONS.iter().find(|(name, _)| *name == language) {
-        Some((_, tag)) => format!("{TREE_SITTER_CORE}|{tag}"),
+        Some((_, tag)) => format!("{TREE_SITTER_CORE}|{tag}|{language}"),
         None => "unversioned".to_string(),
     }
 }

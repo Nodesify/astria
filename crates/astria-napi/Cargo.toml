@@ -13,6 +13,7 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 tempfile = "3"
+toml = { workspace = true }
 url = { workspace = true }
 napi = { version = "3", features = ["tokio_rt"] }
 napi-derive = "3"
@@ -50,3 +51,4 @@ napi-build = "2"
 
 [dev-dependencies]
 tempfile = "3"
+toml = { workspace = true }
