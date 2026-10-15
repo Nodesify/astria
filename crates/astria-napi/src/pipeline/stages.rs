@@ -157,16 +157,22 @@ pub(crate) fn label_communities_stage_with(
             ids.sort_unstable();
             astria_core::db::community_member_hash(&ids)
         };
-        let (stored_source, stored_hash): (String, Option<String>) = db
-            .query_row(
-                "SELECT label_source, member_hash FROM communities WHERE id = ?1",
+        let (stored_source, stored_hash, stored_summary): (String, Option<String>, Option<String>) =
+            db.query_row(
+                "SELECT label_source, member_hash, summary FROM communities WHERE id = ?1",
                 rusqlite::params![id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .unwrap_or_else(|_| ("hub".to_string(), None));
+            .unwrap_or_else(|_| ("hub".to_string(), None, None));
+        // Summary freshness is separate from label retention: a NULL summary
+        // under an 'llm' label means clustering kept the name by majority
+        // continuity after a membership change — the label is stable, but
+        // the one-line summary described the old member set and must be
+        // recomputed rather than skipped as a cache hit.
         if stored_source == "llm"
             && stored_hash.as_deref() == Some(member_hash.as_str())
             && stored_configuration.as_deref() == Some(cache_fingerprint.as_str())
+            && stored_summary.is_some()
         {
             stats.reused += 1;
             continue;

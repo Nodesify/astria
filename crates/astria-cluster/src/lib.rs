@@ -291,6 +291,12 @@ pub fn cluster_with(
     }
     let labels: Vec<u32> = labels.iter().map(|l| remap[l]).collect();
 
+    // Previous LLM-named communities with their member id sets, read BEFORE
+    // node communities are overwritten: majority-continuity label
+    // preservation below needs shared membership, which the stored hash
+    // alone cannot express.
+    let previous_named = read_previous_named_communities(db)?;
+
     // Write communities back to SQLite
     for (i, id) in node_ids.iter().enumerate() {
         db.execute(
@@ -355,38 +361,17 @@ pub fn cluster_with(
 
     let final_labels = naming::source_labels(db, &node_ids, &labels, &node_sources);
 
-    // LLM enrichment from the previous build: a community whose membership
-    // is unchanged keeps its `--label-communities` name/summary across
-    // rebuilds; a changed membership falls back to the fresh source module
-    // label (a stale LLM name for a different group would be misleading).
-    // Community ids may shift after a rebuild; membership, not the id,
-    // determines whether an existing LLM label is still valid.
-    let previous_enrichment: HashMap<String, (String, Option<String>)> = {
-        let mut stmt = db.prepare(
-            "SELECT label, summary, label_source, member_hash FROM communities ORDER BY id",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, Option<String>>(3)?,
-            ))
-        })?;
-        let mut enrichment = HashMap::new();
-        for row in rows {
-            let (label, summary, source, hash) = row?;
-            if source == "llm" && !label.trim().is_empty() {
-                if let Some(hash) = hash.filter(|h| !h.is_empty()) {
-                    enrichment.entry(hash).or_insert((label, summary));
-                }
-            }
-        }
-        enrichment
-    };
+    // LLM enrichment from the previous build survives re-clustering when the
+    // community is recognizably the same group of symbols. Exact membership
+    // is the clean case; majority continuity additionally keeps a label
+    // across refactors that add or drop a minority of members, as long as
+    // the shared members are a strict majority of BOTH the previous and the
+    // current community. Community ids may shift after a rebuild;
+    // membership overlap, not the id, decides continuity.
 
     // Membership hash per (new) community id, written alongside the label so
     // the labeling stage can skip unchanged communities without a call.
+    let mut new_members: HashMap<u32, Vec<&str>> = HashMap::new();
     let mut member_hashes: HashMap<u32, String> = HashMap::new();
     for &c in communities.keys() {
         let mut ids: Vec<&str> = node_ids
@@ -397,7 +382,9 @@ pub fn cluster_with(
             .collect();
         ids.sort_unstable();
         member_hashes.insert(c, astria_core::db::community_member_hash(&ids));
+        new_members.insert(c, ids);
     }
+    let preserved = assign_stable_labels(&previous_named, &new_members);
 
     db.execute("DELETE FROM communities", [])?;
     {
@@ -407,11 +394,17 @@ pub fn cluster_with(
         )?;
         for (&c, &size) in &communities {
             let hash = member_hashes.get(&c).map(|s| s.as_str());
-            // Carry the previous LLM name over only when the membership is
-            // byte-identical; everything else gets the deterministic label.
-            let preserved = hash.and_then(|h| previous_enrichment.get(h)).cloned();
-            let (label, summary, label_source) = match preserved {
-                Some((label, summary)) => (label, summary, "llm".to_string()),
+            // Summary freshness is tracked separately from the label: the
+            // thematic name survives a membership change, the one-line
+            // summary written for the old member set does not. A NULL
+            // summary under an 'llm' label marks the community for
+            // re-summarization in the labeling stage.
+            let (label, summary, label_source) = match preserved.get(&c) {
+                Some(prev) => {
+                    let exact = hash == Some(prev.member_hash.as_str());
+                    let summary = if exact { prev.summary.clone() } else { None };
+                    (prev.label.clone(), summary, "llm".to_string())
+                }
                 None => (
                     final_labels
                         .get(&c)
@@ -455,6 +448,113 @@ pub fn cluster_with(
         modularity,
         excluded_hubs,
     })
+}
+
+/// An LLM-named community from the previous build, with the member id set
+/// its label was earned against.
+#[derive(Debug)]
+struct PreviousCommunity {
+    id: i64,
+    label: String,
+    summary: Option<String>,
+    member_hash: String,
+    members: std::collections::HashSet<String>,
+}
+
+/// Read the previous build's LLM-named communities joined with their member
+/// ids from `nodes.community`. Must run before node communities are
+/// rewritten — afterwards the old membership is unrecoverable.
+fn read_previous_named_communities(
+    db: &Connection,
+) -> astria_core::Result<Vec<PreviousCommunity>> {
+    let mut stmt = db.prepare(
+        "SELECT c.id, c.label, c.summary, c.member_hash, n.id
+         FROM communities c JOIN nodes n ON n.community = c.id
+         WHERE c.label_source = 'llm' AND c.label != ''
+           AND c.member_hash IS NOT NULL AND c.member_hash != ''
+         ORDER BY c.id, n.id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut previous: Vec<PreviousCommunity> = Vec::new();
+    for row in rows {
+        let (id, label, summary, member_hash, node_id) = row?;
+        match previous.last_mut() {
+            Some(prev) if prev.id == id => {
+                prev.members.insert(node_id);
+            }
+            _ => {
+                let mut members = std::collections::HashSet::new();
+                members.insert(node_id);
+                previous.push(PreviousCommunity {
+                    id,
+                    label,
+                    summary,
+                    member_hash,
+                    members,
+                });
+            }
+        }
+    }
+    Ok(previous)
+}
+
+/// Majority-continuity label assignment: a new community may keep a
+/// previous community's LLM label when their shared members are a strict
+/// majority of BOTH memberships (`shared * 2 > old_size` and
+/// `shared * 2 > new_size`). Exact membership is the limiting case; a
+/// refactor that adds or removes a minority keeps the thematic name, while
+/// an even split (no strict majority on either side) keeps none.
+///
+/// One previous identity blesses at most one new community and vice versa:
+/// qualifying pairs are considered largest-overlap-first (ties broken by
+/// previous id, then new id) and pairs whose previous or new community is
+/// already claimed are skipped. A split therefore hands the old name to
+/// the dominant fragment only, and a merge never races two old names onto
+/// one community — the old identity with the larger surviving overlap wins.
+fn assign_stable_labels<'a>(
+    previous: &'a [PreviousCommunity],
+    current: &HashMap<u32, Vec<&str>>,
+) -> HashMap<u32, &'a PreviousCommunity> {
+    let mut candidates: Vec<(usize, u32, usize)> = Vec::new();
+    for (prev_idx, prev) in previous.iter().enumerate() {
+        if prev.members.is_empty() {
+            continue;
+        }
+        for (&new_id, members) in current {
+            let shared = members
+                .iter()
+                .filter(|m| prev.members.contains(**m))
+                .count();
+            if shared * 2 > prev.members.len() && shared * 2 > members.len() {
+                candidates.push((prev_idx, new_id, shared));
+            }
+        }
+    }
+    candidates.sort_by(|a, b| {
+        b.2.cmp(&a.2)
+            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+    let mut taken_previous: std::collections::HashSet<usize> = Default::default();
+    let mut taken_new: std::collections::HashSet<u32> = Default::default();
+    let mut assigned: HashMap<u32, &PreviousCommunity> = HashMap::new();
+    for &(prev_idx, new_id, _) in &candidates {
+        if taken_previous.contains(&prev_idx) || taken_new.contains(&new_id) {
+            continue;
+        }
+        taken_previous.insert(prev_idx);
+        taken_new.insert(new_id);
+        assigned.insert(new_id, &previous[prev_idx]);
+    }
+    assigned
 }
 
 /// Nodes whose degree reaches the hub bar: at least HUB_MIN_DEGREE, and at
@@ -907,62 +1007,149 @@ mod tests {
         );
     }
     #[test]
-    fn llm_labels_survive_unchanged_recluster_and_drop_on_change() {
+    fn llm_labels_survive_recluster_by_majority_continuity() {
         use astria_core::db::community_member_hash;
         let db = open_db_in_memory().unwrap();
         seed_graph(&db);
         cluster(&db).unwrap();
 
-        // Simulate a prior --label-communities run on community 0.
-        let mut ids: Vec<String> = db
-            .prepare("SELECT id FROM nodes WHERE community = 0 ORDER BY id")
-            .unwrap()
-            .query_map([], |r| r.get::<_, String>(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
-        ids.sort();
-        let refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
-        let hash = community_member_hash(&refs);
-        db.execute(
-            "UPDATE communities SET label = 'Config & Settings', summary = 'Loads settings.', label_source = 'llm', member_hash = ?1 WHERE id = 0",
-            rusqlite::params![hash],
-        )
-        .unwrap();
+        let member_ids = |db: &Connection| -> Vec<String> {
+            let mut ids: Vec<String> = db
+                .prepare("SELECT id FROM nodes WHERE community = 0 ORDER BY id")
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            ids.sort();
+            ids
+        };
+        let name_llm = |db: &Connection, members: &[String]| {
+            let refs: Vec<&str> = members.iter().map(|s| s.as_str()).collect();
+            let hash = community_member_hash(&refs);
+            db.execute(
+                "UPDATE communities SET label = 'Config & Settings', summary = 'Loads settings.', label_source = 'llm', member_hash = ?1 WHERE id = 0",
+                rusqlite::params![hash],
+            )
+            .unwrap();
+        };
 
-        // Rebuild with identical membership: the LLM label survives.
+        // Rebuild with identical membership: label AND summary survive.
+        name_llm(&db, &member_ids(&db));
         cluster(&db).unwrap();
-        let (label, source): (String, String) = db
+        let (label, summary, source): (String, Option<String>, String) = db
             .query_row(
-                "SELECT label, label_source FROM communities WHERE id = 0",
+                "SELECT label, summary, label_source FROM communities WHERE id = 0",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
         assert_eq!(
             (label.as_str(), source.as_str()),
             ("Config & Settings", "llm")
         );
+        assert_eq!(summary.as_deref(), Some("Loads settings."));
 
-        // Membership drifts (stale hash): the label falls back to the
-        // deterministic one and provenance returns to 'source'.
-        db.execute(
-            "UPDATE communities SET member_hash = 'stale' WHERE id = 0",
-            [],
+        // Minority drift: the previous named community covered {a, b, c}
+        // while the rebuild clusters all four nodes together. Shared
+        // members are a strict majority of both sides, so the label
+        // survives — but the summary, written for the old member set, is
+        // dropped and the community is marked for re-summarizing.
+        db.execute("UPDATE nodes SET community = NULL WHERE id = 'd'", [])
+            .unwrap();
+        name_llm(&db, &member_ids(&db));
+        cluster(&db).unwrap();
+        let (label, summary, source): (String, Option<String>, String) = db
+            .query_row(
+                "SELECT label, summary, label_source FROM communities LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (label.as_str(), source.as_str()),
+            ("Config & Settings", "llm"),
+            "minority membership drift must keep the label"
+        );
+        assert_eq!(
+            summary, None,
+            "a stale summary must not survive a membership change"
+        );
+
+        // Majority drift: only {a} remains of the named community. Three
+        // of the four clustered nodes were never part of it, so continuity
+        // is lost and the label falls back to the deterministic one.
+        db.execute_batch(
+            "UPDATE nodes SET community = NULL WHERE id IN ('b', 'c');
+             UPDATE communities SET label = 'Config & Settings', label_source = 'llm' WHERE id = 0;",
         )
         .unwrap();
         cluster(&db).unwrap();
         let (label, source): (String, String) = db
             .query_row(
-                "SELECT label, label_source FROM communities WHERE id = 0",
+                "SELECT label, label_source FROM communities LIMIT 1",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
         assert_eq!(
             source, "source",
-            "stale membership must not keep an LLM label"
+            "lost majority continuity must not keep an LLM label"
         );
         assert_ne!(label, "Config & Settings");
+    }
+
+    fn previous(id: i64, label: &str, members: &[&str]) -> PreviousCommunity {
+        PreviousCommunity {
+            id,
+            label: label.to_string(),
+            summary: Some("old summary".to_string()),
+            member_hash: format!("hash-{id}"),
+            members: members.iter().map(|m| m.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn strict_majority_of_both_sides_preserves_a_label() {
+        let old = vec![previous(0, "Auth", &["a", "b", "c", "d"])];
+        // 3 of 4 old members and 3 of 4 new members are shared: both sides
+        // hold a strict majority.
+        let new: HashMap<u32, Vec<&str>> =
+            HashMap::from([(7u32, vec!["a", "b", "c", "e"])]);
+        let assigned = assign_stable_labels(&old, &new);
+        assert_eq!(assigned.get(&7).unwrap().label, "Auth");
+        // 50/50 even split: no strict majority, no preservation.
+        let split: HashMap<u32, Vec<&str>> =
+            HashMap::from([(7u32, vec!["a", "b", "x", "y"])]);
+        assert!(assign_stable_labels(&old, &split).is_empty());
+    }
+
+    #[test]
+    fn splits_and_merges_assign_one_identity_unambiguously() {
+        // Split: old community of 6 breaks into fragments of 4 and 2. Only
+        // the dominant fragment holds a strict majority of the old side
+        // (4*2 > 6), so exactly one new community keeps the label.
+        let old = vec![previous(0, "Payments", &["a", "b", "c", "d", "e", "f"])];
+        let fragments: HashMap<u32, Vec<&str>> = HashMap::from([
+            (1u32, vec!["a", "b", "c", "d"]),
+            (2u32, vec!["e", "f"]),
+        ]);
+        let assigned = assign_stable_labels(&old, &fragments);
+        assert_eq!(assigned.len(), 1, "one old name blesses one community");
+        assert_eq!(assigned.get(&1).unwrap().label, "Payments");
+
+        // Merge: two old communities overlap one new one; the identity with
+        // the larger surviving overlap wins, the other is not double-assigned.
+        let olds = vec![
+            previous(0, "Auth", &["a", "b", "c", "d"]),
+            previous(1, "Billing", &["e", "f", "g", "h"]),
+        ];
+        let merged: HashMap<u32, Vec<&str>> = HashMap::from([(
+            5u32,
+            vec!["a", "b", "c", "d", "e", "f"],
+        )]);
+        let assigned = assign_stable_labels(&olds, &merged);
+        assert_eq!(assigned.len(), 1);
+        assert_eq!(assigned.get(&5).unwrap().label, "Auth");
     }
 }
