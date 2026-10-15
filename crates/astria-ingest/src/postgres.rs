@@ -9,7 +9,7 @@ use std::process::Command;
 use astria_core::ids::normalize_id;
 use astria_core::AstriaError;
 use astria_core::Result;
-use astria_extract::{ExtractedEdge, ExtractedNode, Extraction};
+use astria_extract::{ExtractedEdge, ExtractedNode, Extraction, ExtractionStatus};
 
 /// Unit separator between psql output fields (psql -F).
 const FIELD_SEP: char = '\u{1f}';
@@ -123,6 +123,8 @@ pub fn build_extraction(db_name: &str, sections: &[&str]) -> Result<Extraction> 
         file_path: PathBuf::from(format!("postgres://{db_name}")),
         language: "SQL".to_string(),
         nodes,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
         edges,
     })
 }

@@ -17,6 +17,12 @@ pub struct DiagnoseReport {
     pub unlinked_nodes: usize,
     pub file_type_counts: Vec<(String, usize)>,
     pub top_dangling_targets: Vec<(String, usize)>,
+    /// Per-file extraction completeness (complete / partial / unsupported /
+    /// skipped / suspicious_empty / unknown), so "no relationship" stays
+    /// distinguishable from "file not fully understood".
+    pub extraction_status_counts: Vec<(String, usize)>,
+    /// Files whose last extraction was not complete (path, status), capped.
+    pub incomplete_files: Vec<(String, String)>,
 }
 
 pub fn diagnose(db: &Connection) -> astria_core::Result<DiagnoseReport> {
@@ -98,6 +104,31 @@ pub fn diagnose(db: &Connection) -> astria_core::Result<DiagnoseReport> {
             .collect();
     }
 
+    // Extraction completeness from the manifest (a fresh column: graphs
+    // written before it existed read as "unknown", which is itself a
+    // signal to rebuild).
+    {
+        let mut stmt = db.prepare(
+            "SELECT COALESCE(extraction_status, 'unknown'), COUNT(*)
+             FROM file_manifest GROUP BY 1 ORDER BY COUNT(*) DESC, 1 ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+        })?;
+        report.extraction_status_counts = rows.filter_map(|r| r.ok()).collect();
+    }
+    {
+        let mut stmt = db.prepare(
+            "SELECT file_path, extraction_status FROM file_manifest
+             WHERE extraction_status IS NOT NULL AND extraction_status != 'complete'
+             ORDER BY file_path LIMIT 20",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        report.incomplete_files = rows.filter_map(|r| r.ok()).collect();
+    }
+
     Ok(report)
 }
 
@@ -127,6 +158,23 @@ pub fn render(report: &DiagnoseReport) -> String {
         lines.push("Top dangling targets (stub candidates):".to_string());
         for (target, count) in &report.top_dangling_targets {
             lines.push(format!("  {target} — {count} edge(s)"));
+        }
+    }
+    if !report.extraction_status_counts.is_empty() {
+        let counts = report
+            .extraction_status_counts
+            .iter()
+            .map(|(status, c)| format!("{status}: {c}"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        lines.push(format!("Extraction completeness: {counts}"));
+    }
+    if !report.incomplete_files.is_empty() {
+        lines.push(
+            "Files not fully understood (relationships may be missing):".to_string(),
+        );
+        for (path, status) in &report.incomplete_files {
+            lines.push(format!("  {path} — {status}"));
         }
     }
     lines.join("\n")
@@ -173,3 +221,33 @@ mod tests {
         assert!(text.contains("missing"));
     }
 }
+
+    #[test]
+    fn extraction_completeness_summarized_and_flagged() {
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO file_manifest (file_path, content_hash, file_type, last_seen_at, size_bytes, extraction_status)
+             VALUES ('a.rs', 'h', 'Code', '0', 1, 'complete'),
+                    ('b.rs', 'h', 'Code', '0', 1, 'partial'),
+                    ('c.rs', 'h', 'Code', '0', 1, 'suspicious_empty'),
+                    ('d.rs', 'h', 'Code', '0', 1, NULL);",
+        )
+        .unwrap();
+        let report = diagnose(&db).unwrap();
+        assert!(report
+            .extraction_status_counts
+            .contains(&("complete".to_string(), 1)));
+        assert!(report
+            .extraction_status_counts
+            .contains(&("unknown".to_string(), 1)));
+        let flagged: Vec<&(String, String)> = report
+            .incomplete_files
+            .iter()
+            .filter(|(p, _)| p == "b.rs" || p == "c.rs")
+            .collect();
+        assert_eq!(flagged.len(), 2, "non-complete files are listed");
+        let rendered = render(&report);
+        assert!(rendered.contains("Extraction completeness"));
+        assert!(rendered.contains("b.rs"));
+    }
+

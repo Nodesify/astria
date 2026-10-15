@@ -1,7 +1,7 @@
 //! Standard SCIP ingestion. `Extraction.file_path` owns the index; node and
 //! edge source paths are document citations, independent of update ownership.
 use astria_core::{AstriaError, Result};
-use astria_extract::{ExtractedEdge, ExtractedNode, Extraction};
+use astria_extract::{ExtractedEdge, ExtractedNode, Extraction, ExtractionStatus};
 use protobuf::Message;
 use scip::types::{occurrence::Typed_range, Index, Occurrence, SymbolInformation};
 use sha2::{Digest, Sha256};
@@ -309,6 +309,8 @@ pub fn parse_scip(scip_path: &Path, bytes: impl AsRef<[u8]>) -> Result<Extractio
         file_path: scip_path.to_path_buf(),
         language: "SCIP".into(),
         nodes: nodes.into_values().collect(),
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
         edges,
     })
 }

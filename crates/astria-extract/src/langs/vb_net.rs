@@ -6,6 +6,7 @@
 // `contains` edges; imports (Imports X) are captured as import nodes.
 
 use std::fs;
+use crate::schema::ExtractionStatus;
 use std::path::Path;
 
 use astria_core::{AstriaError, Result};
@@ -174,6 +175,8 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
         language: "VB.NET".to_string(),
         nodes,
         edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     })
 }
 

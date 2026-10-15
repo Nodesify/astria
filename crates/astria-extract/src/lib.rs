@@ -11,7 +11,7 @@ pub mod walkers;
 
 pub use engine::extract;
 pub use refs::resolve_cross_file_references;
-pub use schema::{ExtractedEdge, ExtractedNode, Extraction};
+pub use schema::{ExtractedEdge, ExtractedNode, Extraction, ExtractionStatus};
 pub use walkers::{declaration_spans, extract_source};
 
 /// The content-hash family the extraction layer stores under: the plain

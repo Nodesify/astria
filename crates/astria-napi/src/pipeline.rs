@@ -432,6 +432,9 @@ fn run_pipeline_inner(
             &build_configuration,
             options.cli_version,
         )?;
+        // After publish: the manifest rows it wrote must exist before their
+        // per-file extraction status can land on them.
+        record_extraction_status(root, db, &extractions);
         (build_result, semantic_stats)
     } else {
         (
@@ -654,6 +657,42 @@ fn run_pipeline_inner(
         community_labels: label_stats,
         deep_links: deep_stats,
     })
+}
+
+/// Per-file extraction completeness into the manifest: complete/partial/
+/// unsupported/skipped/suspicious-empty plus parser-error notes, keyed the
+/// same way `update_manifest` keys rows (root-relative, normalized). A
+/// row that is not updated here keeps its previous status — correct for
+/// unchanged files, whose extraction was not re-run.
+fn record_extraction_status(
+    root: &Path,
+    db: &Connection,
+    extractions: &[astria_extract::Extraction],
+) {
+    let mut stmt = match db.prepare(
+        "UPDATE file_manifest SET extraction_status = ?1, extraction_notes = ?2 WHERE file_path = ?3",
+    ) {
+        Ok(stmt) => stmt,
+        Err(e) => {
+            eprintln!("warning: cannot record extraction status: {e}");
+            return;
+        }
+    };
+    for extraction in extractions {
+        let relative = extraction.file_path.strip_prefix(root).unwrap_or(&extraction.file_path);
+        let key = astria_paths::normalize(relative);
+        let notes = serde_json::to_string(&extraction.notes).unwrap_or_else(|_| "[]".into());
+        if let Err(e) = stmt.execute(rusqlite::params![
+            extraction.status.as_str(),
+            notes,
+            key,
+        ]) {
+            eprintln!(
+                "warning: failed to record extraction status for {}: {e}",
+                extraction.file_path.display()
+            );
+        }
+    }
 }
 
 /// Load `[languages]` extension overrides from the project's `.astria.toml`
@@ -888,6 +927,53 @@ mod tests {
         )
         .unwrap();
         astria_cluster::cluster(db).unwrap();
+    }
+
+    #[test]
+    fn extraction_status_recorded_into_manifest() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("ok.rs");
+        let bad = dir.path().join("broken.rs");
+        std::fs::write(&good, b"fn a() {}
+").unwrap();
+        std::fs::write(&bad, b"fn b() {
+").unwrap();
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        for file in [&good, &bad] {
+            db.execute(
+                "INSERT INTO file_manifest (file_path, content_hash, file_type, language, last_seen_at, size_bytes)
+                 VALUES (?1, 'h', 'Code', 'Rust', '0', 1)",
+                rusqlite::params![astria_paths::normalize(
+                    file.strip_prefix(dir.path()).unwrap_or(file)
+                )],
+            )
+            .unwrap();
+        }
+        let extractions = astria_extract::extract(&[good.clone(), bad.clone()], dir.path(), &db)
+            .unwrap();
+        record_extraction_status(dir.path(), &db, &extractions);
+        let (status, notes): (String, Option<String>) = db
+            .query_row(
+                "SELECT extraction_status, extraction_notes FROM file_manifest WHERE file_path = ?1",
+                rusqlite::params![astria_paths::normalize(
+                    good.strip_prefix(dir.path()).unwrap_or(&good)
+                )],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "complete");
+        assert!(notes.is_none() || notes.as_deref() == Some("[]"));
+        let (status, _): (String, Option<String>) = db
+            .query_row(
+                "SELECT extraction_status, extraction_notes FROM file_manifest WHERE file_path = ?1",
+                rusqlite::params![astria_paths::normalize(
+                    bad.strip_prefix(dir.path()).unwrap_or(&bad)
+                )],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "partial", "broken syntax must surface as partial");
     }
 
     #[test]

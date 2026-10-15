@@ -59,6 +59,8 @@ pub(super) fn publish(
             language: "removed".into(),
             nodes: Vec::new(),
             edges: Vec::new(),
+            status: astria_extract::ExtractionStatus::Complete,
+            notes: Vec::new(),
         });
         for key in [
             path.clone(),

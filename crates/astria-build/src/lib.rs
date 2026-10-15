@@ -287,6 +287,8 @@ mod tests {
                     source_line: Some(1),
                 })
                 .collect(),
+            status: astria_extract::ExtractionStatus::Complete,
+            notes: Vec::new(),
         }
     }
 
@@ -383,6 +385,8 @@ mod tests {
                 node_type: "function".into(),
             }],
             edges: vec![],
+            status: astria_extract::ExtractionStatus::Complete,
+            notes: Vec::new(),
         };
         let result1 = build(&[ext1], &db).unwrap();
         assert_eq!(result1.nodes_added, 1);
@@ -401,6 +405,8 @@ mod tests {
                 node_type: "function".into(),
             }],
             edges: vec![],
+            status: astria_extract::ExtractionStatus::Complete,
+            notes: Vec::new(),
         };
         let result2 = build(&[ext2], &db).unwrap();
         assert_eq!(result2.nodes_added, 0);
@@ -570,6 +576,8 @@ mod tests {
             language: "Python".into(),
             nodes: vec![],
             edges: vec![],
+            status: astria_extract::ExtractionStatus::Complete,
+            notes: Vec::new(),
         };
         let result = build(&[ext], &db).unwrap();
         assert_eq!(result.nodes_added, 0);
@@ -594,6 +602,8 @@ mod tests {
                 node_type: "function".into(),
             }],
             edges: vec![],
+            status: astria_extract::ExtractionStatus::Complete,
+            notes: Vec::new(),
         };
 
         let ext2 = Extraction {
@@ -617,6 +627,8 @@ mod tests {
                 source_file: PathBuf::from("b.py"),
                 source_line: Some(2),
             }],
+            status: astria_extract::ExtractionStatus::Complete,
+            notes: Vec::new(),
         };
 
         let result = build(&[ext1, ext2], &db).unwrap();

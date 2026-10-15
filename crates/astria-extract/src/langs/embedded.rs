@@ -5,6 +5,7 @@
 // extractors and re-attributed to the component file.
 
 use std::fs;
+use crate::schema::ExtractionStatus;
 use std::path::Path;
 
 use astria_core::{AstriaError, Result};
@@ -126,6 +127,8 @@ pub fn extract_component(path: &Path, naming: &Path) -> Result<Extraction> {
         language: language.to_string(),
         nodes,
         edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     })
 }
 

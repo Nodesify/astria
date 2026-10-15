@@ -150,6 +150,8 @@ mod tests {
                     source_line: Some(1),
                 })
                 .collect(),
+            status: astria_extract::ExtractionStatus::Complete,
+            notes: Vec::new(),
         }
     }
 

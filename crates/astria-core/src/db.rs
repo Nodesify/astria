@@ -278,6 +278,29 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         set_schema_version(&tx, 10)?;
         tx.commit()?;
     }
+    if version < 11 {
+        // v11: per-file extraction completeness. `file_manifest` gains the
+        // outcome of the last extraction (complete / partial / unsupported /
+        // skipped / suspicious_empty) plus parser-error notes, so reports
+        // and MCP results can distinguish missing relationships from
+        // incomplete understanding; `extraction_cache` carries the same
+        // status so cached hits do not forget it.
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "file_manifest", "extraction_status") {
+            tx.execute_batch("ALTER TABLE file_manifest ADD COLUMN extraction_status TEXT;")?;
+        }
+        if !column_exists(&tx, "file_manifest", "extraction_notes") {
+            tx.execute_batch("ALTER TABLE file_manifest ADD COLUMN extraction_notes TEXT;")?;
+        }
+        if !column_exists(&tx, "extraction_cache", "status") {
+            tx.execute_batch("ALTER TABLE extraction_cache ADD COLUMN status TEXT;")?;
+        }
+        if !column_exists(&tx, "extraction_cache", "notes") {
+            tx.execute_batch("ALTER TABLE extraction_cache ADD COLUMN notes TEXT;")?;
+        }
+        set_schema_version(&tx, 11)?;
+        tx.commit()?;
+    }
 
     Ok(())
 }
