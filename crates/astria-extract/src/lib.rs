@@ -10,8 +10,10 @@ pub mod schema;
 pub mod walkers;
 
 mod project;
+mod types;
 pub use engine::extract;
 pub use project::{load_import_context, ImportContext};
+pub use types::{add_dispatch_edges, build_type_index, resolve_typed_receivers};
 pub use refs::resolve_cross_file_references;
 pub use schema::{ExtractedEdge, ExtractedNode, Extraction, ExtractionStatus};
 pub use walkers::{declaration_spans, extract_source};

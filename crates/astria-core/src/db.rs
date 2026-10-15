@@ -408,7 +408,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "10");
+        assert_eq!(version, "12");
     }
 
     #[test]
@@ -485,7 +485,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "10");
+        assert_eq!(version, "12");
         conn.execute(
             "INSERT INTO nodes (id, label, file_type, source_file, signature) VALUES ('a', 'A', 'code', 'f.rs', 'fn a()')",
             [],

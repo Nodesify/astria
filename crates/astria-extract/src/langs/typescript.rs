@@ -13,11 +13,15 @@ pub fn config() -> &'static LanguageConfig {
         #[cfg(not(feature = "lang-typescript"))]
         language_fn: || crate::langs::config::missing_language("typescript"),
         compiled_in: cfg!(feature = "lang-typescript"),
-        class_types: &["class_declaration"],
+        // Interfaces are structural declarations with members: extracting
+        // them as class-kind nodes lets dispatch edges link interface
+        // members to implementing classes (relation `dispatch`).
+        class_types: &["class_declaration", "interface_declaration"],
         function_types: &[
             "function_declaration",
             "generator_function_declaration",
             "method_definition",
+            "method_signature",
             "function_expression",
             "generator_function",
             "arrow_function",
