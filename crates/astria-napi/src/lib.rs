@@ -301,14 +301,16 @@ pub fn save_query_result(
 #[napi]
 pub fn reflect(root: String) -> napi::Result<String> {
     let root_pb = PathBuf::from(&root);
-    let (_, astria_dir) = pipeline::load_graph_db_flexible(&root_pb)
+    let (db, astria_dir) = pipeline::load_graph_db_flexible(&root_pb)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let dir = astria_dir.ok_or_else(|| {
         napi::Error::from_reason("reflect needs a repo graph (not a bare db file)".to_string())
     })?;
     let _writer = astria_core::writer_lock::WriterLock::acquire_in(&dir)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    feedback::reflect(&dir).map_err(|e| napi::Error::from_reason(e.to_string()))
+    // The connection lets reflect drop citations of deleted nodes instead
+    // of teaching lessons about code that no longer exists.
+    feedback::reflect(&dir, Some(&db)).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 #[napi(object)]

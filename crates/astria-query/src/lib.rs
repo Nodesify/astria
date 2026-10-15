@@ -822,6 +822,7 @@ pub use callflow::callflow_mermaid;
 pub use explain::{explain_with_neighbors, EdgeInfoResult, ExplainResult};
 pub use learned::promote_learned_edges;
 pub(crate) use learned::*;
+pub use learned::normalize_question;
 pub use paths::find_shortest_path;
 pub use repo_map::repo_map;
 
