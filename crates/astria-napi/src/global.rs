@@ -648,6 +648,69 @@ fn resolve_cross_repo_calls(db: &Connection) -> Result<usize> {
             .collect();
 
         for (source, stub_target, stub_label, source_file) in rows {
+            // Typed member calls retained at extraction carry
+            // `receiver::type::<Type>::<member>`: resolve them across
+            // repositories by class/interface name plus member evidence —
+            // identity evidence, not bare-name coincidence. Exactly one
+            // foreign (type, member) pair links; ambiguity stays unlinked
+            // (the plain receiver:: namespace without a type stays skipped:
+            // no identity evidence to match on).
+            if let Some(typed) = stub_target.strip_prefix("receiver::type::") {
+                let Some((type_name, member)) = typed.split_once("::") else {
+                    continue;
+                };
+                let caller_repo = match repo_of(db, &source)? {
+                    Some(r) => r,
+                    None => continue,
+                };
+                let mut class_ids: Vec<String> = Vec::new();
+                {
+                    let mut stmt = db.prepare(
+                        "SELECT DISTINCT n.id, n.repo FROM nodes n
+                         WHERE n.label = ?1 AND n.file_type = 'code'
+                           AND EXISTS(SELECT 1 FROM edges c
+                                      WHERE c.relation = 'contains' AND c.source = n.id)",
+                    )?;
+                    let rows: Vec<(String, Option<String>)> = stmt
+                        .query_map(rusqlite::params![type_name], |r| {
+                            Ok((r.get(0)?, r.get(1)?))
+                        })?
+                        .filter_map(|r| r.ok())
+                        .collect();
+                    for (id, repo) in rows {
+                        if repo.as_deref() != Some(caller_repo.as_str()) {
+                            class_ids.push(id);
+                        }
+                    }
+                }
+                let mut member_hits: Vec<String> = Vec::new();
+                {
+                    let mut stmt = db.prepare(
+                        "SELECT c.target FROM edges c JOIN nodes m ON m.id = c.target
+                         WHERE c.relation = 'contains' AND c.source = ?1
+                           AND trim(m.label, '()') = ?2",
+                    )?;
+                    for class_id in &class_ids {
+                        let found: Vec<String> = stmt
+                            .query_map(
+                                rusqlite::params![class_id, member],
+                                |r| r.get(0),
+                            )?
+                            .filter_map(|r| r.ok())
+                            .collect();
+                        member_hits.extend(found);
+                    }
+                }
+                if member_hits.len() == 1 {
+                    let done = db.execute(
+                        "INSERT OR IGNORE INTO edges (source, target, relation, confidence, confidence_score, source_file, context)
+                         VALUES (?1, ?2, 'calls', 'INFERRED', 0.8, ?3, 'global')",
+                        rusqlite::params![source, member_hits[0], source_file],
+                    )?;
+                    added += done;
+                }
+                continue;
+            }
             if stub_target.starts_with("receiver::") {
                 continue;
             }

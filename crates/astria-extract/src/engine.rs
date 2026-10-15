@@ -348,6 +348,27 @@ pub fn extract(
         (!imports.is_empty()).then_some(&imports),
     );
 
+    // Type-aware resolution (TypeScript family): receiver calls resolve
+    // through declared types — constructor parameter properties, typed
+    // fields, locals, and `new` initializers — with inherited members
+    // followed through `extends`. Name/type-derived evidence, same RESOLVED
+    // tier as bare-name bindings; ambiguous receivers stay unresolved.
+    // Unresolved receivers with a known TYPE keep that evidence in a
+    // `receiver::type::<Type>::<member>` target for cross-repository
+    // matching. Interfaces dispatch to implementers as possible targets.
+    let type_index = crate::types::build_type_index(&results);
+    let typed = crate::types::resolve_typed_receivers(&results, &type_index);
+    for (file, edge_index, target) in typed.rewrites {
+        let edge = &mut results[file].edges[edge_index];
+        edge.target = target;
+        edge.confidence = "RESOLVED".to_string();
+        edge.confidence_score = Some(0.85);
+    }
+    for (file, edge_index, target) in typed.typed_unresolved {
+        results[file].edges[edge_index].target = target;
+    }
+    crate::types::add_dispatch_edges(&mut results, &type_index);
+
     Ok(results)
 }
 
