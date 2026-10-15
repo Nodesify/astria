@@ -28,18 +28,10 @@ pub(crate) fn log_query(db: &Connection, question: &str, answer: &str) {
 /// string comparison of confidence labels does NOT order by strength
 /// ("SEMANTIC" > "LLM" lexicographically), so map labels to numbers.
 pub(crate) fn confidence_rank(confidence: &str) -> f64 {
-    match confidence.to_uppercase().as_str() {
-        "DECLARED" => 1.0,
-        "EXTRACTED" => 0.9,
-        // A call expression extracted from source whose bare name bound to
-        // exactly one definition: stronger than co-occurrence inference,
-        // deliberately below the EXTRACTED/DECLARED tier so `--detail high`
-        // (compiler-grade facts) still excludes it.
-        "RESOLVED" => 0.85,
-        "INFERRED" => 0.7,
-        "SEMANTIC" => 0.6,
-        _ => 0.5,
-    }
+    // Single shared ordering with clustering (astria-core::evidence) so
+    // "how strongly is this fact supported" cannot drift between query
+    // scoring and module boundaries.
+    astria_core::evidence::confidence_rank(confidence)
 }
 
 pub(crate) struct LoadedGraph {

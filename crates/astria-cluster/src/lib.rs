@@ -5,6 +5,7 @@ mod naming;
 // splitting (ported from upstream astria v8).
 
 use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
 use petgraph::graph::UnGraph;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -109,20 +110,38 @@ pub fn cluster_with(
         .map(|(i, id)| (id.clone(), NodeIndex::new(i)))
         .collect();
 
-    let mut graph = UnGraph::<String, ()>::new_undirected();
+    let mut graph = UnGraph::<String, f64>::new_undirected();
     for id in &node_ids {
         graph.add_node(id.clone());
     }
 
-    // Load edges
+    // Load edges with evidence weights. Clustering shapes module
+    // boundaries, and an EXTRACTED import must count for more than an
+    // INFERRED name coincidence or a SEMANTIC embedding neighbor — without
+    // weighting, many weak links outvote few strong ones and communities
+    // drift toward whatever the analyzer was least sure about. Learned
+    // usage edges (query-history pairs) are excluded entirely: they are
+    // signals about what agents ask, not about the code's architecture,
+    // and popular queries must not bend module boundaries.
     {
-        let mut stmt = db.prepare("SELECT source, target FROM edges")?;
-        let edges: Vec<(String, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        let mut stmt = db.prepare(
+            "SELECT source, target, confidence, confidence_score FROM edges
+             WHERE relation != 'learned'",
+        )?;
+        let edges: Vec<(String, String, f64)> = stmt
+            .query_map([], |row| {
+                let confidence: String = row.get(2)?;
+                let score: Option<f64> = row.get(3)?;
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    astria_core::evidence::edge_weight(&confidence, score),
+                ))
+            })?
             .collect::<rusqlite::Result<_>>()?;
-        for (src, tgt) in edges {
+        for (src, tgt, weight) in edges {
             if let (Some(&s), Some(&t)) = (id_to_idx.get(&src), id_to_idx.get(&tgt)) {
-                graph.add_edge(s, t, ());
+                graph.add_edge(s, t, weight);
             }
         }
     }
@@ -236,21 +255,31 @@ pub fn cluster_with(
         // to the lower community id. Excluded hubs are skipped — their
         // singleton labels must not absorb fragments; the assignment pass
         // below pulls hubs toward communities, never the reverse.
-        let mut tally: HashMap<u32, usize> = HashMap::new();
+        let mut tally: HashMap<u32, f64> = HashMap::new();
         for &member in &members {
-            for neighbor in graph.neighbors(NodeIndex::new(member)) {
+            let member_idx = NodeIndex::new(member);
+            for edge in graph.edges(member_idx) {
+                let neighbor = if edge.source() == member_idx {
+                    edge.target()
+                } else {
+                    edge.source()
+                };
                 if excluded.contains(&neighbor.index()) {
                     continue;
                 }
                 let nl = labels[neighbor.index()];
                 if nl != fragment {
-                    *tally.entry(nl).or_insert(0) += 1;
+                    *tally.entry(nl).or_insert(0.0) += *edge.weight();
                 }
             }
         }
         let Some((&target, _)) = tally
             .iter()
-            .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+            .max_by(|a, b| {
+                a.1.partial_cmp(b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| b.0.cmp(a.0))
+            })
         else {
             isolated.insert(fragment);
             continue;
@@ -266,16 +295,26 @@ pub fn cluster_with(
     // edges contribute nothing because neither side has a final community
     // until its own turn — exactly the "strongest *community*" semantics.
     for &hub in &excluded {
-        let mut tally: HashMap<u32, usize> = HashMap::new();
-        for neighbor in graph.neighbors(NodeIndex::new(hub)) {
+        let mut tally: HashMap<u32, f64> = HashMap::new();
+        let hub_idx = NodeIndex::new(hub);
+        for edge in graph.edges(hub_idx) {
+            let neighbor = if edge.source() == hub_idx {
+                edge.target()
+            } else {
+                edge.source()
+            };
             if excluded.contains(&neighbor.index()) {
                 continue;
             }
-            *tally.entry(labels[neighbor.index()]).or_insert(0) += 1;
+            *tally.entry(labels[neighbor.index()]).or_insert(0.0) += *edge.weight();
         }
         if let Some((&target, _)) = tally
             .iter()
-            .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+            .max_by(|a, b| {
+                a.1.partial_cmp(b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| b.0.cmp(a.0))
+            })
         {
             labels[hub] = target;
         }
@@ -560,7 +599,7 @@ fn assign_stable_labels<'a>(
 /// Nodes whose degree reaches the hub bar: at least HUB_MIN_DEGREE, and at
 /// least 4× the graph's mean degree. Both bars must clear, so small graphs
 /// (where 12 edges around one node is normal) never gain phantom hubs.
-fn hub_nodes(graph: &UnGraph<String, ()>) -> std::collections::HashSet<usize> {
+fn hub_nodes(graph: &UnGraph<String, f64>) -> std::collections::HashSet<usize> {
     let n = graph.node_count();
     let mut out = std::collections::HashSet::new();
     if n == 0 {
@@ -592,7 +631,7 @@ fn hub_nodes(graph: &UnGraph<String, ()>) -> std::collections::HashSet<usize> {
 /// randomized per process, so `max_by_key` alone would make communities
 /// (and every downstream report) differ between runs.
 fn propagate(
-    graph: &UnGraph<String, ()>,
+    graph: &UnGraph<String, f64>,
     labels: &mut [u32],
     resolution: f64,
     excluded: Option<&std::collections::HashSet<usize>>,
@@ -608,31 +647,42 @@ fn propagate(
                 continue;
             }
             let node_idx = NodeIndex::new(i);
-            let mut neighbor_labels: HashMap<u32, usize> = HashMap::new();
-            let mut neighbor_total = 0usize;
-            for neighbor in graph.neighbors(node_idx) {
+            // Evidence-weighted tally: each neighbor vote counts by the
+            // strength of the edge that connects it.
+            let mut neighbor_labels: HashMap<u32, f64> = HashMap::new();
+            let mut neighbor_total = 0.0f64;
+            for edge in graph.edges(node_idx) {
+                let neighbor = if edge.source() == node_idx {
+                    edge.target()
+                } else {
+                    edge.source()
+                };
                 if is_excluded(neighbor.index()) {
                     continue;
                 }
-                *neighbor_labels.entry(labels[neighbor.index()]).or_insert(0) += 1;
-                neighbor_total += 1;
+                let weight = *edge.weight();
+                *neighbor_labels.entry(labels[neighbor.index()]).or_insert(0.0) += weight;
+                neighbor_total += weight;
             }
-            if neighbor_total == 0 {
+            if neighbor_total <= 0.0 {
                 continue;
             }
-            let max_count = neighbor_labels.values().copied().max().unwrap_or(0);
+            let max_count = neighbor_labels
+                .values()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max);
             // Smallest label id among the maxima: fully deterministic
             // (HashMap iteration order must not decide communities).
             let best_label = neighbor_labels
                 .iter()
-                .filter(|(_, &count)| count == max_count)
+                .filter(|(_, &count)| count >= max_count)
                 .map(|(&label, _)| label)
                 .min()
                 .unwrap_or(labels[i]);
             if best_label == labels[i] {
                 continue;
             }
-            if (max_count as f64) >= resolution * neighbor_total as f64 {
+            if max_count >= resolution * neighbor_total {
                 labels[i] = best_label;
                 changed = true;
             }
@@ -653,18 +703,24 @@ fn sizes_of(labels: &[u32]) -> HashMap<u32, usize> {
 }
 
 /// Build the induced subgraph on `members` (indices into the original graph).
-fn induced_subgraph(graph: &UnGraph<String, ()>, members: &[usize]) -> UnGraph<String, ()> {
-    let mut sub = UnGraph::<String, ()>::new_undirected();
+fn induced_subgraph(graph: &UnGraph<String, f64>, members: &[usize]) -> UnGraph<String, f64> {
+    let mut sub = UnGraph::<String, f64>::new_undirected();
     let mut local: HashMap<usize, NodeIndex> = HashMap::new();
     for &m in members {
         local.insert(m, sub.add_node(String::new()));
     }
     for &m in members {
         if let Some(&lm) = local.get(&m) {
-            for neighbor in graph.neighbors(NodeIndex::new(m)) {
+            let m_idx = NodeIndex::new(m);
+            for edge in graph.edges(m_idx) {
+                let neighbor = if edge.source() == m_idx {
+                    edge.target()
+                } else {
+                    edge.source()
+                };
                 if let Some(&ln) = local.get(&neighbor.index()) {
                     if lm < ln {
-                        sub.add_edge(lm, ln, ());
+                        sub.add_edge(lm, ln, *edge.weight());
                     }
                 }
             }
@@ -1151,5 +1207,104 @@ mod tests {
         let assigned = assign_stable_labels(&olds, &merged);
         assert_eq!(assigned.len(), 1);
         assert_eq!(assigned.get(&5).unwrap().label, "Auth");
+    }
+}
+
+#[cfg(test)]
+mod weight_tests {
+    use super::*;
+    use astria_core::db::open_db_in_memory;
+
+    fn add_code_node(db: &Connection, id: &str) {
+        db.execute(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES (?1, ?1, 'code', 'f.rs')",
+            rusqlite::params![id],
+        )
+        .unwrap();
+    }
+
+    fn add_edge(db: &Connection, source: &str, target: &str, confidence: &str) {
+        db.execute(
+            "INSERT INTO edges (source, target, relation, confidence, source_file)
+             VALUES (?1, ?2, 'uses', ?3, 'f.rs')",
+            rusqlite::params![source, target, confidence],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn extracted_evidence_outweighs_more_numerous_weak_links() {
+        // x joins cluster A through two SEMANTIC links (2 x 0.6 = 1.2) and
+        // cluster B through two EXTRACTED links (2 x 0.9 = 1.8). Counting
+        // edges, 2-vs-2 is a tie; weighing evidence, B wins.
+        let mut graph = UnGraph::<String, f64>::new_undirected();
+        let a1 = graph.add_node("a1".into());
+        let a2 = graph.add_node("a2".into());
+        let b1 = graph.add_node("b1".into());
+        let b2 = graph.add_node("b2".into());
+        let x = graph.add_node("x".into());
+        graph.add_edge(a1, a2, 0.9);
+        graph.add_edge(b1, b2, 0.9);
+        graph.add_edge(x, a1, 0.6);
+        graph.add_edge(x, a2, 0.6);
+        graph.add_edge(x, b1, 0.9);
+        graph.add_edge(x, b2, 0.9);
+
+        let mut labels: Vec<u32> = (0..graph.node_count() as u32).collect();
+        propagate(
+            &graph,
+            &mut labels,
+            ClusterOptions::default().resolution,
+            None,
+        );
+        assert_eq!(
+            labels[x.index()],
+            labels[b1.index()],
+            "x must join the strongly-evidenced cluster"
+        );
+        assert_ne!(
+            labels[x.index()],
+            labels[a1.index()],
+            "the weakly-linked cluster must lose the vote"
+        );
+    }
+
+    #[test]
+    fn learned_usage_edges_do_not_shape_communities() {
+        let db = open_db_in_memory().unwrap();
+        // Two dense clusters bridged ONLY by query-history 'learned' edges:
+        // usage popularity must not merge architectural modules.
+        for id in ["a1", "a2", "a3", "b1", "b2", "b3"] {
+            add_code_node(&db, id);
+        }
+        add_edge(&db, "a1", "a2", "EXTRACTED");
+        add_edge(&db, "a2", "a3", "EXTRACTED");
+        add_edge(&db, "a1", "a3", "EXTRACTED");
+        add_edge(&db, "b1", "b2", "EXTRACTED");
+        add_edge(&db, "b2", "b3", "EXTRACTED");
+        add_edge(&db, "b1", "b3", "EXTRACTED");
+        for (s, t) in [("a1", "b1"), ("a2", "b2"), ("a3", "b3")] {
+            db.execute(
+                "INSERT INTO edges (source, target, relation, confidence, source_file, context)
+                 VALUES (?1, ?2, 'learned', 'INFERRED', 'query_history', 'learned')",
+                rusqlite::params![s, t],
+            )
+            .unwrap();
+        }
+
+        cluster(&db).unwrap();
+        let community_of = |id: &str| -> i64 {
+            db.query_row(
+                "SELECT community FROM nodes WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_ne!(
+            community_of("a1"),
+            community_of("b1"),
+            "learned usage edges must not merge the two modules"
+        );
     }
 }
