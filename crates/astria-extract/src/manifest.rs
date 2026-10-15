@@ -5,6 +5,7 @@
 // inference, and a shared dependency should emerge as a hub node.
 
 use std::path::Path;
+use crate::schema::ExtractionStatus;
 
 use astria_core::ids::normalize_id;
 use astria_core::MANIFEST_FILENAMES;
@@ -135,6 +136,8 @@ pub fn extract_manifest(path: &Path) -> Extraction {
         language: "Manifest".to_string(),
         nodes: builder.nodes,
         edges: builder.edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     }
 }
 

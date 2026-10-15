@@ -19,6 +19,11 @@ export async function statsCommand(opts: { graph: string; json?: boolean }) {
       .map(([t, n]) => `${t}: ${n}`)
       .join(' | ');
     if (types) console.log(`Node types: ${types}`);
+    const extraction = Object.entries((stats.extraction ?? {}) as Record<string, number>)
+      .sort((a, b) => b[1] - a[1])
+      .map(([s, n]) => `${s}: ${n}`)
+      .join(' | ');
+    if (extraction) console.log(`Extraction completeness: ${extraction}`);
   } catch (e: any) {
     console.error(`Error: ${e.message || e}`);
     process.exitCode = 1;

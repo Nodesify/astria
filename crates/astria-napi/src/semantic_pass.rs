@@ -199,6 +199,8 @@ pub(super) fn enrich_with_semantics(
                     language: "image".to_string(),
                     nodes: Vec::new(),
                     edges: Vec::new(),
+                    status: astria_extract::ExtractionStatus::Complete,
+                    notes: Vec::new(),
                 });
                 let idx = extractions.len() - 1;
                 file_to_idx.insert(file_path.clone(), idx);

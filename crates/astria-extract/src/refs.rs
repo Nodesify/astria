@@ -247,7 +247,7 @@ fn unique_candidate<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{ExtractedEdge, ExtractedNode};
+    use crate::schema::{ExtractedEdge, ExtractedNode, ExtractionStatus};
     use std::path::PathBuf;
 
     fn ext(nodes: Vec<ExtractedNode>, edges: Vec<ExtractedEdge>) -> Extraction {
@@ -256,6 +256,8 @@ mod tests {
             language: "Python".into(),
             nodes,
             edges,
+            status: ExtractionStatus::Complete,
+            notes: Vec::new(),
         }
     }
 

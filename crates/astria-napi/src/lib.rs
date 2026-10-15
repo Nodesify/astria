@@ -24,6 +24,10 @@ pub struct DiagnoseReportJs {
     pub unlinked_nodes: i64,
     pub file_type_counts: Vec<String>,
     pub top_dangling_targets: Vec<String>,
+    /// Per-file extraction completeness counts (status -> files).
+    pub extraction_status_counts: Vec<String>,
+    /// Files whose last extraction was not complete ("path: status").
+    pub incomplete_files: Vec<String>,
     pub text: String,
 }
 
@@ -50,6 +54,16 @@ pub fn diagnose_graph(root: String) -> napi::Result<DiagnoseReportJs> {
             .top_dangling_targets
             .iter()
             .map(|(t, c)| format!("{t}:{c}"))
+            .collect(),
+        extraction_status_counts: report
+            .extraction_status_counts
+            .iter()
+            .map(|(s, c)| format!("{s}:{c}"))
+            .collect(),
+        incomplete_files: report
+            .incomplete_files
+            .iter()
+            .map(|(path, status)| format!("{path}: {status}"))
             .collect(),
         text: diagnose::render(&report),
     })
@@ -486,6 +500,9 @@ pub struct GraphStatsJs {
     /// Release targets without prebuilt ONNX binaries (x86_64-apple-darwin)
     /// are compiled without the `embed` feature.
     pub embeddings_supported: bool,
+    /// Per-file extraction completeness (complete / partial / unsupported /
+    /// skipped / suspicious_empty / unknown) from the file manifest.
+    pub extraction: HashMap<String, i64>,
 }
 
 /// Build provenance read from the graph's `_meta` table, so callers can
@@ -742,6 +759,18 @@ pub fn graph_stats(root: String) -> napi::Result<GraphStatsJs> {
         .map_err(|e| napi::Error::from_reason(e.to_string()))?
         .filter_map(|r| r.ok())
         .collect();
+    let extraction: HashMap<String, i64> = {
+        let mut stmt = db
+            .prepare(
+                "SELECT COALESCE(extraction_status, 'unknown'), COUNT(*)
+                 FROM file_manifest GROUP BY 1",
+            )
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
     Ok(GraphStatsJs {
         node_count,
         edge_count,
@@ -749,6 +778,7 @@ pub fn graph_stats(root: String) -> napi::Result<GraphStatsJs> {
         file_count,
         type_counts,
         embeddings_supported: embeddings_supported(),
+        extraction,
     })
 }
 

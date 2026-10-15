@@ -19,7 +19,7 @@ use crate::docs::{
 };
 use crate::langs;
 use crate::refs::resolve_cross_file_references;
-use crate::schema::Extraction;
+use crate::schema::{Extraction, ExtractionStatus};
 use crate::walkers::extract_single;
 use astria_audio::TranscribeError;
 use astria_core::AstriaError;
@@ -153,24 +153,24 @@ pub fn extract(
                     if transcription_notices.insert(notice.clone()) {
                         eprintln!("[astria] google workspace skipped: {notice}");
                     }
-                    results.push(Extraction {
-                        file_path: file_path.clone(),
-                        language: "gws".into(),
-                        nodes: Vec::new(),
-                        edges: Vec::new(),
-                    });
+                    results.push(Extraction::status_only(
+                        file_path.clone(),
+                        "gws",
+                        ExtractionStatus::Skipped,
+                        &notice,
+                    ));
                 }
                 Err(GwsError::Failed(message)) => {
                     eprintln!(
                         "warning: google workspace export failed for {}: {message}",
                         file_path.display()
                     );
-                    results.push(Extraction {
-                        file_path: file_path.clone(),
-                        language: "gws".into(),
-                        nodes: Vec::new(),
-                        edges: Vec::new(),
-                    });
+                    results.push(Extraction::status_only(
+                        file_path.clone(),
+                        "gws",
+                        ExtractionStatus::Skipped,
+                        &format!("failed: {message}")
+                    ));
                 }
             }
             continue;
@@ -199,24 +199,24 @@ pub fn extract(
                     if transcription_notices.insert(notice.clone()) {
                         eprintln!("[astria] media transcription skipped: {notice}");
                     }
-                    results.push(Extraction {
-                        file_path: file_path.clone(),
-                        language: "media".into(),
-                        nodes: Vec::new(),
-                        edges: Vec::new(),
-                    });
+                    results.push(Extraction::status_only(
+                        file_path.clone(),
+                        "media",
+                        ExtractionStatus::Skipped,
+                        &notice,
+                    ));
                 }
                 Err(TranscribeError::Failed(message)) => {
                     eprintln!(
                         "warning: transcription failed for {}: {message}",
                         file_path.display()
                     );
-                    results.push(Extraction {
-                        file_path: file_path.clone(),
-                        language: "media".into(),
-                        nodes: Vec::new(),
-                        edges: Vec::new(),
-                    });
+                    results.push(Extraction::status_only(
+                        file_path.clone(),
+                        "media",
+                        ExtractionStatus::Skipped,
+                        &format!("failed: {message}")
+                    ));
                 }
             }
             continue;
@@ -295,12 +295,12 @@ pub fn extract(
                 // Media can receive semantic facts, but has no structural
                 // extractor. An empty extraction also removes obsolete facts
                 // when semantic enrichment is explicitly disabled.
-                results.push(Extraction {
-                    file_path: file_path.clone(),
-                    language: "media".into(),
-                    nodes: Vec::new(),
-                    edges: Vec::new(),
-                });
+                results.push(Extraction::status_only(
+                    file_path.clone(),
+                    "media",
+                    ExtractionStatus::Unsupported,
+                    "no extractor for this file type",
+                ));
                 continue;
             }
         };

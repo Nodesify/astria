@@ -64,24 +64,39 @@ pub(crate) fn check_cache(db: &Connection, path: &Path, hash: &str) -> Option<Ex
     let path_str = normalize(path);
     let mut stmt = db
         .prepare(
-            "SELECT language, nodes, edges FROM extraction_cache WHERE file_path = ?1 AND content_hash = ?2",
+            "SELECT language, nodes, edges, status, notes FROM extraction_cache WHERE file_path = ?1 AND content_hash = ?2",
         )
         .ok()?;
     stmt.query_row(rusqlite::params![&path_str, hash], |row| {
         let language: String = row.get(0)?;
         let nodes_json: String = row.get(1)?;
         let edges_json: String = row.get(2)?;
-        Ok((language, nodes_json, edges_json))
+        let status: Option<String> = row.get(3)?;
+        let notes_json: Option<String> = row.get(4)?;
+        Ok((language, nodes_json, edges_json, status, notes_json))
     })
     .ok()
-    .and_then(|(language, nodes_json, edges_json)| {
+    .and_then(|(language, nodes_json, edges_json, status, notes_json)| {
         let nodes: Vec<ExtractedNode> = serde_json::from_str(&nodes_json).ok()?;
         let edges: Vec<ExtractedEdge> = serde_json::from_str(&edges_json).ok()?;
+        // Rows from before per-file status existed (NULL) read as complete:
+        // they were produced by the same full-parse path that reports
+        // complete today.
+        let status = status
+            .as_deref()
+            .map(crate::schema::ExtractionStatus::parse)
+            .unwrap_or(crate::schema::ExtractionStatus::Complete);
+        let notes: Vec<String> = notes_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default();
         Some(Extraction {
             file_path: path.to_path_buf(),
             language,
             nodes,
             edges,
+            status,
+            notes,
         })
     })
 }
@@ -91,16 +106,19 @@ pub(crate) fn save_cache(db: &Connection, path: &Path, hash: &str, extraction: &
     let path_str = normalize(path);
     let nodes_json = serde_json::to_string(&extraction.nodes).unwrap_or_default();
     let edges_json = serde_json::to_string(&extraction.edges).unwrap_or_default();
+    let notes_json = serde_json::to_string(&extraction.notes).unwrap_or_default();
     let now = chrono_free_timestamp();
 
     if let Err(e) = db.execute(
-        "INSERT OR REPLACE INTO extraction_cache (file_path, content_hash, language, nodes, edges, extracted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT OR REPLACE INTO extraction_cache (file_path, content_hash, language, nodes, edges, status, notes, extracted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             &path_str,
             hash,
             extraction.language,
             nodes_json,
             edges_json,
+            extraction.status.as_str(),
+            notes_json,
             now,
         ],
     ) {

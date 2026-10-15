@@ -492,8 +492,30 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             } else {
                 ", embeddings: not supported in this build"
             };
+            // Extraction completeness disclosure: an agent reading "0
+            // relationships" must be able to tell missing edges from
+            // partially-understood files.
+            let extraction_txt: String = {
+                let rows: Vec<String> = db
+                    .prepare(
+                        "SELECT COALESCE(extraction_status, 'unknown'), COUNT(*)
+                         FROM file_manifest GROUP BY 1 ORDER BY COUNT(*) DESC",
+                    )
+                    .and_then(|mut stmt| {
+                        stmt.query_map([], |r| {
+                            Ok(format!("{} {}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                        })
+                        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    })
+                    .unwrap_or_default();
+                if rows.is_empty() {
+                    String::new()
+                } else {
+                    format!(", extraction: {}", rows.join(", "))
+                }
+            };
             Ok(text_result(format!(
-                "nodes: {nodes}, edges: {edges}, communities: {communities}, files tracked: {files}{modularity_txt}{embed_txt}"
+                "nodes: {nodes}, edges: {edges}, communities: {communities}, files tracked: {files}{modularity_txt}{embed_txt}{extraction_txt}"
             )))
         }
         "health" => astria_analyze::health::health(db).map(|report| {

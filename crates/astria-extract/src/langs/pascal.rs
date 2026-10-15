@@ -6,6 +6,7 @@
 // nodes with `contains` edges.
 
 use std::fs;
+use crate::schema::ExtractionStatus;
 use std::path::Path;
 
 use astria_core::{AstriaError, Result};
@@ -169,6 +170,8 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
         language: "Pascal/Delphi".to_string(),
         nodes,
         edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     })
 }
 

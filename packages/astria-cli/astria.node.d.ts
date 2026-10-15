@@ -43,6 +43,10 @@ export interface DiagnoseReportJs {
   unlinkedNodes: number;
   fileTypeCounts: Array<string>;
   topDanglingTargets: Array<string>;
+  /** Per-file extraction completeness counts, "status: count". */
+  extractionStatusCounts: Array<string>;
+  /** Files whose last extraction was not complete, "path: status". */
+  incompleteFiles: Array<string>;
   text: string;
 }
 
@@ -73,6 +77,8 @@ export interface GraphStatsJs {
   typeCounts: Record<string, number>;
   /** Whether this build includes the local embedding runtime. */
   embeddingsSupported: boolean;
+  /** Per-file extraction completeness (complete / partial / unsupported / skipped / suspicious_empty / unknown). */
+  extraction: Record<string, number>;
 }
 
 export interface GraphBuildInfoJs {
