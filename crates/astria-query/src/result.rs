@@ -43,6 +43,10 @@ pub struct QueryResponse {
     pub rendered_tokens: usize,
     pub elapsed_milliseconds: u64,
     pub snapshot_estimated_bytes: usize,
+    /// Explicitly supplied seeds that resolved to no node (id, label, or
+    /// source path). Empty unless the caller asked for explicit seeds; when
+    /// every supplied seed is unresolved the response is an explicit miss.
+    pub unresolved_seeds: Vec<String>,
 }
 
 impl QueryResponse {

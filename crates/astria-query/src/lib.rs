@@ -106,11 +106,16 @@ pub fn query_graph(
         min_strength,
         cursor,
         prefer_files,
+        &[],
     )
     .map(QueryResponse::into_output)
 }
 
 /// Query output and build timestamp read from the same SQLite generation.
+/// `seeds` names explicit entry points (node id, label, or source path):
+/// the traversal starts from them instead of keyword ranking, unresolved
+/// seeds are reported in the response, and all-unresolved seeds return an
+/// explicit miss rather than silently falling back to keyword seeds.
 #[allow(clippy::too_many_arguments)]
 pub fn query_graph_with_metadata(
     db: &Connection,
@@ -123,6 +128,7 @@ pub fn query_graph_with_metadata(
     min_strength: f64,
     cursor: usize,
     prefer_files: bool,
+    seeds: &[String],
 ) -> astria_core::Result<QueryResponse> {
     validate_query(question, mode, depth, budget)?;
     let started = std::time::Instant::now();
@@ -198,6 +204,7 @@ pub fn query_graph_with_metadata(
         prefer_files,
         graph_built_at.as_deref(),
         freshness.as_ref(),
+        seeds,
     )
     .map(|mut result| {
         result.graph_built_at = graph_built_at;
@@ -305,6 +312,7 @@ pub fn query_graph_with_semantic(
         prefer_files,
         None,
         None,
+        &[],
     )
     .map(QueryResponse::into_output)
 }
@@ -324,13 +332,58 @@ fn query_graph_loaded(
     prefer_files: bool,
     graph_built_at: Option<&str>,
     freshness: Option<&astria_detect::freshness::GraphFreshness>,
+    seeds: &[String],
 ) -> astria_core::Result<QueryResponse> {
     if loaded.graph.node_count() == 0 {
         let (text, _) = render_page("", &["No nodes in graph.\n".into()], 0, budget)?;
         return Ok(QueryResponse {
             text,
+            unresolved_seeds: seeds.iter().map(|s| s.trim().to_string()).collect(),
             ..Default::default()
         });
+    }
+
+    // Explicit seeds: when the caller names symbols, the traversal starts
+    // from those nodes directly — keyword ranking neither selects nor
+    // filters the entry points, and the seed-confidence floor below does
+    // not apply (its whole job is suppressing incidental keyword matches).
+    // Unresolved seeds are reported; if none resolve, that is an explicit
+    // miss, never a silent switch back to keyword seeds.
+    let has_explicit_seeds = seeds.iter().any(|s| !s.trim().is_empty());
+    let mut unresolved_seeds: Vec<String> = Vec::new();
+    let mut explicit_seed_nodes: Vec<NodeIndex> = Vec::new();
+    if has_explicit_seeds {
+        for seed in seeds {
+            let seed = seed.trim();
+            if seed.is_empty() {
+                continue;
+            }
+            match resolve_explicit_seed(db, &loaded, seed) {
+                Some(idx) => {
+                    if !explicit_seed_nodes.contains(&idx) {
+                        explicit_seed_nodes.push(idx);
+                    }
+                }
+                None => unresolved_seeds.push(seed.to_string()),
+            }
+        }
+        if explicit_seed_nodes.is_empty() {
+            let suggestions =
+                nearest_labels(&loaded, &unresolved_seeds.join(" "), SUGGESTION_COUNT);
+            let mut msg = format!(
+                "No matching nodes for seeds: {}. All supplied seeds must resolve; no keyword fallback was applied.",
+                unresolved_seeds.join(", ")
+            );
+            if !suggestions.is_empty() {
+                msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
+            }
+            let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
+            return Ok(QueryResponse {
+                text,
+                unresolved_seeds,
+                ..Default::default()
+            });
+        }
     }
 
     let terms: Vec<String> = question.split_whitespace().map(|s| s.to_string()).collect();
@@ -386,7 +439,7 @@ fn query_graph_loaded(
         });
     }
 
-    if scored.is_empty() {
+    if scored.is_empty() && explicit_seed_nodes.is_empty() {
         let suggestions = nearest_labels(&loaded, question, SUGGESTION_COUNT);
         let msg = if suggestions.is_empty() {
             "No matching nodes found.".to_string()
@@ -428,6 +481,7 @@ fn query_graph_loaded(
         .iter()
         .any(|(_, cosine)| semantic_seed_score(*cosine) >= SEMANTIC_SEED_FLOOR);
     if seed_floor_enabled()
+        && explicit_seed_nodes.is_empty()
         && !semantic_qualifies
         && !docs_majority
         && !scored_nodes.entry_intent
@@ -460,98 +514,106 @@ fn query_graph_loaded(
     // Doc headings keyword-match almost as strongly as code, and when they
     // dominate the seed set the traversal starts in prose and never reaches
     // the implementing crate file. Code/pattern/package seeds are unbounded.
-    let mut seed_nodes: Vec<NodeIndex> = Vec::new();
-    // Reserve one candidate per explicitly named identifier or scope when a
-    // full match exists. Weak partial words cannot claim coverage.
-    for term in &terms {
-        if !is_explicit_identifier(term) || term.len() <= 2 {
-            continue;
-        }
-        if let Some(&(_, idx)) = scored.iter().find(|(_, idx)| {
-            let node = &loaded.graph[*idx];
-            if node.source_file.is_empty()
-                || matches!(node.file_type.as_str(), "stub" | "reference")
-            {
-                return false;
+    // Explicit seeds skip this machinery altogether: the caller already
+    // chose the entry points, so quotas and reservations would only
+    // second-guess them.
+    let seed_nodes: Vec<NodeIndex> = if !explicit_seed_nodes.is_empty() {
+        explicit_seed_nodes
+    } else {
+        let mut seed_nodes: Vec<NodeIndex> = Vec::new();
+        // Reserve one candidate per explicitly named identifier or scope when a
+        // full match exists. Weak partial words cannot claim coverage.
+        for term in &terms {
+            if !is_explicit_identifier(term) || term.len() <= 2 {
+                continue;
             }
-            definition_identifier_match(term, &node.id, &node.label, &node.source_file)
-                || path_discriminator_match(term, &node.source_file)
-        }) {
-            if !seed_nodes.contains(&idx) {
+            if let Some(&(_, idx)) = scored.iter().find(|(_, idx)| {
+                let node = &loaded.graph[*idx];
+                if node.source_file.is_empty()
+                    || matches!(node.file_type.as_str(), "stub" | "reference")
+                {
+                    return false;
+                }
+                definition_identifier_match(term, &node.id, &node.label, &node.source_file)
+                    || path_discriminator_match(term, &node.source_file)
+            }) {
+                if !seed_nodes.contains(&idx) {
+                    seed_nodes.push(idx);
+                }
+            }
+        }
+        let seed_limit = 5.max(seed_nodes.len());
+        // Doc-seed quota: on code corpora two prose seeds already outrank
+        // silence, and more would crowd code out of the seed set. On
+        // docs-majority graphs (transcript corpora, docs sites with no code)
+        // the quota would leave the traversal nearly seedless — there is no
+        // code to protect, so the quota opens up to the full seed limit.
+        let doc_seed_quota = if docs_majority { seed_limit } else { 2 };
+        let mut doc_seeds = seed_nodes
+            .iter()
+            .filter(|&&idx| {
+                is_doc_type(&loaded.graph[idx].file_type)
+                    || is_semantic_type(&loaded.graph[idx].file_type)
+            })
+            .count();
+        for &(_, idx) in scored.iter() {
+            if seed_nodes.len() == seed_limit {
+                break;
+            }
+            if seed_nodes.contains(&idx) {
+                continue;
+            }
+            if loaded.graph[idx].source_file.is_empty()
+                || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference")
+            {
+                continue;
+            }
+            if is_doc_type(&loaded.graph[idx].file_type)
+                || is_semantic_type(&loaded.graph[idx].file_type)
+            {
+                if doc_seeds >= doc_seed_quota && !wants_docs(&terms) {
+                    continue;
+                }
+                doc_seeds += 1;
+            }
+            seed_nodes.push(idx);
+        }
+        // Semantic-only reservation: embedding recall must be able to start the
+        // traversal when the question shares no vocabulary with the answer —
+        // its advertised purpose ("conceptual questions with zero string
+        // overlap still find their symbols"). Such a node's rescaled cosine
+        // (~0-0.67) never outranks token matches (2+), so without this slot
+        // --embed is inert exactly where it matters. One slot for the best
+        // qualifying node: embedding evidence above the floor, zero token
+        // evidence, not a stub.
+        if !semantic.is_empty() && seed_limit >= 3 {
+            let best = semantic
+                .iter()
+                .filter_map(|(node_id, cosine)| {
+                    let &idx = loaded.id_to_idx.get(node_id)?;
+                    if seed_nodes.contains(&idx)
+                        || loaded.graph[idx].source_file.is_empty()
+                        || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference")
+                    {
+                        return None;
+                    }
+                    if token_scores.get(&idx).copied().unwrap_or(0.0) > 0.0 {
+                        return None;
+                    }
+                    let score = semantic_seed_score(*cosine);
+                    (score >= SEMANTIC_SEED_FLOOR).then_some((score, idx))
+                })
+                .max_by(|a, b| {
+                    a.0.partial_cmp(&b.0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| b.1.cmp(&a.1))
+                });
+            if let Some((_, idx)) = best {
                 seed_nodes.push(idx);
             }
         }
-    }
-    let seed_limit = 5.max(seed_nodes.len());
-    // Doc-seed quota: on code corpora two prose seeds already outrank
-    // silence, and more would crowd code out of the seed set. On
-    // docs-majority graphs (transcript corpora, docs sites with no code)
-    // the quota would leave the traversal nearly seedless — there is no
-    // code to protect, so the quota opens up to the full seed limit.
-    let doc_seed_quota = if docs_majority { seed_limit } else { 2 };
-    let mut doc_seeds = seed_nodes
-        .iter()
-        .filter(|&&idx| {
-            is_doc_type(&loaded.graph[idx].file_type)
-                || is_semantic_type(&loaded.graph[idx].file_type)
-        })
-        .count();
-    for &(_, idx) in scored.iter() {
-        if seed_nodes.len() == seed_limit {
-            break;
-        }
-        if seed_nodes.contains(&idx) {
-            continue;
-        }
-        if loaded.graph[idx].source_file.is_empty()
-            || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference")
-        {
-            continue;
-        }
-        if is_doc_type(&loaded.graph[idx].file_type)
-            || is_semantic_type(&loaded.graph[idx].file_type)
-        {
-            if doc_seeds >= doc_seed_quota && !wants_docs(&terms) {
-                continue;
-            }
-            doc_seeds += 1;
-        }
-        seed_nodes.push(idx);
-    }
-    // Semantic-only reservation: embedding recall must be able to start the
-    // traversal when the question shares no vocabulary with the answer —
-    // its advertised purpose ("conceptual questions with zero string
-    // overlap still find their symbols"). Such a node's rescaled cosine
-    // (~0-0.67) never outranks token matches (2+), so without this slot
-    // --embed is inert exactly where it matters. One slot for the best
-    // qualifying node: embedding evidence above the floor, zero token
-    // evidence, not a stub.
-    if !semantic.is_empty() && seed_limit >= 3 {
-        let best = semantic
-            .iter()
-            .filter_map(|(node_id, cosine)| {
-                let &idx = loaded.id_to_idx.get(node_id)?;
-                if seed_nodes.contains(&idx)
-                    || loaded.graph[idx].source_file.is_empty()
-                    || matches!(loaded.graph[idx].file_type.as_str(), "stub" | "reference")
-                {
-                    return None;
-                }
-                if token_scores.get(&idx).copied().unwrap_or(0.0) > 0.0 {
-                    return None;
-                }
-                let score = semantic_seed_score(*cosine);
-                (score >= SEMANTIC_SEED_FLOOR).then_some((score, idx))
-            })
-            .max_by(|a, b| {
-                a.0.partial_cmp(&b.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| b.1.cmp(&a.1))
-            });
-        if let Some((_, idx)) = best {
-            seed_nodes.push(idx);
-        }
-    }
+        seed_nodes
+    };
     if debug_scores_enabled() {
         let seeds: Vec<String> = seed_nodes
             .iter()
@@ -646,6 +708,15 @@ fn query_graph_loaded(
             prose_share(&loaded) * 100.0
         ));
     }
+    // Unresolved explicit seeds are disclosed in the rendered text too —
+    // a JSON-reading agent gets the field, a text consumer must not miss
+    // that part of their request was dropped.
+    if !unresolved_seeds.is_empty() {
+        header.push_str(&format!(
+            "# unresolved seeds (no matching node): {}\n",
+            unresolved_seeds.join(", ")
+        ));
+    }
     let relevance: HashMap<NodeIndex, f64> = scored.iter().map(|(s, i)| (*i, *s)).collect();
     let mut response = subgraph_to_text(
         &loaded,
@@ -665,7 +736,80 @@ fn query_graph_loaded(
 
     response.node_count = visited.len();
     response.edge_count = edges_seen.len();
+    response.unresolved_seeds = unresolved_seeds;
     Ok(response)
+}
+
+/// Resolve one explicitly supplied seed to a node. Exact id first (a stub
+/// never shadows its real definition), then exact label with stubs
+/// deprioritized, then the bare symbol name (`.foo()` labels resolve as
+/// `foo`), then a source-file suffix that names exactly one node. Returns
+/// `None` when nothing matches or a suffix is ambiguous — the caller
+/// reports the seed rather than guessing.
+fn resolve_explicit_seed(
+    db: &Connection,
+    loaded: &LoadedGraph,
+    seed: &str,
+) -> Option<NodeIndex> {
+    if let Some(&idx) = loaded.id_to_idx.get(seed) {
+        let is_stub: bool = db
+            .query_row(
+                "SELECT file_type = 'stub' FROM nodes WHERE id = ?1",
+                rusqlite::params![seed],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if !is_stub {
+            return Some(idx);
+        }
+        let bare = bare_symbol_name(seed);
+        if let Some(id) = astria_core::db::prefer_non_stub_id(db, &bare) {
+            if let Some(&better) = loaded.id_to_idx.get(id.as_str()) {
+                return Some(better);
+            }
+        }
+        return Some(idx);
+    }
+    let labeled: Option<String> = db
+        .query_row(
+            "SELECT id FROM nodes WHERE label = ?1 ORDER BY file_type = 'stub', id LIMIT 1",
+            rusqlite::params![seed],
+            |r| r.get(0),
+        )
+        .ok();
+    if let Some(id) = labeled {
+        if let Some(&idx) = loaded.id_to_idx.get(id.as_str()) {
+            return Some(idx);
+        }
+    }
+    let bare = bare_symbol_name(seed);
+    if let Some(id) = astria_core::db::prefer_non_stub_id(db, &bare) {
+        if let Some(&idx) = loaded.id_to_idx.get(id.as_str()) {
+            return Some(idx);
+        }
+    }
+    // Source-file suffix: "src/lib.rs" or "lib.rs". A suffix hitting more
+    // than one node is ambiguous and resolves to nothing.
+    let norm_query = seed.replace('\\', "/");
+    let suffix = format!("%{}", norm_query.trim_start_matches('/'));
+    let mut stmt = db.prepare("SELECT id FROM nodes WHERE source_file LIKE ?1").ok()?;
+    let matches: Vec<String> = stmt
+        .query_map(rusqlite::params![suffix], |r| r.get(0))
+        .ok()?
+        .filter_map(|r| r.ok())
+        .collect();
+    match matches.len() {
+        1 => loaded.id_to_idx.get(matches[0].as_str()).copied(),
+        _ => None,
+    }
+}
+
+/// Strip the `.foo()` decoration used by method labels down to the bare
+/// lowercase name, matching the stub-preference lookup's normalization.
+fn bare_symbol_name(seed: &str) -> String {
+    seed.trim_start_matches('.')
+        .trim_end_matches("()")
+        .to_lowercase()
 }
 
 mod callflow;
@@ -732,6 +876,123 @@ mod tests {
             text.contains("validation()"),
             "code symbol must remain present"
         );
+    }
+
+    fn seed_graph_with_pair(db: &rusqlite::Connection) {
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('svc::save', 'save()', 'code', 'src/save.rs'),
+                ('ui::render', 'render()', 'code', 'src/render.rs');
+             INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+                ('svc::save', 'ui::render', 'calls', 'EXTRACTED', 'src/save.rs');",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn explicit_seed_anchors_traversal_without_keyword_match() {
+        // The question shares zero vocabulary with the seeded symbol —
+        // keyword ranking must not be able to find it, explicit seeds must.
+        let db = open_db_in_memory().unwrap();
+        seed_graph_with_pair(&db);
+        let response = query_graph_with_metadata(
+            &db,
+            "seed-test",
+            "completely unrelated words",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+            &["svc::save".to_string()],
+        )
+        .unwrap();
+        assert!(response.node_count >= 1, "seeded traversal found nothing");
+        assert!(response.text.contains("save()"));
+        assert!(response.unresolved_seeds.is_empty());
+    }
+
+    #[test]
+    fn unresolved_seeds_return_miss_without_keyword_fallback() {
+        // A question that keyword-matches real nodes must NOT silently
+        // fall back to them when every supplied seed fails to resolve.
+        let db = open_db_in_memory().unwrap();
+        seed_graph_with_pair(&db);
+        let response = query_graph_with_metadata(
+            &db,
+            "seed-test",
+            "save render",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+            &["does_not_exist".to_string()],
+        )
+        .unwrap();
+        assert_eq!(response.node_count, 0);
+        assert_eq!(response.unresolved_seeds, vec!["does_not_exist"]);
+        assert!(response.text.contains("does_not_exist"));
+        assert!(
+            !response.text.contains("NODE "),
+            "keyword fallback must not run: {}",
+            response.text
+        );
+    }
+
+    #[test]
+    fn partially_resolved_seeds_traverse_and_report_the_rest() {
+        let db = open_db_in_memory().unwrap();
+        seed_graph_with_pair(&db);
+        let response = query_graph_with_metadata(
+            &db,
+            "seed-test",
+            "unrelated question",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+            &["svc::save".to_string(), "missing_symbol".to_string()],
+        )
+        .unwrap();
+        assert!(response.node_count >= 1);
+        assert!(response.text.contains("save()"));
+        assert_eq!(response.unresolved_seeds, vec!["missing_symbol"]);
+        assert!(response.text.contains("unresolved seeds"));
+    }
+
+    #[test]
+    fn explicit_seed_resolves_by_label_and_file_suffix() {
+        let db = open_db_in_memory().unwrap();
+        seed_graph_with_pair(&db);
+        for seed in ["render()", "src/save.rs", "save.rs"] {
+            let response = query_graph_with_metadata(
+                &db,
+                "seed-test",
+                "unrelated",
+                "bfs",
+                1,
+                4000,
+                false,
+                0.0,
+                0,
+                false,
+                &[seed.to_string()],
+            )
+            .unwrap();
+            assert!(
+                response.node_count >= 1,
+                "seed {seed} failed to anchor a traversal"
+            );
+            assert!(response.unresolved_seeds.is_empty(), "seed {seed}");
+        }
     }
 
     #[test]
@@ -1661,6 +1922,7 @@ at the lake house');",
             false,
             None,
             None,
+            &[],
         )
         .unwrap()
         .into_output();
@@ -1701,6 +1963,7 @@ at the lake house');",
             false,
             None,
             None,
+            &[],
         )
         .unwrap()
         .into_output();
@@ -1956,6 +2219,7 @@ at the lake house');",
             false,
             None,
             None,
+            &[],
         )
         .unwrap()
         .into_output();
@@ -2000,6 +2264,7 @@ at the lake house');",
             false,
             None,
             None,
+            &[],
         )
         .unwrap()
         .into_output();
@@ -2042,6 +2307,7 @@ at the lake house');",
             false,
             None,
             None,
+            &[],
         )
         .unwrap()
         .into_output();
@@ -2087,6 +2353,7 @@ at the lake house');",
             false,
             None,
             None,
+            &[],
         )
         .unwrap()
         .into_output();
@@ -2129,6 +2396,7 @@ at the lake house');",
             false,
             None,
             None,
+            &[],
         )
         .unwrap()
         .into_output();

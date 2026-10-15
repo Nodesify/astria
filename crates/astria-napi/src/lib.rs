@@ -1168,6 +1168,7 @@ pub fn query_graph(
     directed: Option<bool>,
     detail: Option<String>,
     cursor: Option<i64>,
+    seeds: Option<Vec<String>>,
 ) -> napi::Result<QueryResultJs> {
     let root_pb = PathBuf::from(&root);
     let root_pb = root_pb
@@ -1196,6 +1197,7 @@ pub fn query_graph(
     {
         return Err(napi::Error::from_reason("detail must be all or high"));
     }
+    let seeds = seeds.unwrap_or_default();
     let response = query::query_graph_with_metadata(
         &db,
         &db_path_str,
@@ -1207,6 +1209,7 @@ pub fn query_graph(
         min_strength_for(&detail),
         cursor.unwrap_or(0).max(0) as usize,
         prefer_files,
+        &seeds,
     )
     .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     pipeline::record_query_feedback(

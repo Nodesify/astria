@@ -24,6 +24,7 @@ pub(super) fn output_schema() -> Value {
             "graphBuiltAt": {"type": ["string", "null"]}, "staleExternalIndexes": {"type": "array", "items": {"type": "string"}},
             "checkMilliseconds": {"type": "integer"}, "error": {"type": ["string", "null"]}
         }},
-        "renderedTokens": {"type": "integer"}, "elapsedMilliseconds": {"type": "integer"}, "snapshotEstimatedBytes": {"type": "integer"}
+        "renderedTokens": {"type": "integer"}, "elapsedMilliseconds": {"type": "integer"}, "snapshotEstimatedBytes": {"type": "integer"},
+        "unresolvedSeeds": {"type": "array", "items": {"type": "string"}}
     }})
 }

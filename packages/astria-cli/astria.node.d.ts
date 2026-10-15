@@ -142,6 +142,8 @@ export interface QueryResultJs {
   renderedTokens: number;
   elapsedMilliseconds: number;
   snapshotEstimatedBytes: number;
+  /** Explicitly supplied seeds that resolved to no node. */
+  unresolvedSeeds: string[];
 }
 
 export interface QueryNodeJs {
@@ -348,6 +350,7 @@ export function queryGraph(
   directed?: boolean | null,
   detail?: string | null,
   cursor?: number | null,
+  seeds?: string[] | null,
 ): QueryResultJs;
 export function repoMap(root: string, budget: number, detail?: string | null): RepoMapJs;
 export function findPath(
