@@ -2,6 +2,20 @@
 //! into `learned` edges once they recur across distinct questions.
 use super::*;
 
+/// Canonical question key shared with the curated memory loop: lowercase,
+/// whitespace-collapsed, bounded. `query_pairs` and `memory_outcomes` must
+/// agree on this shape or outcome verdicts cannot steer promotion.
+pub fn normalize_question(question: &str) -> String {
+    question
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(200)
+        .collect()
+}
+
 /// Feedback loop bookkeeping: for one answered query, record which
 /// (seed, discovered) node pairs the traversal connected. Pairs recurring
 /// across DISTINCT questions later promote into `learned` edges — the
@@ -13,14 +27,7 @@ pub(crate) fn record_query_pairs(
     visited: &HashSet<NodeIndex>,
     question: &str,
 ) {
-    let question: String = question
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(200)
-        .collect();
+    let question = normalize_question(question);
     if question.is_empty() {
         return;
     }
@@ -79,11 +86,20 @@ pub fn promote_learned_edges(
         [],
     )?;
 
+    // Outcome gate: a pair backed ONLY by questions that were later
+    // judged dead ends or corrections is repeated unsuccessful
+    // exploration, not corroborated knowledge — promotion would turn it
+    // into an authoritative learned edge. At least one surviving
+    // (non-failed) distinct question must vouch for the pair.
     let pairs: Vec<(String, String, i64)> = {
         let mut stmt = db.prepare(
-            "SELECT source, target, SUM(hits) FROM query_pairs
-             GROUP BY source, target
-             HAVING COUNT(DISTINCT question) >= ?1 AND SUM(hits) >= ?2",
+            "SELECT qp.source, qp.target, SUM(qp.hits) FROM query_pairs qp
+             LEFT JOIN memory_outcomes mo ON mo.question = qp.question
+             GROUP BY qp.source, qp.target
+             HAVING COUNT(DISTINCT qp.question) >= ?1 AND SUM(qp.hits) >= ?2
+               AND COUNT(DISTINCT CASE WHEN mo.outcome IN ('dead_end','corrected')
+                                        THEN qp.question END)
+                   < COUNT(DISTINCT qp.question)",
         )?;
         let rows = stmt.query_map(
             rusqlite::params![min_questions as i64, min_hits as i64],
@@ -119,4 +135,68 @@ pub fn promote_learned_edges(
     }
     tx.commit()?;
     Ok(pairs.len())
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use super::*;
+    use astria_core::db::open_db_in_memory;
+
+    fn seed_pair(db: &Connection, source: &str, target: &str, question: &str, hits: i64) {
+        db.execute(
+            "INSERT OR REPLACE INTO nodes (id, label, file_type, source_file) VALUES (?1, ?1, 'code', 'f.rs')",
+            rusqlite::params![source],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO nodes (id, label, file_type, source_file) VALUES (?1, ?1, 'code', 'f.rs')",
+            rusqlite::params![target],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO query_pairs (source, target, question, hits, first_seen, last_seen)
+             VALUES (?1, ?2, ?3, ?4, 1, 1)",
+            rusqlite::params![source, target, question, hits],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn all_failed_questions_do_not_promote() {
+        let db = open_db_in_memory().unwrap();
+        // Two distinct questions both later judged dead ends: repeated
+        // unsuccessful exploration must not become an authoritative edge.
+        seed_pair(&db, "a", "b", "how does x work", 3);
+        seed_pair(&db, "a", "b", "where is x used", 2);
+        db.execute(
+            "INSERT INTO memory_outcomes (question, outcome, updated_at) VALUES
+             ('how does x work', 'dead_end', 1), ('where is x used', 'dead_end', 1)",
+            [],
+        )
+        .unwrap();
+        let promoted = promote_learned_edges(&db, 2, 2).unwrap();
+        assert_eq!(promoted, 0, "all-dead-end pairs must not promote");
+        // The rows survive (the exploration history is real); only
+        // promotion is gated.
+        let pairs: i64 = db
+            .query_row("SELECT COUNT(*) FROM query_pairs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pairs, 2);
+    }
+
+    #[test]
+    fn one_surviving_question_still_promotes() {
+        let db = open_db_in_memory().unwrap();
+        seed_pair(&db, "a", "b", "how does x work", 3);
+        seed_pair(&db, "a", "b", "where is x used", 2);
+        // Only one of the two questions failed; corroboration survives.
+        db.execute(
+            "INSERT INTO memory_outcomes (question, outcome, updated_at)
+             VALUES ('how does x work', 'dead_end', 1)",
+            [],
+        )
+        .unwrap();
+        let promoted = promote_learned_edges(&db, 2, 2).unwrap();
+        assert_eq!(promoted, 1);
+    }
 }

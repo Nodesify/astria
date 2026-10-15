@@ -301,6 +301,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         set_schema_version(&tx, 11)?;
         tx.commit()?;
     }
+    if version < 12 {
+        // v12: outcome memory. Curated query verdicts (useful / dead_end /
+        // corrected) keyed by the same normalized question query_pairs
+        // stores, so learned-edge promotion can refuse to make repeated
+        // unsuccessful exploration authoritative.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS memory_outcomes (
+                question TEXT PRIMARY KEY,
+                outcome TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );",
+        )?;
+        set_schema_version(&tx, 12)?;
+        tx.commit()?;
+    }
 
     Ok(())
 }
