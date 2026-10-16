@@ -427,7 +427,11 @@ impl ClassView {
             .filter(|((_, label), _)| label == type_name)
             .flat_map(|(_, ids)| ids.iter().cloned())
             .collect();
-        (all.len() == 1).then_some(all).unwrap_or_default()
+        if all.len() == 1 {
+            all
+        } else {
+            Vec::new()
+        }
     }
 
     /// Member lookup through `extends` heritage (transitive, cycle-guarded).
