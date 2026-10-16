@@ -667,7 +667,11 @@ pub fn add_dispatch_edges(results: &mut [Extraction], index: &TypeIndex) -> usiz
                         target: impl_member_id.clone(),
                         relation: "dispatch".to_string(),
                         confidence: "INFERRED".to_string(),
-                        confidence_score: Some(0.7),
+                        // Possible implementations, not proven calls: scored
+                        // at the SEMANTIC tier (below the 0.65 weak floor) so
+                        // dispatch-only reach cannot outrank directly
+                        // matched files in query output.
+                        confidence_score: Some(0.6),
                         source_file: heritage.file.clone(),
                         source_line: None,
                     });
