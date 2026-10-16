@@ -548,7 +548,13 @@ impl LexicalIndex {
             index
                 .docs_lower
                 .push(node.docstring.as_deref().map(str::to_lowercase));
-            index.file_components.push(tokenize(&node.source_file));
+            // Corpus-relative path tokens only: the filesystem location of
+            // the corpus root is environment noise, and root segments
+            // ("home", "runner", "work", ...) must not dilute or sway path
+            // coverage — ranking must not depend on where the corpus sits.
+            index
+                .file_components
+                .push(tokenize(&loaded.display_path(&node.source_file)));
             index.label_components.push(label);
             index.doc_components.push(doc);
             index.id_components.push(id);
