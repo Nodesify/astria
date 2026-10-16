@@ -93,14 +93,15 @@ The graph is stored in `.astria/db.sqlite`. The listing below is generated from 
 - `edges`: `id`, `source`, `target`, `relation`, `confidence`, `confidence_score`, `source_file`, `source_line`, `context`
 - `hyperedges`: `id`, `label`, `nodes`, `relation`, `confidence`, `confidence_score`, `source_file`
 - `communities`: `id`, `label`, `cohesion`, `size`, `summary`, `label_source`, `member_hash`
-- `file_manifest`: `file_path`, `content_hash`, `file_type`, `language`, `last_seen_at`, `size_bytes`
-- `extraction_cache`: `file_path`, `content_hash`, `language`, `nodes`, `edges`, `extracted_at`
+- `file_manifest`: `file_path`, `content_hash`, `file_type`, `language`, `last_seen_at`, `size_bytes`, `extraction_status`, `extraction_notes`
+- `extraction_cache`: `file_path`, `content_hash`, `language`, `nodes`, `edges`, `extracted_at`, `status`, `notes`
 - `pipeline_runs`: `id`, `started_at`, `finished_at`, `status`, `files_processed`, `nodes_added`, `edges_added`, `llm_input_tokens`, `llm_output_tokens`, `llm_api_calls`
 - `query_history`: `id`, `question`, `answer`, `path_taken`, `queried_at`
 - `node_embeddings`: `node_id`, `dim`, `embedding`, `model`, `embedded_at`
 - `query_pairs`: `source`, `target`, `question`, `hits`, `first_seen`, `last_seen`
 - `_meta`: `key`, `value`
 - `derived_text`: `file_path`, `content_hash`, `text`
+- `memory_outcomes`: `question`, `outcome`, `updated_at`
 <!-- schema:end -->
 
 Notes: `node_embeddings` is populated only by `--embed` builds; `_meta` carries the schema version and build stamps (what `status` reads); while a process has the database open you will also see `db.sqlite-wal` / `db.sqlite-shm` sidecars (SQLite WAL mode).

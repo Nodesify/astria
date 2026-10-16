@@ -160,3 +160,5 @@ The editor `PreToolUse` guard (see [Agent integration](../guides/mcp-and-agents#
 |---|---|
 | `ASTRIA_HOOK_STRICT` | `1` enables strict mode (gates un-indexed reads); `0` disables it and overrides the `--strict` flag; the `--strict` flag alone also enables strict mode when the variable is unset |
 | `ASTRIA_HOOK_STRICT_TTL` | Seconds a graph stays considered fresh in strict mode (default `1800`) |
+| `ASTRIA_HOOK_CONTEXT` | `0` disables the contextual nudges (graph symbols matching a search, symbols defined in a read file); any other value or unset keeps them on |
+| `ASTRIA_HOOK_CONTEXT_TTL` | Seconds before the same contextual nudge (per search pattern or file) may fire again (default `1800`) |
