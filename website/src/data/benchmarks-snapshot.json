@@ -2,28 +2,28 @@
   "schema_version": 2,
   "provenance": {
     "mode": "published-npm",
-    "harness_commit": "65ec55e57f0c8cc60e75b99e6a7baa7110a8a327",
+    "harness_commit": "ba337f1239e6db3fb38445fe13d384374cd8b209",
     "source_build_commit": null,
-    "node": "v22.23.2",
-    "platform": "linux"
+    "node": "v24.15.0",
+    "platform": "win32"
   },
-  "generated_at": "2026-09-27T11:55:48.851Z",
-  "runner": "ubuntu-latest (GitHub Actions)",
+  "generated_at": "2026-10-16T03:51:28.981Z",
+  "runner": "local machine",
   "corpus": {
     "repo": "https://github.com/safishamsi/graphify",
     "commit": "4139885a1212956cf69a76946fbde0d181ab85e9",
     "files_detected": 920
   },
   "versions": {
-    "astria": "1.0.5",
+    "astria": "1.2.0",
     "original": "graphify @ 4139885a1212956cf69a76946fbde0d181ab85e9",
-    "python": "Python 3.12.3"
+    "python": "Python 3.12.12"
   },
   "original_tool": {
-    "build_seconds": 23,
-    "nodes": 14602,
-    "edges": 31367,
-    "communities": 718,
+    "build_seconds": 46.13,
+    "nodes": 14603,
+    "edges": 31368,
+    "communities": 712,
     "benchmark": {
       "corpus_tokens": 2481185,
       "avg_query_tokens": 35608,
@@ -31,14 +31,14 @@
     }
   },
   "astria_structural": {
-    "build_seconds": 13.85,
-    "nodes": 18563,
-    "edges": 72739,
-    "communities": 677,
+    "build_seconds": 104.28,
+    "nodes": 43857,
+    "edges": 75525,
+    "communities": 3383,
     "benchmark": {
-      "corpus_tokens": 4945735,
-      "avg_query_tokens": 3601,
-      "reduction": 1373.4
+      "corpus_tokens": null,
+      "avg_query_tokens": null,
+      "reduction": null
     }
   },
   "token_parity": {
@@ -46,19 +46,19 @@
       "name": "o200k_base",
       "implementation": "js-tiktoken"
     },
-    "corpus_tokens": 4574260,
-    "corpus_bytes": 16906402,
+    "corpus_tokens": 4591769,
+    "corpus_bytes": 17228028,
     "astria": {
       "answered": 5,
       "failed": 0,
-      "avg_query_tokens": 3986,
-      "reduction": 1147.6
+      "avg_query_tokens": 1597,
+      "reduction": 2875.2
     },
     "original": {
       "answered": 5,
       "failed": 0,
-      "avg_query_tokens": 2209,
-      "reduction": 2070.7
+      "avg_query_tokens": 1783,
+      "reduction": 2575.3
     },
     "questions": 5,
     "note": "Both sides counted with the SAME tokenizer on the same corpus — the absolute numbers here are directly comparable (the ~87k vs ~158k divergence in the self-estimated blocks below is estimator, not bytes)."
