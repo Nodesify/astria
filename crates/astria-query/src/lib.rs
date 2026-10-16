@@ -718,6 +718,17 @@ fn query_graph_loaded(
         ));
     }
     let relevance: HashMap<NodeIndex, f64> = scored.iter().map(|(s, i)| (*i, *s)).collect();
+    // Degree without dispatch edges: interface-dispatch links are possible
+    // implementations, not proven calls, and must not win ordering ties.
+    let mut structural_degree: HashMap<NodeIndex, usize> = HashMap::new();
+    for edge_id in &edges_seen {
+        if let Some((s, t)) = loaded.graph.edge_endpoints(*edge_id) {
+            if loaded.graph[*edge_id].relation != "dispatch" {
+                *structural_degree.entry(s).or_insert(0) += 1;
+                *structural_degree.entry(t).or_insert(0) += 1;
+            }
+        }
+    }
     let mut response = subgraph_to_text(
         &loaded,
         &visited,
@@ -725,6 +736,7 @@ fn query_graph_loaded(
         &relevance,
         &distance,
         &reach_strength,
+        &structural_degree,
         prefer_files,
         budget,
         cursor,
@@ -2016,6 +2028,7 @@ at the lake house');",
             &relevance,
             &distance,
             &reach,
+            &HashMap::new(),
             false,
             10_000,
             0,
