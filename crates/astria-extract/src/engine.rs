@@ -18,7 +18,6 @@ use crate::docs::{
     extract_html, extract_markdown, extract_markdown_from_string, extract_rst, extract_text_file,
 };
 use crate::langs;
-use crate::refs::resolve_cross_file_references;
 use crate::schema::{Extraction, ExtractionStatus};
 use crate::walkers::extract_single;
 use astria_audio::TranscribeError;
