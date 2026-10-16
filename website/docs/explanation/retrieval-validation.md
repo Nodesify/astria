@@ -6,7 +6,48 @@ sidebar_position: 3
 
 # Retrieval validation (September–October 2026)
 
-Latest paired run: **October 6, 2026 — astria 1.1.0 vs Graphify 0.9.77** (first section below). The September 27 run compared the 1.0.6 tree at `cbe8364` (chunked document retrieval, cross-conversation ranking, chunk overlap, introspection commands) against Graphify v0.9.69 pinned to `4139885a1212956cf69a76946fbde0d181ab85e9`. The September 30 targeted-search baseline section below ran separately on CLI 1.0.7 from `b0a9c2e`. Machine in both paired runs: Windows, Ryzen AI 9 HX 370, Node 24, Python 3.12.12. Each tool receives fresh archives of the same pinned corpora. Structural extraction only, no LLMs or embeddings, BFS depth 2, exact shared `o200k_base` counting and identical complete-line clipping for scoring. Raw budget overruns are counted before clipping. Each condition has one observation including process startup; timing differences are not statistically established.
+Latest paired run: **October 16, 2026 — astria release candidate (post-1.2.0 develop) vs Graphify 0.9.69** (first section below); the October 6 run against Graphify 0.9.77 follows. The September 27 run compared the 1.0.6 tree at `cbe8364` (chunked document retrieval, cross-conversation ranking, chunk overlap, introspection commands) against Graphify v0.9.69 pinned to `4139885a1212956cf69a76946fbde0d181ab85e9`. The September 30 targeted-search baseline section below ran separately on CLI 1.0.7 from `b0a9c2e`. Machine in both paired runs: Windows, Ryzen AI 9 HX 370, Node 24, Python 3.12.12. Each tool receives fresh archives of the same pinned corpora. Structural extraction only, no LLMs or embeddings, BFS depth 2, exact shared `o200k_base` counting and identical complete-line clipping for scoring. Raw budget overruns are counted before clipping. Each condition has one observation including process startup; timing differences are not statistically established.
+
+## Paired run: release candidate vs Graphify 0.9.69 (October 16)
+
+Pre-release validation of the develop tree (all 13 Graphify-inspired backlog
+items implemented: typed receiver resolution, interface dispatch,
+project-aware imports, evidence-weighted clustering, extraction
+completeness, memory gating) against Graphify v0.9.69 pinned to
+`4139885a1212956cf69a76946fbde0d181ab85e9`. Protocol unchanged: fresh
+archives of the same pinned corpora, structural extraction only, exact
+shared `o200k_base` counting, one observation per condition. Ten
+non-reserved suites; the reserved splits remain unmeasured. Full numbers:
+`RESULTS-2026-10-16.md` in the repository.
+
+File recall@5 / MRR at the 4,000-token budget:
+
+| Corpus / split | Questions | astria | Graphify |
+|---|---:|---:|---:|
+| Astria self (current tree) | 35 | **72.9% / 0.548** | 55.7% / 0.447 |
+| Click (frozen v1) | 3 | 100% / 1.000 | 100% / 0.667 |
+| Click heldout v1 | 2 | **100% / 0.417** | 50% / 0.500 |
+| Click heldout v2 | 5 | **80.0% / 0.800** | 60.0% / 0.522 |
+| Express (frozen v1) | 2 | 100% / 1.000 | 100% / 0.625 |
+| Express heldout v1 | 2 | **100% / 0.667** | 50% / 0.500 |
+| Express heldout v2 | 5 | **100% / 0.700** | 80.0% / 0.567 |
+| ripgrep (frozen v1) | 3 | 100% / 0.778 | 100% / **0.833** |
+| ripgrep heldout v1 | 3 | **100% / 0.667** | 33.3% / 0.333 |
+| ripgrep heldout v2 | 4 | 75.0% / 0.550 | 75.0% / 0.425 |
+
+astria wins or ties **all ten suites** on file recall@5. Definition
+recall@5 (the exact declaration inside the top five): astria 40–100%
+where measured, Graphify ~0% on every suite. Budget compliance: **astria
+0 over-budget responses** across every suite and both budgets; Graphify
+over budget on 6 of 10 suites at the 1,000-token budget. The self-suite
+quality gate (`scripts/bench/quality`) passed the same build: hit@5
+0.800, recall@5 0.743, 35/35 answered, 0 failures, 0 budget violations.
+
+Version-to-version performance A/B (v1.2.0 → this build, release builds,
+medians of three interleaved rounds): no regressions — cold build parity
+(0.99x), no-op update 0.93x, queries 0.78–0.91x, explain 0.63x. The
+community count drop (915 → 798 on the A/B corpus) is the evidence-
+weighted clustering change working as designed, not a defect.
 
 ## Paired run: astria 1.1.0 vs Graphify 0.9.77 (October 6)
 
@@ -131,6 +172,8 @@ The 1.0.5 assessment recorded near-zero conversational retrieval (full-set recal
 | recall@1 | recall@3 | recall@5 | recall@10 | MRR |
 |---:|---:|---:|---:|---:|
 | 63.5% | 79.3% | 84.5% | 84.5% | 0.717 |
+
+The October 16, 2026 release-candidate run (same protocol, full set) scored 64.0% / 78.4% / 83.6% / 83.6% with MRR 0.717 — within a point of the shipped 1.0.6 numbers above, with the same known failure mode.
 
 Graphify's published LoCoMo recall@10 (~0.497) grades LLM-synthesized answers on a 300-question subset — a different protocol that is not directly comparable — but the order-of-magnitude gap that motivated the transcript work is closed. Ranking failures that remain are mostly same-conversation distractors: the right session ranks, not always the first file.
 

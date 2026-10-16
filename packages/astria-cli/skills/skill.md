@@ -103,6 +103,12 @@ Use Grep/Glob/file reads first for:
 - **Natural-language discovery**: the graph anchors on symbol names.
   `query` handles typos and partial matches, but if you don't know any
   symbol name yet, a broad grep for a distinctive string is often faster.
+- **Known symbols**: when you already hold a symbol (from a stack trace,
+  an import, a previous answer), pass it with `astria query "<question>"
+  --seed <symbol>` (repeatable). Seeds resolve by node id, label, bare
+  name, or unique source path; the traversal starts there instead of
+  keyword ranking, unresolved seeds are reported, and all-unresolved
+  seeds return an explicit miss — never a silent keyword fallback.
 
 Rule of thumb: use the graph to identify WHICH files matter (blast radius,
 architecture, cross-module dependencies), then read those files directly
@@ -118,7 +124,17 @@ you can jump straight from a node or edge to the source.
 - Edge evidence tiers: `EXTRACTED` (verified in source), `RESOLVED` (a call
   expression from source whose name binds to exactly one definition —
   trustworthy for impact analysis), `INFERRED` (reconstructed or unbindable
-  — weaker evidence, marked with a legend in `affected` output).
+  — weaker evidence, marked with a legend in `affected` output). TypeScript
+  member calls on typed receivers (`this.service.save()` through declared
+  fields, constructor parameter properties, typed locals) resolve the same
+  `RESOLVED` way; ambiguous receivers stay `INFERRED`.
+- `dispatch` edges connect an interface member to every implementing
+  class's same-named member — possible implementations for
+  dependency-injection flows, NOT proven runtime calls.
+- `graph_stats` (and `astria stats`) disclose extraction completeness per
+  file (`complete`, `partial`, `suspicious_empty`, `unsupported`,
+  `skipped`): before concluding "no relationship exists", check that the
+  files involved were fully extracted.
 - `explain`/`neighbors` arrows show real edge direction: `-->` the node
   calls/imports the neighbor, `<--` the neighbor calls/imports the node.
 - Identifier-shaped string literals (env vars like `PLANE_URL`, snake_case
