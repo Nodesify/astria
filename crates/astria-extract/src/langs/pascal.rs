@@ -5,8 +5,8 @@
 // classes (TP/Delphi `type TFoo = class`) and procedures/functions become
 // nodes with `contains` edges.
 
-use std::fs;
 use crate::schema::ExtractionStatus;
+use std::fs;
 use std::path::Path;
 
 use astria_core::{AstriaError, Result};

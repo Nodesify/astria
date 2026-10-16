@@ -169,8 +169,7 @@ mod tests {
         assert_eq!(a, b, "same tag + content must hash identically");
 
         // A grammar version bump alone re-keys the cache entry...
-        let bumped =
-            file_hash_tagged(&file, "tree-sitter@1|tree-sitter-rust@3").unwrap();
+        let bumped = file_hash_tagged(&file, "tree-sitter@1|tree-sitter-rust@3").unwrap();
         assert_ne!(a, bumped);
         // ...and the tagged hash never collides with the grammar-blind one,
         // so AST and non-AST cache keys live in disjoint spaces.

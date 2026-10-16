@@ -1,8 +1,8 @@
 // docs: plain-text extractors for documentation formats (markdown, plain
 // text, reStructuredText) — no tree-sitter involved.
 
-use std::path::Path;
 use crate::schema::ExtractionStatus;
+use std::path::Path;
 
 use crate::naming::{file_stem, make_node_id, make_text_id};
 use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};

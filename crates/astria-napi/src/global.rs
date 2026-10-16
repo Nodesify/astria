@@ -672,9 +672,7 @@ fn resolve_cross_repo_calls(db: &Connection) -> Result<usize> {
                                       WHERE c.relation = 'contains' AND c.source = n.id)",
                     )?;
                     let rows: Vec<(String, Option<String>)> = stmt
-                        .query_map(rusqlite::params![type_name], |r| {
-                            Ok((r.get(0)?, r.get(1)?))
-                        })?
+                        .query_map(rusqlite::params![type_name], |r| Ok((r.get(0)?, r.get(1)?)))?
                         .filter_map(|r| r.ok())
                         .collect();
                     for (id, repo) in rows {
@@ -692,10 +690,7 @@ fn resolve_cross_repo_calls(db: &Connection) -> Result<usize> {
                     )?;
                     for class_id in &class_ids {
                         let found: Vec<String> = stmt
-                            .query_map(
-                                rusqlite::params![class_id, member],
-                                |r| r.get(0),
-                            )?
+                            .query_map(rusqlite::params![class_id, member], |r| r.get(0))?
                             .filter_map(|r| r.ok())
                             .collect();
                         member_hits.extend(found);

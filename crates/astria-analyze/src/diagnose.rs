@@ -123,9 +123,7 @@ pub fn diagnose(db: &Connection) -> astria_core::Result<DiagnoseReport> {
              WHERE extraction_status IS NOT NULL AND extraction_status != 'complete'
              ORDER BY file_path LIMIT 20",
         )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         report.incomplete_files = rows.filter_map(|r| r.ok()).collect();
     }
 
@@ -170,9 +168,7 @@ pub fn render(report: &DiagnoseReport) -> String {
         lines.push(format!("Extraction completeness: {counts}"));
     }
     if !report.incomplete_files.is_empty() {
-        lines.push(
-            "Files not fully understood (relationships may be missing):".to_string(),
-        );
+        lines.push("Files not fully understood (relationships may be missing):".to_string());
         for (path, status) in &report.incomplete_files {
             lines.push(format!("  {path} — {status}"));
         }
@@ -222,10 +218,10 @@ mod tests {
     }
 }
 
-    #[test]
-    fn extraction_completeness_summarized_and_flagged() {
-        let db = astria_core::db::open_db_in_memory().unwrap();
-        db.execute_batch(
+#[test]
+fn extraction_completeness_summarized_and_flagged() {
+    let db = astria_core::db::open_db_in_memory().unwrap();
+    db.execute_batch(
             "INSERT INTO file_manifest (file_path, content_hash, file_type, last_seen_at, size_bytes, extraction_status)
              VALUES ('a.rs', 'h', 'Code', '0', 1, 'complete'),
                     ('b.rs', 'h', 'Code', '0', 1, 'partial'),
@@ -233,21 +229,20 @@ mod tests {
                     ('d.rs', 'h', 'Code', '0', 1, NULL);",
         )
         .unwrap();
-        let report = diagnose(&db).unwrap();
-        assert!(report
-            .extraction_status_counts
-            .contains(&("complete".to_string(), 1)));
-        assert!(report
-            .extraction_status_counts
-            .contains(&("unknown".to_string(), 1)));
-        let flagged: Vec<&(String, String)> = report
-            .incomplete_files
-            .iter()
-            .filter(|(p, _)| p == "b.rs" || p == "c.rs")
-            .collect();
-        assert_eq!(flagged.len(), 2, "non-complete files are listed");
-        let rendered = render(&report);
-        assert!(rendered.contains("Extraction completeness"));
-        assert!(rendered.contains("b.rs"));
-    }
-
+    let report = diagnose(&db).unwrap();
+    assert!(report
+        .extraction_status_counts
+        .contains(&("complete".to_string(), 1)));
+    assert!(report
+        .extraction_status_counts
+        .contains(&("unknown".to_string(), 1)));
+    let flagged: Vec<&(String, String)> = report
+        .incomplete_files
+        .iter()
+        .filter(|(p, _)| p == "b.rs" || p == "c.rs")
+        .collect();
+    assert_eq!(flagged.len(), 2, "non-complete files are listed");
+    let rendered = render(&report);
+    assert!(rendered.contains("Extraction completeness"));
+    assert!(rendered.contains("b.rs"));
+}

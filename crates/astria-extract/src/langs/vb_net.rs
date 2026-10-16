@@ -5,8 +5,8 @@
 // Class/Module/Interface/Structure containers and Sub/Function members with
 // `contains` edges; imports (Imports X) are captured as import nodes.
 
-use std::fs;
 use crate::schema::ExtractionStatus;
+use std::fs;
 use std::path::Path;
 
 use astria_core::{AstriaError, Result};

@@ -746,11 +746,7 @@ fn query_graph_loaded(
 /// `foo`), then a source-file suffix that names exactly one node. Returns
 /// `None` when nothing matches or a suffix is ambiguous — the caller
 /// reports the seed rather than guessing.
-fn resolve_explicit_seed(
-    db: &Connection,
-    loaded: &LoadedGraph,
-    seed: &str,
-) -> Option<NodeIndex> {
+fn resolve_explicit_seed(db: &Connection, loaded: &LoadedGraph, seed: &str) -> Option<NodeIndex> {
     if let Some(&idx) = loaded.id_to_idx.get(seed) {
         let is_stub: bool = db
             .query_row(
@@ -792,7 +788,9 @@ fn resolve_explicit_seed(
     // than one node is ambiguous and resolves to nothing.
     let norm_query = seed.replace('\\', "/");
     let suffix = format!("%{}", norm_query.trim_start_matches('/'));
-    let mut stmt = db.prepare("SELECT id FROM nodes WHERE source_file LIKE ?1").ok()?;
+    let mut stmt = db
+        .prepare("SELECT id FROM nodes WHERE source_file LIKE ?1")
+        .ok()?;
     let matches: Vec<String> = stmt
         .query_map(rusqlite::params![suffix], |r| r.get(0))
         .ok()?
@@ -820,9 +818,9 @@ mod repo_map;
 
 pub use callflow::callflow_mermaid;
 pub use explain::{explain_with_neighbors, EdgeInfoResult, ExplainResult};
+pub use learned::normalize_question;
 pub use learned::promote_learned_edges;
 pub(crate) use learned::*;
-pub use learned::normalize_question;
 pub use paths::find_shortest_path;
 pub use repo_map::repo_map;
 
@@ -995,7 +993,6 @@ mod tests {
             assert!(response.unresolved_seeds.is_empty(), "seed {seed}");
         }
     }
-
 
     #[test]
     fn camel_case_symbol_queries_match_their_definition() {

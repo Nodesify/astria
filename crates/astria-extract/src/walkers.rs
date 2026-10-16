@@ -1263,7 +1263,10 @@ fn collect_parse_errors<'tree>(root: tree_sitter::Node<'tree>, notes: &mut Vec<S
         }
         if matches!(node.kind(), "ERROR" | "MISSING") {
             if notes.len() < MAX_NOTES {
-                notes.push(format!("parse error at line {}", node.start_position().row + 1));
+                notes.push(format!(
+                    "parse error at line {}",
+                    node.start_position().row + 1
+                ));
             } else {
                 return;
             }
@@ -1332,9 +1335,13 @@ mod status_tests {
         let cfg = langs::get_language_for_extension("rs").unwrap();
         // Only a comment: clean parse, zero symbols beyond the file node —
         // flagged rather than reported as understood.
-        let extraction =
-            extract_source(Path::new("c.rs"), cfg, Path::new("c.rs"), b"// nothing here\n")
-                .unwrap();
+        let extraction = extract_source(
+            Path::new("c.rs"),
+            cfg,
+            Path::new("c.rs"),
+            b"// nothing here\n",
+        )
+        .unwrap();
         assert_eq!(extraction.status, ExtractionStatus::SuspiciousEmpty);
     }
 }

@@ -85,8 +85,7 @@ crate::language_registry!(define_languages);
 /// Stored per-process (not passed call-by-call) because read-only commands
 /// must inherit the same map the build used.
 type OverrideMap = std::collections::HashMap<String, LanguageId>;
-static EXTENSION_OVERRIDES: std::sync::RwLock<Option<OverrideMap>> =
-    std::sync::RwLock::new(None);
+static EXTENSION_OVERRIDES: std::sync::RwLock<Option<OverrideMap>> = std::sync::RwLock::new(None);
 
 pub fn set_extension_overrides(overrides: OverrideMap) {
     if let Ok(mut guard) = EXTENSION_OVERRIDES.write() {
@@ -107,9 +106,7 @@ pub fn clear_extension_overrides() {
 /// to lowercase with the leading dot stripped (matching `for_extension`'s
 /// lookup); language names must match a registry language
 /// case-insensitively.
-pub fn parse_extension_overrides(
-    entries: &[(String, String)],
-) -> (OverrideMap, Vec<String>) {
+pub fn parse_extension_overrides(entries: &[(String, String)]) -> (OverrideMap, Vec<String>) {
     let mut map = OverrideMap::new();
     let mut warnings = Vec::new();
     for (raw_extension, raw_language) in entries {

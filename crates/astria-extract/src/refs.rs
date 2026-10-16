@@ -325,16 +325,28 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::create_dir_all(dir.path().join("app")).unwrap();
         let util = dir.path().join("src/util.ts");
-        std::fs::write(&util, "export function format() {}
-").unwrap();
+        std::fs::write(
+            &util,
+            "export function format() {}
+",
+        )
+        .unwrap();
         let app = dir.path().join("app/main.ts");
-        std::fs::write(&app, "import { format } from '@/util';
+        std::fs::write(
+            &app,
+            "import { format } from '@/util';
 format();
-").unwrap();
+",
+        )
+        .unwrap();
 
         let ctx = crate::project::load_import_context(dir.path());
-        let mut results = crate::extract(&[util.clone(), app.clone()], dir.path(), &astria_core::db::open_db_in_memory().unwrap())
-            .unwrap();
+        let mut results = crate::extract(
+            &[util.clone(), app.clone()],
+            dir.path(),
+            &astria_core::db::open_db_in_memory().unwrap(),
+        )
+        .unwrap();
         resolve_cross_file_references_with(&mut results, Some(&ctx));
 
         let main = results.iter().find(|e| e.file_path == app).unwrap();
