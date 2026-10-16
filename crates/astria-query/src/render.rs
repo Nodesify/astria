@@ -130,6 +130,7 @@ pub(crate) fn subgraph_to_text(
     relevance: &HashMap<NodeIndex, f64>,
     distance: &HashMap<NodeIndex, u32>,
     reach_strength: &HashMap<NodeIndex, f64>,
+    structural_degree: &HashMap<NodeIndex, usize>,
     prefer_files: bool,
     token_budget: i64,
     skip_records: usize,
@@ -167,11 +168,15 @@ pub(crate) fn subgraph_to_text(
                     .cmp(&distance.get(&b).copied().unwrap_or(u32::MAX))
             })
             .then_with(|| {
-                loaded
-                    .graph
-                    .neighbors(b)
-                    .count()
-                    .cmp(&loaded.graph.neighbors(a).count())
+                // Structural degree only: dispatch edges (possible
+                // implementations) must not win relevance ties — a
+                // dispatch-hubbed file is not more on-topic than the file
+                // the question's terms actually match.
+                structural_degree
+                    .get(&b)
+                    .copied()
+                    .unwrap_or(0)
+                    .cmp(&structural_degree.get(&a).copied().unwrap_or(0))
             })
             .then_with(|| {
                 if prefer_files {
