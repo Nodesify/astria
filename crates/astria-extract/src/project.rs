@@ -151,7 +151,7 @@ fn load_tsconfig_aliases(root: &Path) -> Vec<(String, String)> {
         }
     }
     // Longest alias prefix first so "@app/*" outruns "@/*".
-    aliases.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    aliases.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
     aliases.dedup();
     aliases
 }
@@ -257,7 +257,7 @@ fn source_entry(candidate: &Path) -> Option<PathBuf> {
     None
 }
 
-fn strip_prefix_path<'a>(root: &Path, prefix: &'a str) -> Option<PathBuf> {
+fn strip_prefix_path(root: &Path, prefix: &str) -> Option<PathBuf> {
     let trimmed = prefix.trim_matches('/');
     if trimmed.is_empty() {
         return Some(root.to_path_buf());

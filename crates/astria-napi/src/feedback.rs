@@ -372,8 +372,8 @@ fn parse_memory_doc(text: &str) -> MemoryEntry {
             } else if let Some(d) = trimmed.strip_prefix("date: ") {
                 entry.date = d.trim().parse().unwrap_or(0);
             }
-        } else if trimmed.starts_with("# Q: ") {
-            entry.question = trimmed[5..].trim().to_string();
+        } else if let Some(q) = trimmed.strip_prefix("# Q: ") {
+            entry.question = q.trim().to_string();
         }
     }
     entry
