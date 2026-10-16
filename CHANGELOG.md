@@ -4,6 +4,24 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.3.0] — 2026-10-16
+
+The typed-calls release: TypeScript receivers resolve through declared types, interfaces dispatch to implementations, imports resolve through project metadata, and the graph reports how completely it understood each file.
+
+- **Explicit query seeds.** `astria query --seed <symbol>` (repeatable; MCP `query_graph` gains a `seeds` argument) anchors traversals at known symbols instead of keyword ranking. Seeds resolve by id, label, bare name, or unique source path; unresolved seeds are reported, and all-unresolved returns an explicit miss — never a silent keyword fallback.
+- **Type-aware receiver resolution (TypeScript).** `this.service.save()` resolves through constructor parameter properties, typed class fields, typed locals, and `new` initializers, following inherited members through `extends`. Bindings stay name/type-derived (`RESOLVED`), never compiler-proven; ambiguous receivers stay unresolved.
+- **Interface dispatch.** Interfaces are extracted with their members and each member links to every implementing class via INFERRED `dispatch` edges — possible implementations for DI-style flows, never presented as proven runtime calls.
+- **Typed cross-repository member calls.** Member calls whose receiver type is known but whose member lives in another repository retain `receiver::type::<T>::<m>` evidence; the global resolver links them on a unique foreign name+member match.
+- **Project-aware import resolution.** tsconfig `paths` aliases with `baseUrl` (longest prefix), workspace package entries (authored TypeScript only — build outputs never map), and scoped subpaths resolve to real source files. Config changes refresh every affected binding on the next run.
+- **Extraction completeness reporting.** Every file carries complete / partial / unsupported / skipped / suspicious-empty status with parser-error lines (schema v11), surfaced in `astria stats`, `astria diagnose`, and MCP `graph_stats` — missing relationships are now distinguishable from incompletely-understood files.
+- **Evidence-weighted community detection.** Clustering weights edges by stored confidence (EXTRACTED > RESOLVED > INFERRED > SEMANTIC) through every pass, so many weak links can no longer outvote strong structure; query-usage `learned` edges never shape module boundaries.
+- **Actionable memory.** `astria reflect` produces preferred sources, corrections, dead ends, contested evidence, and tentative findings, discarding citations of deleted nodes; recorded verdicts gate learned-edge promotion so repeated unsuccessful exploration never becomes authoritative (schema v12).
+- **Grammar-aware extraction caching.** Cache keys embed per-language tree-sitter versions derived from Cargo.lock, so a grammar upgrade re-extracts only the affected language — one AST-cache invalidation on upgrade, per-language afterwards.
+- **Project language overrides.** `.astria.toml` `[languages]` remaps ambiguous suffixes (`.inc` = PHP) consistently across discovery, parsing, watch, and cache identity.
+- **Stable community labels.** LLM labels survive refactors by majority continuity (strict majority of both memberships), splits and merges assign one identity unambiguously, and summaries refresh separately from labels.
+- **Post-merge git hook** refreshes the graph after true merges; the editor hook-guard now answers searches and reads with matching graph symbols, locations, and a ready-to-run command instead of a generic nudge (bounded, once per key per 30 minutes, fail-open).
+- **Measured before release** (RESULTS-2026-10-16.md): ten-suite paired eval vs Graphify won or tied on all ten (file recall@5 72.9–100% vs 33.3–100%); token parity 2,875x vs 2,575x with ~11% fewer tokens per answer; self quality gate passed (hit@5 0.800, 0 budget violations); LoCoMo full set recall@5 83.6%; version A/B vs 1.2.0 shows no regressions with reads 9–37% faster.
+
 ## [1.2.0] — 2026-10-09
 
 Behavior-question retrieval ranking, honest quiet indexing, and evaluation-corpus integrity.
