@@ -46,9 +46,8 @@ impl ImportContext {
     /// The module-lookup key for a project-mapped specifier: the resolved
     /// path in the same normalized form extraction indexes files by.
     pub fn module_key(&self, specifier: &str) -> Option<String> {
-        self.resolve(specifier).map(|path| {
-            path.to_string_lossy().replace("\\", "/")
-        })
+        self.resolve(specifier)
+            .map(|path| path.to_string_lossy().replace("\\", "/"))
     }
 
     fn resolve_alias(&self, root: &Path, specifier: &str) -> Option<PathBuf> {
@@ -70,8 +69,7 @@ impl ImportContext {
         // package prefix rather than splitting on the first '/'.
         let mut best: Option<(&str, &PathBuf)> = None;
         for (name, entry) in &self.workspace_entries {
-            let is_match = specifier == name.as_str()
-                || specifier.starts_with(&format!("{name}/"));
+            let is_match = specifier == name.as_str() || specifier.starts_with(&format!("{name}/"));
             if !is_match {
                 continue;
             }
@@ -115,7 +113,9 @@ fn load_tsconfig_aliases(root: &Path) -> Vec<(String, String)> {
             .and_then(|b| b.as_str())
             .map(normalize_separators)
             .unwrap_or_else(|| String::from("."));
-        let Some(paths) = options.and_then(|o| o.get("paths")).and_then(|p| p.as_object())
+        let Some(paths) = options
+            .and_then(|o| o.get("paths"))
+            .and_then(|p| p.as_object())
         else {
             continue;
         };
@@ -201,8 +201,7 @@ fn load_workspace_entries(root: &Path) -> HashMap<String, PathBuf> {
             let Ok(member_text) = std::fs::read_to_string(&member) else {
                 continue;
             };
-            let Ok(member_value) = serde_json::from_str::<serde_json::Value>(&member_text)
-            else {
+            let Ok(member_value) = serde_json::from_str::<serde_json::Value>(&member_text) else {
                 continue;
             };
             let Some(name) = member_value.get("name").and_then(|n| n.as_str()) else {
@@ -248,8 +247,7 @@ fn source_entry(candidate: &Path) -> Option<PathBuf> {
         .then(|| candidate.to_path_buf());
     }
     if candidate.is_dir() {
-        for index in ["index.ts", "index.mts", "index.tsx"]
-        {
+        for index in ["index.ts", "index.mts", "index.tsx"] {
             let sibling = candidate.join(index);
             if sibling.is_file() {
                 return Some(sibling);
@@ -324,13 +322,21 @@ mod tests {
             &dir.path().join("packages/lib/package.json"),
             r#"{"name": "@acme/lib", "main": "./src/index.ts"}"#,
         );
-        write(&dir.path().join("packages/lib/src/index.ts"), "export const x = 1;\n");
+        write(
+            &dir.path().join("packages/lib/src/index.ts"),
+            "export const x = 1;\n",
+        );
         let ctx = load_import_context(dir.path());
         let entry = ctx.workspace_entries.get("@acme/lib").unwrap();
-        assert!(entry.to_string_lossy().replace('\\', "/").ends_with("src/index.ts"));
+        assert!(entry
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("src/index.ts"));
         let sub = ctx.resolve("@acme/lib/util/format").unwrap();
         assert!(
-            sub.to_string_lossy().replace('\\', "/").ends_with("src/util/format"),
+            sub.to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("src/util/format"),
             "{}",
             sub.display()
         );
@@ -350,7 +356,10 @@ mod tests {
             // main points at compiled output with no authored sibling.
             r#"{"name": "built", "main": "./dist/index.js"}"#,
         );
-        write(&dir.path().join("packages/built/dist/index.js"), "compiled\n");
+        write(
+            &dir.path().join("packages/built/dist/index.js"),
+            "compiled\n",
+        );
         let ctx = load_import_context(dir.path());
         assert!(
             !ctx.workspace_entries.contains_key("built"),

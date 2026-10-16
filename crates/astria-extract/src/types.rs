@@ -165,7 +165,9 @@ impl<'a> Walker<'a> {
                 }
                 self.walk_children(node);
             }
-            "property_definition" | "public_field_definition" | "property_signature"
+            "property_definition"
+            | "public_field_definition"
+            | "property_signature"
             | "property_declaration" => {
                 if let (Some(class), Some(name)) =
                     (self.class_stack.last(), node.child_by_field_name("name"))
@@ -220,8 +222,7 @@ impl<'a> Walker<'a> {
                         .unwrap_or_default();
                     if type_name.is_empty() {
                         if let Some(value) = declarator.child_by_field_name("value") {
-                            type_name =
-                                new_expression_type(value, self.source).unwrap_or_default();
+                            type_name = new_expression_type(value, self.source).unwrap_or_default();
                         }
                     }
                     if !type_name.is_empty() {
@@ -254,10 +255,7 @@ impl<'a> Walker<'a> {
         };
         let mut cursor = params.walk();
         for param in params.named_children(&mut cursor) {
-            if !matches!(
-                param.kind(),
-                "required_parameter" | "optional_parameter"
-            ) {
+            if !matches!(param.kind(), "required_parameter" | "optional_parameter") {
                 continue;
             }
             let has_modifier = {
@@ -322,9 +320,7 @@ impl<'a> Walker<'a> {
                         continue;
                     }
                     let name = bare_type_name(text);
-                    if name.is_empty()
-                        || !name.chars().next().is_some_and(|c| c.is_uppercase())
-                    {
+                    if name.is_empty() || !name.chars().next().is_some_and(|c| c.is_uppercase()) {
                         continue;
                     }
                     bases.push((clause_kind.to_string(), name));
@@ -419,7 +415,10 @@ impl ClassView {
     /// Resolve a type name to class-like node ids: same file first, then a
     /// unique same-named declaration anywhere in the corpus.
     fn resolve_type(&self, file: &str, type_name: &str) -> Vec<String> {
-        if let Some(ids) = self.decl_ids.get(&(file.to_string(), type_name.to_string())) {
+        if let Some(ids) = self
+            .decl_ids
+            .get(&(file.to_string(), type_name.to_string()))
+        {
             return ids.clone();
         }
         let all: Vec<String> = self
@@ -443,11 +442,7 @@ impl ClassView {
             return None;
         }
         for id in class_ids {
-            if let Some(member_id) = self
-                .members
-                .get(id)
-                .and_then(|m| m.get(member))
-            {
+            if let Some(member_id) = self.members.get(id).and_then(|m| m.get(member)) {
                 return Some(member_id.clone());
             }
         }
@@ -530,8 +525,7 @@ pub fn resolve_typed_receivers(results: &[Extraction], index: &TypeIndex) -> Typ
             .collect();
         let mut class_of_member: HashMap<&str, &str> = HashMap::new();
         for edge in &ext.edges {
-            if edge.relation == "contains" && class_label_by_id.contains_key(edge.source.as_str())
-            {
+            if edge.relation == "contains" && class_label_by_id.contains_key(edge.source.as_str()) {
                 class_of_member.insert(edge.target.as_str(), edge.source.as_str());
             }
         }
@@ -614,7 +608,10 @@ pub fn add_dispatch_edges(results: &mut [Extraction], index: &TypeIndex) -> usiz
             .get(&(file_key(&decl.file), decl.label.clone()))
             .cloned()
             .unwrap_or_default();
-        interface_ids.entry(decl.label.clone()).or_default().extend(ids);
+        interface_ids
+            .entry(decl.label.clone())
+            .or_default()
+            .extend(ids);
     }
     let mut added = 0usize;
     for heritage in &index.heritage {
@@ -657,9 +654,7 @@ pub fn add_dispatch_edges(results: &mut [Extraction], index: &TypeIndex) -> usiz
                     let Some(impl_member_id) = implementer_members.get(member_label) else {
                         continue;
                     };
-                    let Some(ext) = results
-                        .iter_mut()
-                        .find(|e| e.file_path == heritage.file)
+                    let Some(ext) = results.iter_mut().find(|e| e.file_path == heritage.file)
                     else {
                         continue;
                     };
@@ -714,7 +709,11 @@ mod tests {
             results[0].edges
         );
         let typed = resolve_typed_receivers(&results, &index);
-        assert_eq!(typed.rewrites.len(), 1, "this.store.save() resolves via the field type");
+        assert_eq!(
+            typed.rewrites.len(),
+            1,
+            "this.store.save() resolves via the field type"
+        );
         let (file_idx, edge_idx, target) = &typed.rewrites[0];
         assert!(results[*file_idx].edges[*edge_idx].target.contains("save"));
         assert!(target.contains("save"));
@@ -728,7 +727,8 @@ mod tests {
         let results = vec![extraction(&path, "TypeScript", source)];
         let index = build_type_index(&results);
         assert!(
-            index.bindings
+            index
+                .bindings
                 .iter()
                 .any(|b| b.receiver == "service" && b.type_name == "Service"),
             "constructor parameter property recorded: {:?}",
@@ -744,7 +744,10 @@ mod tests {
         let mut results = vec![extraction(&path, "TypeScript", source)];
         let index = build_type_index(&results);
         let added = add_dispatch_edges(&mut results, &index);
-        assert!(added >= 1, "interface member send() dispatches to EmailSender.send()");
+        assert!(
+            added >= 1,
+            "interface member send() dispatches to EmailSender.send()"
+        );
         let dispatch: Vec<&ExtractedEdge> = results[0]
             .edges
             .iter()

@@ -168,7 +168,7 @@ pub fn extract(
                         file_path.clone(),
                         "gws",
                         ExtractionStatus::Skipped,
-                        &format!("failed: {message}")
+                        &format!("failed: {message}"),
                     ));
                 }
             }
@@ -214,7 +214,7 @@ pub fn extract(
                         file_path.clone(),
                         "media",
                         ExtractionStatus::Skipped,
-                        &format!("failed: {message}")
+                        &format!("failed: {message}"),
                     ));
                 }
             }

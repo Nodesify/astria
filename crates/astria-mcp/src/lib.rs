@@ -503,7 +503,11 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                     )
                     .and_then(|mut stmt| {
                         stmt.query_map([], |r| {
-                            Ok(format!("{} {}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                            Ok(format!(
+                                "{} {}",
+                                r.get::<_, String>(0)?,
+                                r.get::<_, i64>(1)?
+                            ))
                         })
                         .map(|rows| rows.filter_map(|r| r.ok()).collect())
                     })

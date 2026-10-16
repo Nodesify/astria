@@ -679,14 +679,13 @@ fn record_extraction_status(
         }
     };
     for extraction in extractions {
-        let relative = extraction.file_path.strip_prefix(root).unwrap_or(&extraction.file_path);
+        let relative = extraction
+            .file_path
+            .strip_prefix(root)
+            .unwrap_or(&extraction.file_path);
         let key = astria_paths::normalize(relative);
         let notes = serde_json::to_string(&extraction.notes).unwrap_or_else(|_| "[]".into());
-        if let Err(e) = stmt.execute(rusqlite::params![
-            extraction.status.as_str(),
-            notes,
-            key,
-        ]) {
+        if let Err(e) = stmt.execute(rusqlite::params![extraction.status.as_str(), notes, key,]) {
             eprintln!(
                 "warning: failed to record extraction status for {}: {e}",
                 extraction.file_path.display()
@@ -935,10 +934,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let good = dir.path().join("ok.rs");
         let bad = dir.path().join("broken.rs");
-        std::fs::write(&good, b"fn a() {}
-").unwrap();
-        std::fs::write(&bad, b"fn b() {
-").unwrap();
+        std::fs::write(
+            &good,
+            b"fn a() {}
+",
+        )
+        .unwrap();
+        std::fs::write(
+            &bad,
+            b"fn b() {
+",
+        )
+        .unwrap();
         let db = astria_core::db::open_db_in_memory().unwrap();
         for file in [&good, &bad] {
             db.execute(
@@ -950,8 +957,8 @@ mod tests {
             )
             .unwrap();
         }
-        let extractions = astria_extract::extract(&[good.clone(), bad.clone()], dir.path(), &db)
-            .unwrap();
+        let extractions =
+            astria_extract::extract(&[good.clone(), bad.clone()], dir.path(), &db).unwrap();
         record_extraction_status(dir.path(), &db, &extractions);
         let (status, notes): (String, Option<String>) = db
             .query_row(

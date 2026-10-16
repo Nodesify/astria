@@ -4,8 +4,8 @@
 // cargo_introspect.py. Never uses an LLM — dependency structure is fact, not
 // inference, and a shared dependency should emerge as a hub node.
 
-use std::path::Path;
 use crate::schema::ExtractionStatus;
+use std::path::Path;
 
 use astria_core::ids::normalize_id;
 use astria_core::MANIFEST_FILENAMES;

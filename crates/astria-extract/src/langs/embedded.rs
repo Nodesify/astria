@@ -4,8 +4,8 @@
 // embedded TS/JS is extracted with the existing JavaScript/TypeScript
 // extractors and re-attributed to the component file.
 
-use std::fs;
 use crate::schema::ExtractionStatus;
+use std::fs;
 use std::path::Path;
 
 use astria_core::{AstriaError, Result};

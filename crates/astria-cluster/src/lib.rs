@@ -5,8 +5,8 @@ mod naming;
 // splitting (ported from upstream astria v8).
 
 use petgraph::graph::NodeIndex;
-use petgraph::visit::EdgeRef;
 use petgraph::graph::UnGraph;
+use petgraph::visit::EdgeRef;
 use rusqlite::Connection;
 use std::collections::HashMap;
 
@@ -273,14 +273,11 @@ pub fn cluster_with(
                 }
             }
         }
-        let Some((&target, _)) = tally
-            .iter()
-            .max_by(|a, b| {
-                a.1.partial_cmp(b.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| b.0.cmp(a.0))
-            })
-        else {
+        let Some((&target, _)) = tally.iter().max_by(|a, b| {
+            a.1.partial_cmp(b.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.0.cmp(a.0))
+        }) else {
             isolated.insert(fragment);
             continue;
         };
@@ -308,14 +305,11 @@ pub fn cluster_with(
             }
             *tally.entry(labels[neighbor.index()]).or_insert(0.0) += *edge.weight();
         }
-        if let Some((&target, _)) = tally
-            .iter()
-            .max_by(|a, b| {
-                a.1.partial_cmp(b.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| b.0.cmp(a.0))
-            })
-        {
+        if let Some((&target, _)) = tally.iter().max_by(|a, b| {
+            a.1.partial_cmp(b.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.0.cmp(a.0))
+        }) {
             labels[hub] = target;
         }
     }
@@ -503,9 +497,7 @@ struct PreviousCommunity {
 /// Read the previous build's LLM-named communities joined with their member
 /// ids from `nodes.community`. Must run before node communities are
 /// rewritten — afterwards the old membership is unrecoverable.
-fn read_previous_named_communities(
-    db: &Connection,
-) -> astria_core::Result<Vec<PreviousCommunity>> {
+fn read_previous_named_communities(db: &Connection) -> astria_core::Result<Vec<PreviousCommunity>> {
     let mut stmt = db.prepare(
         "SELECT c.id, c.label, c.summary, c.member_hash, n.id
          FROM communities c JOIN nodes n ON n.community = c.id
@@ -661,7 +653,9 @@ fn propagate(
                     continue;
                 }
                 let weight = *edge.weight();
-                *neighbor_labels.entry(labels[neighbor.index()]).or_insert(0.0) += weight;
+                *neighbor_labels
+                    .entry(labels[neighbor.index()])
+                    .or_insert(0.0) += weight;
                 neighbor_total += weight;
             }
             if neighbor_total <= 0.0 {
@@ -1170,13 +1164,11 @@ mod tests {
         let old = vec![previous(0, "Auth", &["a", "b", "c", "d"])];
         // 3 of 4 old members and 3 of 4 new members are shared: both sides
         // hold a strict majority.
-        let new: HashMap<u32, Vec<&str>> =
-            HashMap::from([(7u32, vec!["a", "b", "c", "e"])]);
+        let new: HashMap<u32, Vec<&str>> = HashMap::from([(7u32, vec!["a", "b", "c", "e"])]);
         let assigned = assign_stable_labels(&old, &new);
         assert_eq!(assigned.get(&7).unwrap().label, "Auth");
         // 50/50 even split: no strict majority, no preservation.
-        let split: HashMap<u32, Vec<&str>> =
-            HashMap::from([(7u32, vec!["a", "b", "x", "y"])]);
+        let split: HashMap<u32, Vec<&str>> = HashMap::from([(7u32, vec!["a", "b", "x", "y"])]);
         assert!(assign_stable_labels(&old, &split).is_empty());
     }
 
@@ -1186,10 +1178,8 @@ mod tests {
         // the dominant fragment holds a strict majority of the old side
         // (4*2 > 6), so exactly one new community keeps the label.
         let old = vec![previous(0, "Payments", &["a", "b", "c", "d", "e", "f"])];
-        let fragments: HashMap<u32, Vec<&str>> = HashMap::from([
-            (1u32, vec!["a", "b", "c", "d"]),
-            (2u32, vec!["e", "f"]),
-        ]);
+        let fragments: HashMap<u32, Vec<&str>> =
+            HashMap::from([(1u32, vec!["a", "b", "c", "d"]), (2u32, vec!["e", "f"])]);
         let assigned = assign_stable_labels(&old, &fragments);
         assert_eq!(assigned.len(), 1, "one old name blesses one community");
         assert_eq!(assigned.get(&1).unwrap().label, "Payments");
@@ -1200,10 +1190,8 @@ mod tests {
             previous(0, "Auth", &["a", "b", "c", "d"]),
             previous(1, "Billing", &["e", "f", "g", "h"]),
         ];
-        let merged: HashMap<u32, Vec<&str>> = HashMap::from([(
-            5u32,
-            vec!["a", "b", "c", "d", "e", "f"],
-        )]);
+        let merged: HashMap<u32, Vec<&str>> =
+            HashMap::from([(5u32, vec!["a", "b", "c", "d", "e", "f"])]);
         let assigned = assign_stable_labels(&olds, &merged);
         assert_eq!(assigned.len(), 1);
         assert_eq!(assigned.get(&5).unwrap().label, "Auth");

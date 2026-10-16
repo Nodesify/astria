@@ -217,8 +217,7 @@ pub fn reflect(astria_dir: &Path, db: Option<&Connection>) -> Result<String> {
     // Preferred sources: useful-memory citations, corroborated by count and
     // recency (a node cited by several useful memories, most recently now,
     // is where future answers should start).
-    let mut useful_citations: std::collections::HashMap<String, (usize, u64)> =
-        Default::default();
+    let mut useful_citations: std::collections::HashMap<String, (usize, u64)> = Default::default();
     let mut dead_citations: std::collections::HashMap<String, usize> = Default::default();
     for entry in &entries {
         for node in &entry.source_nodes {
@@ -255,11 +254,12 @@ pub fn reflect(astria_dir: &Path, db: Option<&Connection>) -> Result<String> {
         .iter()
         .filter(|e| {
             e.outcome == "corrected"
-                && e.correction.as_deref().is_some_and(|c| !c.trim().is_empty())
+                && e.correction
+                    .as_deref()
+                    .is_some_and(|c| !c.trim().is_empty())
         })
         .collect();
-    let dead_ends: Vec<&MemoryEntry> =
-        entries.iter().filter(|e| e.outcome == "dead_end").collect();
+    let dead_ends: Vec<&MemoryEntry> = entries.iter().filter(|e| e.outcome == "dead_end").collect();
     let tentative: Vec<&MemoryEntry> = entries
         .iter()
         .filter(|e| e.outcome == "unrecorded")
@@ -476,23 +476,67 @@ mod tests {
         )
         .unwrap();
         // Useful memory citing a live node and a deleted node.
-        save_result(&db, &gdir, "Where is auth?", "middleware", Some("useful"), None,
-            &["live".to_string(), "deleted".to_string()]).unwrap();
-        save_result(&db, &gdir, "Where is auth exactly?", "middleware again", Some("useful"), None,
-            &["live".to_string()]).unwrap();
+        save_result(
+            &db,
+            &gdir,
+            "Where is auth?",
+            "middleware",
+            Some("useful"),
+            None,
+            &["live".to_string(), "deleted".to_string()],
+        )
+        .unwrap();
+        save_result(
+            &db,
+            &gdir,
+            "Where is auth exactly?",
+            "middleware again",
+            Some("useful"),
+            None,
+            &["live".to_string()],
+        )
+        .unwrap();
         // Dead end citing the same node: contested evidence.
-        save_result(&db, &gdir, "Is auth in views?", "no", Some("dead_end"), None,
-            &["live".to_string()]).unwrap();
+        save_result(
+            &db,
+            &gdir,
+            "Is auth in views?",
+            "no",
+            Some("dead_end"),
+            None,
+            &["live".to_string()],
+        )
+        .unwrap();
         // A correction to apply.
-        save_result(&db, &gdir, "Old claim about cache?", "wrong", Some("corrected"),
-            Some("cache lives in redis, not memory"), &[]).unwrap();
+        save_result(
+            &db,
+            &gdir,
+            "Old claim about cache?",
+            "wrong",
+            Some("corrected"),
+            Some("cache lives in redis, not memory"),
+            &[],
+        )
+        .unwrap();
         // Unverified memory.
-        save_result(&db, &gdir, "Maybe about billing?", "unsure", None, None, &[]).unwrap();
+        save_result(
+            &db,
+            &gdir,
+            "Maybe about billing?",
+            "unsure",
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
 
         let lessons = reflect(&gdir, Some(&db)).unwrap();
         assert!(lessons.contains("experiential lessons"), "{lessons}");
         assert!(lessons.contains("## Preferred sources"));
-        assert!(lessons.contains("live()"), "preferred sources show labels: {lessons}");
+        assert!(
+            lessons.contains("live()"),
+            "preferred sources show labels: {lessons}"
+        );
         assert!(lessons.contains("2 useful memories"));
         assert!(lessons.contains("## Known dead ends"));
         assert!(lessons.contains("Is auth in views?"));
@@ -511,7 +555,16 @@ mod tests {
         let gdir = dir.path().join(".astria");
         std::fs::create_dir_all(&gdir).unwrap();
         let db = open_db_in_memory().unwrap();
-        save_result(&db, &gdir, "How does AUTH work?", "x", Some("dead_end"), None, &[]).unwrap();
+        save_result(
+            &db,
+            &gdir,
+            "How does AUTH work?",
+            "x",
+            Some("dead_end"),
+            None,
+            &[],
+        )
+        .unwrap();
         let (outcome,): (String,) = db
             .query_row(
                 "SELECT outcome FROM memory_outcomes WHERE question = 'how does auth work?'",
