@@ -9,9 +9,31 @@ import BenchmarkSnapshot from '@site/src/components/BenchmarkSnapshot';
 
 # Benchmarks and evidence
 
-For the latest source validation, see [retrieval validation](./retrieval-validation.md) — latest paired run October 6, 2026: astria 1.1.0 vs Graphify 0.9.77 — including symbol diagnostics and performance tradeoffs.
+For the latest source validation, see [retrieval validation](./retrieval-validation.md) — latest paired run October 16, 2026: the release candidate vs Graphify 0.9.69, ten suites, astria winning or tying all ten — including symbol diagnostics and performance tradeoffs.
 
 The tables below are historical measurements with the methodology and limitations recorded here. This page collects the canonical numbers (v0.8.0), the methodology behind them, and a head-to-head against the Python Graphify project that inspired it.
+
+## Release-candidate validation (16 October 2026)
+
+The full pre-release battery ran on one Windows workstation against the
+develop tree carrying all thirteen Graphify-inspired backlog features
+(typed receiver resolution, interface dispatch, project-aware imports,
+evidence-weighted clustering, extraction completeness reporting, memory
+gating, and the rest). Complete data with reproduction commands lives in
+`RESULTS-2026-10-16.md` in the repository; the headlines:
+
+| Measurement | Result |
+|---|---|
+| Token parity vs Graphify (same corpus, same o200k_base tokenizer) | astria **1,597 avg tokens / 2,875x reduction** vs Graphify 1,783 / 2,575x (~11% fewer tokens per answer) |
+| Paired retrieval, 10 non-reserved suites | astria **wins or ties all 10** on file recall@5; definition recall@5 40–100% vs ~0%; 0 over-budget responses vs Graphify over on 6/10 suites |
+| Self-corpus quality gate | **PASSED** — hit@5 0.800, recall@5 0.743 (floor 0.50), 35/35 answered, 0 budget violations |
+| LoCoMo memory, full 1,977 questions | recall@5 **83.6%**, MRR 0.717 — within a point of the shipped 1.0.6 |
+| Version A/B, v1.2.0 → this build | **no regressions**: build 0.99x, no-op update 0.93x, queries 0.78–0.91x, explain 0.63x |
+| Functional tests | 618 Rust + 621 TypeScript, **0 failures** |
+
+The same token-parity snapshot regeneration also ran locally
+(`scripts/bench/run-snapshot.mjs`); the published snapshot below comes
+from the CI workflow on dedicated runners.
 
 ## How the token benchmark works
 

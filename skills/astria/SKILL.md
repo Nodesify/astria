@@ -64,7 +64,7 @@ After editing code in a session with an active graph, run `astria update .` so l
 
 ## Command quick reference
 
-- `astria query "<question>"` - BFS traversal from matching nodes (`--dfs`, `--depth`, `--budget`, `--directed`, `--detail high` for `EXTRACTED`-facts-only)
+- `astria query "<question>"` - BFS traversal from matching nodes (`--dfs`, `--depth`, `--budget`, `--directed`, `--detail high` for `EXTRACTED`-facts-only). Add `--seed <symbol>` (repeatable) to anchor the traversal at known symbols: unresolved seeds are reported and all-unresolved returns an explicit miss, never a keyword fallback
 - `astria map` - PageRank-ranked repo map with each file's top symbols; best first command on an unfamiliar repo
 - `astria explain <node>` - node details with all connections and `file:line` anchors
 - `astria path <A> <B>` - shortest path; add `--directed` for call direction
