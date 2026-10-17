@@ -1,0 +1,14 @@
+# CodeQL analysis scope.
+#
+# scripts/bench/** is local maintainer tooling: it downloads public
+# datasets (HotpotQA, LoCoMo) to bench-work/ and materializes them on
+# disk — that is the tool's entire purpose, so CodeQL's
+# http-to-file-access / file-access-to-http findings there are by-design,
+# not actionable, and cannot be cleared by code changes. Dismissing each
+# alert would also work, but scoping keeps the benchmark directory out of
+# the scan permanently instead of re-flagging on every dataset addition.
+#
+# Product surface (the Rust core and the TS CLI in packages/) stays fully
+# analyzed — see the workflow comment on the threat model.
+paths-ignore:
+  - scripts/bench/**

@@ -41,6 +41,9 @@ jobs:
         with:
           languages: javascript-typescript
           queries: security-extended
+          # Analysis scope: product TS only. scripts/bench/** is excluded
+          # via .github/codeql-config.yml (see the rationale there).
+          config-file: ./.github/codeql-config.yml
       - uses: github/codeql-action/analyze@87ef0dc97def48aa960fbf026a2563ee9dbdb470 # v3
         with:
           category: '/language:javascript-typescript'
