@@ -280,7 +280,10 @@ fn xlsx_dimensions_within_bounds(bytes: &[u8]) -> std::result::Result<(), String
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| e.to_string())?;
     for index in 0..archive.len() {
         let mut part = archive.by_index(index).map_err(|e| e.to_string())?;
-        let name = part.name().to_string();
+        let name = part
+            .name()
+            .map(|n| n.to_string())
+            .map_err(|e| e.to_string())?;
         if !(name.starts_with("xl/worksheets/") && name.ends_with(".xml")) {
             continue;
         }
@@ -444,9 +447,9 @@ mod tests {
     fn zip_of(parts: &[(&str, String)]) -> Vec<u8> {
         let cursor = std::io::Cursor::new(Vec::new());
         let mut zip = zip::ZipWriter::new(cursor);
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<()> = zip::write::FileOptions::default();
         for (name, content) in parts {
-            zip.start_file(*name, options.clone()).unwrap();
+            zip.start_file(*name, options).unwrap();
             zip.write_all(content.as_bytes()).unwrap();
         }
         zip.finish().unwrap().into_inner()
