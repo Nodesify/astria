@@ -75,7 +75,14 @@ function prepareConversation(conv) {
       ...turns.map((t) => `[${t.dia_id ?? ''}] **${t.speaker}:** ${t.text ?? ''}`),
       '',
     ].filter((l) => l !== '').join('\n') + '\n';
-    writeFileSync(path.join(transcriptsDir, name), body);
+    // The name derives from dataset-supplied ids; the resolved-prefix
+    // check makes a traversal-crafted id structurally impossible to land
+    // outside the transcripts directory.
+    const target = path.resolve(transcriptsDir, name);
+    if (!target.startsWith(path.resolve(transcriptsDir) + path.sep)) {
+      throw new Error(`unsafe transcript path for conversation ${cid}: ${name}`);
+    }
+    writeFileSync(target, body);
     sessions++;
     for (const t of turns) if (t.dia_id) turnToSession.set(t.dia_id, name);
   }
