@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn case_distinct_declarations_get_disambiguated() {
-        use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};
+        use crate::schema::{ExtractedEdge, ExtractedNode, Extraction, ExtractionStatus};
         let mut ext = Extraction {
             file_path: PathBuf::from("a.py"),
             language: "Python".into(),
@@ -291,6 +291,8 @@ mod tests {
                     source_line: None,
                 },
             ],
+            status: ExtractionStatus::Complete,
+            notes: Vec::new(),
         };
         disambiguate_duplicate_ids(&mut ext);
         let ids: Vec<&str> = ext.nodes.iter().map(|n| n.id.as_str()).collect();

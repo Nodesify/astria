@@ -4,6 +4,7 @@
 // cargo_introspect.py. Never uses an LLM — dependency structure is fact, not
 // inference, and a shared dependency should emerge as a hub node.
 
+use crate::schema::ExtractionStatus;
 use std::path::Path;
 
 use astria_core::ids::normalize_id;
@@ -135,6 +136,8 @@ pub fn extract_manifest(path: &Path) -> Extraction {
         language: "Manifest".to_string(),
         nodes: builder.nodes,
         edges: builder.edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     }
 }
 

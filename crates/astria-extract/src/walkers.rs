@@ -14,7 +14,7 @@ use crate::langs::python::python_overload_has_implementation;
 use crate::langs::rust::{is_rust_test_function, rust_doc_comment, rust_is_pub, rust_module_doc};
 use crate::langs::LanguageConfig;
 use crate::naming::{file_stem, make_module_target_id, make_node_id, make_target_id};
-use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};
+use crate::schema::{ExtractedEdge, ExtractedNode, Extraction, ExtractionStatus};
 use astria_core::AstriaError;
 
 // ---------------------------------------------------------------------------
@@ -1129,12 +1129,12 @@ pub fn extract_source(
 ) -> Result<Extraction, AstriaError> {
     if !cfg.compiled_in {
         warn_once_not_compiled(cfg.name);
-        return Ok(Extraction {
-            file_path: path.to_path_buf(),
-            language: cfg.name.to_string(),
-            nodes: Vec::new(),
-            edges: Vec::new(),
-        });
+        return Ok(Extraction::status_only(
+            path.to_path_buf(),
+            cfg.name,
+            ExtractionStatus::Unsupported,
+            "grammar not compiled into this build",
+        ));
     }
     let source_ref = source;
 
@@ -1214,12 +1214,68 @@ pub fn extract_source(
     let mut seen_node_ids: HashSet<String> = HashSet::new();
     state.nodes.retain(|n| seen_node_ids.insert(n.id.clone()));
 
+    // Completeness: a tree with ERROR/MISSING nodes means the parser
+    // recovered but parts of the file were not understood — downstream
+    // consumers must be able to tell "no relationship exists" from
+    // "extraction did not fully understand this file". Error locations are
+    // the first few, best-effort (tree-sitter points are 0-based).
+    let mut notes: Vec<String> = Vec::new();
+    collect_parse_errors(root, &mut notes);
+    // nodes[0] is always the file node itself; a code file with nothing
+    // beyond it parsed cleanly yet lost every symbol — suspicious, not
+    // data-only.
+    let symbols = state.nodes.len().saturating_sub(1);
+    let status = if !notes.is_empty() {
+        if symbols == 0 {
+            notes.push("no symbols recovered".to_string());
+        }
+        ExtractionStatus::Partial
+    } else if symbols == 0 {
+        ExtractionStatus::SuspiciousEmpty
+    } else {
+        ExtractionStatus::Complete
+    };
+
     Ok(Extraction {
         file_path: path.to_path_buf(),
         language: cfg.name.to_string(),
         nodes: state.nodes,
         edges: state.edges,
+        status,
+        notes,
     })
+}
+
+/// First few parse-error locations ("parse error at line N"), scanning the
+/// tree breadth-first with a node budget so pathological recoveries cannot
+/// make status collection cost more than the parse itself.
+fn collect_parse_errors<'tree>(root: tree_sitter::Node<'tree>, notes: &mut Vec<String>) {
+    const MAX_NOTES: usize = 3;
+    const MAX_SCANNED: usize = 4_096;
+    let mut queue: std::collections::VecDeque<tree_sitter::Node<'tree>> =
+        std::collections::VecDeque::new();
+    queue.push_back(root);
+    let mut scanned = 0usize;
+    while let Some(node) = queue.pop_front() {
+        scanned += 1;
+        if scanned > MAX_SCANNED {
+            return;
+        }
+        if matches!(node.kind(), "ERROR" | "MISSING") {
+            if notes.len() < MAX_NOTES {
+                notes.push(format!(
+                    "parse error at line {}",
+                    node.start_position().row + 1
+                ));
+            } else {
+                return;
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            queue.push_back(child);
+        }
+    }
 }
 
 /// One warning per disabled language per process, so a build compiled
@@ -1234,5 +1290,58 @@ fn warn_once_not_compiled(language: &str) {
                 "[astria] language {language} is not compiled into this build (its lang-* cargo feature is off); files of this language are skipped"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    use crate::langs;
+
+    #[test]
+    fn clean_code_file_is_complete() {
+        let cfg = langs::get_language_for_extension("rs").unwrap();
+        let extraction =
+            extract_source(Path::new("a.rs"), cfg, Path::new("a.rs"), b"fn main() {}\n").unwrap();
+        assert_eq!(extraction.status, ExtractionStatus::Complete);
+        assert!(extraction.notes.is_empty());
+    }
+
+    #[test]
+    fn broken_syntax_is_partial_with_error_lines() {
+        let cfg = langs::get_language_for_extension("rs").unwrap();
+        // Unbalanced braces force the parser into ERROR recovery while the
+        // leading fn still extracts: partial, with the error location kept.
+        let extraction = extract_source(
+            Path::new("b.rs"),
+            cfg,
+            Path::new("b.rs"),
+            b"fn broken() {\n  fn {\n}\n",
+        )
+        .unwrap();
+        assert_eq!(extraction.status, ExtractionStatus::Partial);
+        assert!(
+            extraction
+                .notes
+                .iter()
+                .any(|n| n.contains("parse error at line")),
+            "notes should carry error locations: {:?}",
+            extraction.notes
+        );
+    }
+
+    #[test]
+    fn code_file_without_symbols_is_suspiciously_empty() {
+        let cfg = langs::get_language_for_extension("rs").unwrap();
+        // Only a comment: clean parse, zero symbols beyond the file node —
+        // flagged rather than reported as understood.
+        let extraction = extract_source(
+            Path::new("c.rs"),
+            cfg,
+            Path::new("c.rs"),
+            b"// nothing here\n",
+        )
+        .unwrap();
+        assert_eq!(extraction.status, ExtractionStatus::SuspiciousEmpty);
     }
 }

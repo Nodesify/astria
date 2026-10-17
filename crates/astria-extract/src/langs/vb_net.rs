@@ -5,6 +5,7 @@
 // Class/Module/Interface/Structure containers and Sub/Function members with
 // `contains` edges; imports (Imports X) are captured as import nodes.
 
+use crate::schema::ExtractionStatus;
 use std::fs;
 use std::path::Path;
 
@@ -174,6 +175,8 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
         language: "VB.NET".to_string(),
         nodes,
         edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     })
 }
 

@@ -55,7 +55,7 @@ AST citations use one-based lines. Queries return qualifying relationships betwe
 
 ```bash
 astria explain <node> [--graph .] [--json]      # Explain a node and its connections
-astria query <question> [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--no-embed] [--json] [--graph .]  # BFS/DFS traversal
+astria query <question> [--seed <symbol>]... [--dfs] [--depth 2] [--budget 2000] [--directed] [--detail high] [--cursor N] [--no-embed] [--json] [--graph .]  # BFS/DFS traversal; --seed anchors it at known symbols
 astria path <A> <B> [--directed] [--detail high] [--json] [--graph .]   # Shortest path between two concepts
 astria affected <node> [--depth 2] [--relation R] [--json] [--graph .]  # Blast radius - what breaks if you change this node
 astria map [--budget 2000] [--detail high] [--json] [--graph .]  # PageRank-ranked repo map with top symbols

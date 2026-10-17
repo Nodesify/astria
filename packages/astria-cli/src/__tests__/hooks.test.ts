@@ -60,13 +60,45 @@ execSync('nodesify-graphify update .', { stdio: 'inherit' });
 function testFreshInstall() {
   const repo = tmpGitRepo();
   const results = installGitHooks(repo);
-  assert(results.length === 2, 'fresh install: two hooks reported');
+  assert(results.length === 3, 'fresh install: three hooks reported');
   const content = fs.readFileSync(hookPath(repo, 'post-commit'), 'utf-8');
   assert(content.startsWith('#!/usr/bin/env node'), 'fresh install: node shebang');
   assert(content.includes('// astria-hook-start'), 'fresh install: current marker present');
   assert(content.includes('ASTRIA_HOOK_VERSION'), 'fresh install: version sentinel present');
   assert(content.includes('--if-stale'), 'fresh install: hook throttles by freshness');
   assert(!content.includes('nodesify-graphify'), 'fresh install: no legacy marker');
+}
+
+function testPostMergeInstall() {
+  const repo = tmpGitRepo();
+  const results = installGitHooks(repo);
+  assert(results.some(r => r.startsWith('post-merge: installed')), 'post-merge: installed');
+  const content = fs.readFileSync(hookPath(repo, 'post-merge'), 'utf-8');
+  assert(content.startsWith('#!/usr/bin/env node'), 'post-merge: node shebang');
+  assert(content.includes('// astria-merge-hook-start'), 'post-merge: marker present');
+  // First-parent diff: post-merge must refresh on what the merge brought in.
+  // HEAD~1 (not HEAD^1) so the command survives cmd.exe on Windows.
+  assert(content.includes('HEAD~1 HEAD'), 'post-merge: first-parent diff');
+  assert(content.includes('.astria'), 'post-merge: watches the graph directory');
+
+  const status = statusGitHooks(repo);
+  assert(status.some(r => r.includes('post-merge: installed')), 'post-merge: status reports installed');
+
+  const removed = uninstallGitHooks(repo);
+  assert(removed.some(r => r.includes('post-merge: removed')), 'post-merge: uninstall removes it');
+  assert(!fs.existsSync(hookPath(repo, 'post-merge')), 'post-merge: hook file deleted when empty');
+}
+
+function testPostMergeAppendedToUserHook() {
+  const repo = tmpGitRepo();
+  // A user's own post-merge hook must survive; only a Node-script hook can
+  // absorb the appended JavaScript updater (shell hooks are skipped).
+  fs.writeFileSync(hookPath(repo, 'post-merge'), '#!/bin/sh\necho user merge hook\n', 'utf-8');
+  const results = installGitHooks(repo);
+  const content = fs.readFileSync(hookPath(repo, 'post-merge'), 'utf-8');
+  assert(content.includes('echo user merge hook'), 'post-merge append: user hook preserved');
+  assert(!content.includes('// astria-merge-hook-start'), 'post-merge append: shell hook left alone');
+  assert(results.some(r => r.startsWith('post-merge: skipped')), 'post-merge append: skip reported');
 }
 
 function testShellLegacyMigration() {
@@ -176,6 +208,7 @@ function testStatusDetectsLegacy() {
   const results = statusGitHooks(repo);
   assert(results.some(r => r.includes('post-checkout: installed (legacy format')), 'status: legacy detected with migration hint');
   assert(results.some(r => r.includes('post-commit: not installed')), 'status: missing hook reported');
+  assert(results.some(r => r.includes('post-merge: not installed')), 'status: missing post-merge reported');
 }
 
 function testNotAGitRepo() {
@@ -186,6 +219,8 @@ function testNotAGitRepo() {
 
 function main() {
   testFreshInstall();
+  testPostMergeInstall();
+  testPostMergeAppendedToUserHook();
   testShellLegacyMigration();
   testJsLegacyMigration();
   testLegacyAlongsideCurrentNotDuplicated();

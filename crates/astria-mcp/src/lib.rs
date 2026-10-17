@@ -34,7 +34,9 @@ fn tools() -> Value {
             "detail": {"type": "string", "enum": ["all", "high"], "default": "all",
                 "description": "'high' keeps only EXTRACTED/DECLARED facts, dropping inferred and semantic edges."},
             "cursor": {"type": "integer", "default": 0,
-                "description": "Continuation token from a previous truncated result: fetches the next slice of ranked nodes."}},
+                "description": "Continuation token from a previous truncated result: fetches the next slice of ranked nodes."},
+            "seeds": {"type": "array", "items": {"type": "string"}, "maxItems": 16,
+                "description": "Explicit seed nodes (id, label, or source path): the traversal starts from these instead of keyword ranking. Unresolved seeds are reported in the result; when every seed is unresolved the query returns an explicit miss rather than falling back to keywords."}},
             "required": ["question"]}},
         {"name": "repo_map", "description": "Aider-style repo map: files ranked by PageRank over the reference graph with top symbols per file. One budgeted blob to orient on a codebase.",
          "inputSchema": {"type": "object", "properties": {
@@ -145,6 +147,20 @@ fn validate_arguments(name: &str, args: &Value) -> std::result::Result<(), Strin
                 n >= property["minimum"].as_u64().unwrap_or(0)
                     && n <= property["maximum"].as_u64().unwrap_or(i64::MAX as u64)
             }),
+            // Arrays of bounded, non-empty strings (explicit query seeds).
+            Some("array") => {
+                let item_type = property["items"]["type"].as_str().unwrap_or("string");
+                let max_items = property["maxItems"].as_u64().unwrap_or(16) as usize;
+                value.as_array().is_some_and(|items| {
+                    items.len() <= max_items
+                        && items.iter().all(|item| match item_type {
+                            "string" => item
+                                .as_str()
+                                .is_some_and(|text| !text.trim().is_empty() && text.len() <= 16384),
+                            _ => false,
+                        })
+                })
+            }
             _ => false,
         };
         if !valid {
@@ -200,6 +216,15 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             let directed = bool_arg(args, "directed").unwrap_or(false);
             let detail = str_arg(args, "detail");
             let cursor = args.get("cursor").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let seeds: Vec<String> = args
+                .get("seeds")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|i| i.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
             astria_query::query_graph_with_metadata(
                 db,
                 db_path,
@@ -211,6 +236,7 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
                 min_strength_for(&detail),
                 cursor,
                 min_strength_for(&detail) >= 0.9,
+                &seeds,
             )
             .map(|response| {
                 json!({
@@ -466,8 +492,34 @@ fn call_tool(db: &Connection, db_path: &str, name: &str, args: &Value) -> Value 
             } else {
                 ", embeddings: not supported in this build"
             };
+            // Extraction completeness disclosure: an agent reading "0
+            // relationships" must be able to tell missing edges from
+            // partially-understood files.
+            let extraction_txt: String = {
+                let rows: Vec<String> = db
+                    .prepare(
+                        "SELECT COALESCE(extraction_status, 'unknown'), COUNT(*)
+                         FROM file_manifest GROUP BY 1 ORDER BY COUNT(*) DESC",
+                    )
+                    .and_then(|mut stmt| {
+                        stmt.query_map([], |r| {
+                            Ok(format!(
+                                "{} {}",
+                                r.get::<_, String>(0)?,
+                                r.get::<_, i64>(1)?
+                            ))
+                        })
+                        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    })
+                    .unwrap_or_default();
+                if rows.is_empty() {
+                    String::new()
+                } else {
+                    format!(", extraction: {}", rows.join(", "))
+                }
+            };
             Ok(text_result(format!(
-                "nodes: {nodes}, edges: {edges}, communities: {communities}, files tracked: {files}{modularity_txt}{embed_txt}"
+                "nodes: {nodes}, edges: {edges}, communities: {communities}, files tracked: {files}{modularity_txt}{embed_txt}{extraction_txt}"
             )))
         }
         "health" => astria_analyze::health::health(db).map(|report| {
@@ -679,6 +731,47 @@ mod tests {
         let db = astria_core::open_db_in_memory().unwrap();
         let result = call_tool(&db, ":memory:", "bogus", &json!({}));
         assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn query_graph_accepts_string_seeds_and_rejects_bad_ones() {
+        let db = astria_core::open_db_in_memory().unwrap();
+        db.execute(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('a', 'A', 'code', 'f.rs')",
+            [],
+        )
+        .unwrap();
+        // Valid seeds reach the query and are reported back when unresolved.
+        let result = call_tool(
+            &db,
+            ":memory:",
+            "query_graph",
+            &json!({"question": "anything", "seeds": ["missing_node"]}),
+        );
+        assert_eq!(result["isError"], false);
+        let unresolved = result["structuredContent"]["unresolvedSeeds"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            unresolved,
+            vec![json!("missing_node")],
+            "unresolved seeds must surface in structuredContent"
+        );
+
+        // Non-string items and non-array values are rejected by validation.
+        for bad in [
+            json!({"question": "q", "seeds": ["ok", 5]}),
+            json!({"question": "q", "seeds": "not-an-array"}),
+            json!({"question": "q", "seeds": [""]}),
+        ] {
+            let result = call_tool(&db, ":memory:", "query_graph", &bad);
+            assert_eq!(
+                result["isError"], true,
+                "seeds {:?} should fail validation",
+                bad["seeds"]
+            );
+        }
     }
 
     #[test]

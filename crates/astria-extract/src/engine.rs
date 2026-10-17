@@ -18,8 +18,7 @@ use crate::docs::{
     extract_html, extract_markdown, extract_markdown_from_string, extract_rst, extract_text_file,
 };
 use crate::langs;
-use crate::refs::resolve_cross_file_references;
-use crate::schema::Extraction;
+use crate::schema::{Extraction, ExtractionStatus};
 use crate::walkers::extract_single;
 use astria_audio::TranscribeError;
 use astria_core::AstriaError;
@@ -153,24 +152,24 @@ pub fn extract(
                     if transcription_notices.insert(notice.clone()) {
                         eprintln!("[astria] google workspace skipped: {notice}");
                     }
-                    results.push(Extraction {
-                        file_path: file_path.clone(),
-                        language: "gws".into(),
-                        nodes: Vec::new(),
-                        edges: Vec::new(),
-                    });
+                    results.push(Extraction::status_only(
+                        file_path.clone(),
+                        "gws",
+                        ExtractionStatus::Skipped,
+                        &notice,
+                    ));
                 }
                 Err(GwsError::Failed(message)) => {
                     eprintln!(
                         "warning: google workspace export failed for {}: {message}",
                         file_path.display()
                     );
-                    results.push(Extraction {
-                        file_path: file_path.clone(),
-                        language: "gws".into(),
-                        nodes: Vec::new(),
-                        edges: Vec::new(),
-                    });
+                    results.push(Extraction::status_only(
+                        file_path.clone(),
+                        "gws",
+                        ExtractionStatus::Skipped,
+                        &format!("failed: {message}"),
+                    ));
                 }
             }
             continue;
@@ -199,24 +198,24 @@ pub fn extract(
                     if transcription_notices.insert(notice.clone()) {
                         eprintln!("[astria] media transcription skipped: {notice}");
                     }
-                    results.push(Extraction {
-                        file_path: file_path.clone(),
-                        language: "media".into(),
-                        nodes: Vec::new(),
-                        edges: Vec::new(),
-                    });
+                    results.push(Extraction::status_only(
+                        file_path.clone(),
+                        "media",
+                        ExtractionStatus::Skipped,
+                        &notice,
+                    ));
                 }
                 Err(TranscribeError::Failed(message)) => {
                     eprintln!(
                         "warning: transcription failed for {}: {message}",
                         file_path.display()
                     );
-                    results.push(Extraction {
-                        file_path: file_path.clone(),
-                        language: "media".into(),
-                        nodes: Vec::new(),
-                        edges: Vec::new(),
-                    });
+                    results.push(Extraction::status_only(
+                        file_path.clone(),
+                        "media",
+                        ExtractionStatus::Skipped,
+                        &format!("failed: {message}"),
+                    ));
                 }
             }
             continue;
@@ -265,8 +264,11 @@ pub fn extract(
         }
 
         // Component files carry their logic in embedded TS/JS blocks;
-        // extract those with the JavaScript/TypeScript grammars.
-        if matches!(ext, "vue" | "svelte" | "astro") {
+        // extract those with the JavaScript/TypeScript grammars. A project
+        // extension override reroutes the suffix to a real parser instead.
+        if astria_core::languages::extension_override(ext).is_none()
+            && matches!(ext, "vue" | "svelte" | "astro")
+        {
             results.push(crate::langs::embedded::extract_component(
                 file_path, naming,
             )?);
@@ -275,11 +277,14 @@ pub fn extract(
 
         // VB.NET and Pascal have no tree-sitter grammar crate; use the
         // regex-fallback extractors (same approach as upstream graphify).
-        if ext == "vb" {
+        // Extensions remapped by a project override go to the mapped
+        // parser below instead of these defaults.
+        let overridden = astria_core::languages::extension_override(ext).is_some();
+        if !overridden && ext == "vb" {
             results.push(crate::langs::vb_net::extract_regex(file_path, naming)?);
             continue;
         }
-        if matches!(ext, "pas" | "dpr" | "dpk" | "inc") {
+        if !overridden && matches!(ext, "pas" | "dpr" | "dpk" | "inc") {
             results.push(crate::langs::pascal::extract_regex(file_path, naming)?);
             continue;
         }
@@ -289,18 +294,27 @@ pub fn extract(
                 // Media can receive semantic facts, but has no structural
                 // extractor. An empty extraction also removes obsolete facts
                 // when semantic enrichment is explicitly disabled.
-                results.push(Extraction {
-                    file_path: file_path.clone(),
-                    language: "media".into(),
-                    nodes: Vec::new(),
-                    edges: Vec::new(),
-                });
+                results.push(Extraction::status_only(
+                    file_path.clone(),
+                    "media",
+                    ExtractionStatus::Unsupported,
+                    "no extractor for this file type",
+                ));
                 continue;
             }
         };
 
+        // AST extractions depend on the grammar build: the cache key mixes
+        // the parser fingerprint, so a grammar upgrade re-extracts only the
+        // affected language's files — never the whole corpus, never other
+        // languages.
+        let ast_hash = crate::cache::file_hash_tagged(
+            file_path,
+            &crate::cache::grammar_fingerprint(cfg.name),
+        )?;
+
         // Check cache
-        if let Some(cached) = check_cache(db, file_path, &hash) {
+        if let Some(cached) = check_cache(db, file_path, &ast_hash) {
             results.push(cached);
             continue;
         }
@@ -309,7 +323,7 @@ pub fn extract(
         let extraction = extract_single(file_path, cfg, naming)?;
 
         // Save to cache
-        save_cache(db, file_path, &hash, &extraction);
+        save_cache(db, file_path, &ast_hash, &extraction);
 
         results.push(extraction);
     }
@@ -321,8 +335,38 @@ pub fn extract(
         crate::naming::disambiguate_duplicate_ids(result);
     }
 
-    // Cross-file resolution: try to match call/import targets to known node IDs
-    resolve_cross_file_references(&mut results);
+    // Cross-file resolution: try to match call/import targets to known node
+    // IDs, with the project's declared import mappings (tsconfig paths,
+    // workspace entries) in scope. Resolution runs over the full corpus on
+    // every build — including unchanged files served from the extraction
+    // cache — so a config change refreshes every affected binding even
+    // though no importing file changed.
+    let imports = crate::project::load_import_context(root);
+    crate::refs::resolve_cross_file_references_with(
+        &mut results,
+        (!imports.is_empty()).then_some(&imports),
+    );
+
+    // Type-aware resolution (TypeScript family): receiver calls resolve
+    // through declared types — constructor parameter properties, typed
+    // fields, locals, and `new` initializers — with inherited members
+    // followed through `extends`. Name/type-derived evidence, same RESOLVED
+    // tier as bare-name bindings; ambiguous receivers stay unresolved.
+    // Unresolved receivers with a known TYPE keep that evidence in a
+    // `receiver::type::<Type>::<member>` target for cross-repository
+    // matching. Interfaces dispatch to implementers as possible targets.
+    let type_index = crate::types::build_type_index(&results);
+    let typed = crate::types::resolve_typed_receivers(&results, &type_index);
+    for (file, edge_index, target) in typed.rewrites {
+        let edge = &mut results[file].edges[edge_index];
+        edge.target = target;
+        edge.confidence = "RESOLVED".to_string();
+        edge.confidence_score = Some(0.85);
+    }
+    for (file, edge_index, target) in typed.typed_unresolved {
+        results[file].edges[edge_index].target = target;
+    }
+    crate::types::add_dispatch_edges(&mut results, &type_index);
 
     Ok(results)
 }

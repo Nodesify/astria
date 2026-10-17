@@ -5,6 +5,7 @@
 // classes (TP/Delphi `type TFoo = class`) and procedures/functions become
 // nodes with `contains` edges.
 
+use crate::schema::ExtractionStatus;
 use std::fs;
 use std::path::Path;
 
@@ -169,6 +170,8 @@ pub fn extract_regex(path: &Path, naming: &Path) -> Result<Extraction> {
         language: "Pascal/Delphi".to_string(),
         nodes,
         edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     })
 }
 

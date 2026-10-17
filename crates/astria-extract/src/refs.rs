@@ -9,6 +9,19 @@ use std::collections::{HashMap, HashSet};
 /// Every candidate set stays ambiguous unless file metadata selects one definition.
 /// These are name-derived bindings, never compiler-proven EXTRACTED calls.
 pub fn resolve_cross_file_references(results: &mut [Extraction]) {
+    resolve_cross_file_references_with(results, None)
+}
+
+/// Project-aware variant: import specifiers the project's own metadata
+/// defines (tsconfig `paths` aliases, workspace package entries and their
+/// subpaths) resolve to authored source files before generic module
+/// matching. Mappings the metadata does not cover are untouched, and
+/// ambiguous results stay unresolved — same fail-closed rule as the rest
+/// of the resolver.
+pub fn resolve_cross_file_references_with(
+    results: &mut [Extraction],
+    imports: Option<&crate::project::ImportContext>,
+) {
     let mut names: HashMap<String, Vec<&crate::schema::ExtractedNode>> = HashMap::new();
     let known_ids: HashSet<_> = results
         .iter()
@@ -61,7 +74,7 @@ pub fn resolve_cross_file_references(results: &mut [Extraction]) {
             .iter()
             .filter(|edge| edge.relation == "imports")
             .filter_map(|edge| {
-                let matches = module_candidates(&edge.target, ext, &modules);
+                let matches = module_candidates(&edge.target, ext, &modules, imports);
                 (matches.len() == 1).then(|| &matches[0].file_path)
             })
             .collect();
@@ -113,7 +126,7 @@ pub fn resolve_cross_file_references(results: &mut [Extraction]) {
                 // Scope and module interpretations are equally possible. Union
                 // both sets before applying local/import evidence; never let
                 // a lexical scope hide a competing file-module definition.
-                let files = module_candidates(module, ext, &modules);
+                let files = module_candidates(module, ext, &modules, imports);
                 candidates.extend(
                     names
                         .get(tail)
@@ -140,7 +153,7 @@ pub fn resolve_cross_file_references(results: &mut [Extraction]) {
             if edge.relation == "imports" {
                 // Module imports name files, not arbitrary same-name functions.
                 candidates.clear();
-                let files = module_candidates(&edge.target, ext, &modules);
+                let files = module_candidates(&edge.target, ext, &modules, imports);
                 if files.len() == 1 {
                     candidates = files[0]
                         .nodes
@@ -218,7 +231,23 @@ fn module_candidates<'a>(
     module: &str,
     caller: &Extraction,
     modules: &HashMap<String, Vec<&'a Extraction>>,
+    imports: Option<&crate::project::ImportContext>,
 ) -> Vec<&'a Extraction> {
+    // Project metadata first: a declared alias or workspace entry beats
+    // path-shape guessing, and its miss means the specifier is unknown to
+    // the project (fall through unchanged).
+    if let Some(key) = imports.and_then(|ctx| ctx.module_key(module)) {
+        let mut mapped = modules.get(&key).cloned().unwrap_or_default();
+        // Files are indexed with and without their extension.
+        if mapped.is_empty() {
+            if let Some((stem, _)) = key.rsplit_once('.') {
+                mapped = modules.get(stem).cloned().unwrap_or_default();
+            }
+        }
+        if !mapped.is_empty() {
+            return mapped;
+        }
+    }
     let key = if module.contains(['/', '\\']) {
         let path = std::path::Path::new(module);
         if path.is_absolute() {
@@ -247,7 +276,7 @@ fn unique_candidate<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{ExtractedEdge, ExtractedNode};
+    use crate::schema::{ExtractedEdge, ExtractedNode, ExtractionStatus};
     use std::path::PathBuf;
 
     fn ext(nodes: Vec<ExtractedNode>, edges: Vec<ExtractedEdge>) -> Extraction {
@@ -256,6 +285,8 @@ mod tests {
             language: "Python".into(),
             nodes,
             edges,
+            status: ExtractionStatus::Complete,
+            notes: Vec::new(),
         }
     }
 
@@ -281,6 +312,57 @@ mod tests {
             source_file: PathBuf::from("f.py"),
             source_line: None,
         }
+    }
+
+    #[test]
+    fn project_alias_imports_bind_to_authored_source() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["src/*"]}}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("app")).unwrap();
+        let util = dir.path().join("src/util.ts");
+        std::fs::write(
+            &util,
+            "export function format() {}
+",
+        )
+        .unwrap();
+        let app = dir.path().join("app/main.ts");
+        std::fs::write(
+            &app,
+            "import { format } from '@/util';
+format();
+",
+        )
+        .unwrap();
+
+        let ctx = crate::project::load_import_context(dir.path());
+        let mut results = crate::extract(
+            &[util.clone(), app.clone()],
+            dir.path(),
+            &astria_core::db::open_db_in_memory().unwrap(),
+        )
+        .unwrap();
+        resolve_cross_file_references_with(&mut results, Some(&ctx));
+
+        let main = results.iter().find(|e| e.file_path == app).unwrap();
+        // The '@/util' import binds to the authored src/util.ts file node.
+        let import_targets: Vec<&crate::schema::ExtractedEdge> = main
+            .edges
+            .iter()
+            .filter(|e| e.relation == "imports")
+            .collect();
+        assert!(
+            import_targets
+                .iter()
+                .any(|e| e.target.contains("util") && e.confidence == "RESOLVED"),
+            "alias import must resolve to the authored file: {:?}",
+            import_targets.iter().map(|e| &e.target).collect::<Vec<_>>()
+        );
     }
 
     #[test]

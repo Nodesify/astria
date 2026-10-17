@@ -4,6 +4,7 @@
 // embedded TS/JS is extracted with the existing JavaScript/TypeScript
 // extractors and re-attributed to the component file.
 
+use crate::schema::ExtractionStatus;
 use std::fs;
 use std::path::Path;
 
@@ -126,6 +127,8 @@ pub fn extract_component(path: &Path, naming: &Path) -> Result<Extraction> {
         language: language.to_string(),
         nodes,
         edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     })
 }
 

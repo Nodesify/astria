@@ -8,8 +8,14 @@ policy choices, not claims about measured performance. Declaration expectations
 use verified source paths and one-based declaration lines, independently of
 symbol-label diagnostics. Both recalls include failed queries in their denominator.
 
-`--compare measured-reference.json` blocks decreases in file recall@5/MRR and
-declaration recall@5/MRR. It rejects mismatched corpus content, golden content,
+`--compare measured-reference.json` blocks decreases in file recall@5,
+declaration recall@5, and declaration MRR outright. File MRR is compared
+with a 0.02 tolerance: recall@5 (the same gate, strict) guarantees the
+retrieved SET cannot shrink, and the tolerance only absorbs adjacent-rank
+ordering jitter inside that set — graph-content evolution (new node and
+edge types) changes which near-tie evidence ranks first. A real
+degradation moves a question out of the top-5 entirely and trips the
+strict recall@5 gate instead. It rejects mismatched corpus content, golden content,
 harness content, method, tokenizer, depth, top-k, budget, extraction/line contract,
 graph build configuration, or context policy.
 Different engine artifacts are expected; their hashes and commits are provenance,

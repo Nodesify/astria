@@ -1,6 +1,7 @@
 // docs: plain-text extractors for documentation formats (markdown, plain
 // text, reStructuredText) — no tree-sitter involved.
 
+use crate::schema::ExtractionStatus;
 use std::path::Path;
 
 use crate::naming::{file_stem, make_node_id, make_text_id};
@@ -221,6 +222,8 @@ pub(crate) fn extract_markdown_from_string(
         language: language.to_string(),
         nodes,
         edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     }
 }
 
@@ -363,6 +366,8 @@ pub(crate) fn extract_text_from_str(
         language: language.to_string(),
         nodes,
         edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     })
 }
 
@@ -799,6 +804,8 @@ pub(crate) fn extract_rst(path: &Path, naming: &Path) -> Result<Extraction, Astr
         language: "rst".to_string(),
         nodes,
         edges,
+        status: ExtractionStatus::Complete,
+        notes: Vec::new(),
     })
 }
 

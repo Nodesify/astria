@@ -44,6 +44,26 @@ pub fn save_result(
         }
     }
 
+    // Record the verdict where learned-edge promotion can see it: the
+    // question normalized exactly as query_pairs stores it, so repeated
+    // unsuccessful exploration cannot promote into authoritative edges.
+    // The latest verdict for a question wins (corrections evolve).
+    if let Some(o) = outcome {
+        let _ = db.execute(
+            "INSERT INTO memory_outcomes (question, outcome, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(question) DO UPDATE SET outcome = ?2, updated_at = ?3",
+            rusqlite::params![
+                astria_query::normalize_question(question),
+                o,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0) as i64,
+            ],
+        );
+    }
+
     let memory_dir = astria_dir.join("memory");
     std::fs::create_dir_all(&memory_dir)?;
 
@@ -137,12 +157,27 @@ pub fn save_result(
     })
 }
 
-/// Aggregate memory docs into `astria-out/reflections/LESSONS.md`.
-pub fn reflect(astria_dir: &Path) -> Result<String> {
+/// One parsed memory doc.
+#[derive(Debug, Default, Clone)]
+struct MemoryEntry {
+    question: String,
+    outcome: String,
+    correction: Option<String>,
+    date: u64,
+    source_nodes: Vec<String>,
+}
+
+/// Aggregate memory docs into `.astria/reflections/LESSONS.md`. Beyond raw
+/// outcome counts this is actionable: preferred sources (nodes corroborated
+/// by multiple useful memories, most recent first), corrections to apply,
+/// known dead ends, contested evidence (nodes both useful and dead-end
+/// memories cite), and tentative findings (unrecorded outcomes) that need
+/// verification. Citations of nodes deleted from the graph are discarded
+/// when a connection is available. Lessons stay experiential — a separate
+/// artifact from the structural graph facts, never merged into them.
+pub fn reflect(astria_dir: &Path, db: Option<&Connection>) -> Result<String> {
     let memory_dir = astria_dir.join("memory");
-    let mut total = 0usize;
-    let mut outcomes: std::collections::HashMap<String, usize> = Default::default();
-    let mut entries: Vec<(String, String)> = Vec::new(); // (question, outcome)
+    let mut entries: Vec<MemoryEntry> = Vec::new();
 
     if memory_dir.is_dir() {
         let mut files: Vec<PathBuf> = std::fs::read_dir(&memory_dir)?
@@ -156,42 +191,192 @@ pub fn reflect(astria_dir: &Path) -> Result<String> {
                 Ok(t) => t,
                 Err(_) => continue,
             };
-            total += 1;
-            let mut question = String::new();
-            let mut outcome = "unrecorded".to_string();
-            for line in text.lines() {
-                if let Some(q) = line.strip_prefix("question: ") {
-                    question = q.to_string();
-                } else if let Some(o) = line.strip_prefix("outcome: ") {
-                    outcome = o.trim().to_string();
-                }
-                if !line.starts_with("---") && line.starts_with("# Q: ") {
-                    question = line[5..].trim_start_matches("Q:").trim().to_string();
-                }
-            }
-            *outcomes.entry(outcome.clone()).or_insert(0) += 1;
-            entries.push((question, outcome));
+            entries.push(parse_memory_doc(&text));
         }
     }
+
+    // Drop citations of nodes the graph no longer has: a lesson pointing at
+    // deleted code misleads, and the memory loop must self-clean.
+    if let Some(db) = db {
+        if let Ok(mut stmt) = db.prepare("SELECT id FROM nodes") {
+            let live: std::collections::HashSet<String> = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default();
+            for entry in &mut entries {
+                entry.source_nodes.retain(|id| live.contains(id));
+            }
+        }
+    }
+
+    let mut outcomes: std::collections::HashMap<String, usize> = Default::default();
+    for entry in &entries {
+        *outcomes.entry(entry.outcome.clone()).or_insert(0) += 1;
+    }
+
+    // Preferred sources: useful-memory citations, corroborated by count and
+    // recency (a node cited by several useful memories, most recently now,
+    // is where future answers should start).
+    let mut useful_citations: std::collections::HashMap<String, (usize, u64)> = Default::default();
+    let mut dead_citations: std::collections::HashMap<String, usize> = Default::default();
+    for entry in &entries {
+        for node in &entry.source_nodes {
+            if entry.outcome == "useful" {
+                let slot = useful_citations.entry(node.clone()).or_insert((0, 0));
+                slot.0 += 1;
+                slot.1 = slot.1.max(entry.date);
+            } else if entry.outcome == "dead_end" || entry.outcome == "corrected" {
+                *dead_citations.entry(node.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    let node_label = |id: &str| -> Option<String> {
+        db.and_then(|db| {
+            db.query_row(
+                "SELECT label FROM nodes WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+        })
+    };
+    let mut preferred: Vec<(String, usize, u64)> = useful_citations
+        .iter()
+        .map(|(id, (count, last))| (id.clone(), *count, *last))
+        .collect();
+    preferred.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    let corrections: Vec<&MemoryEntry> = entries
+        .iter()
+        .filter(|e| {
+            e.outcome == "corrected"
+                && e.correction
+                    .as_deref()
+                    .is_some_and(|c| !c.trim().is_empty())
+        })
+        .collect();
+    let dead_ends: Vec<&MemoryEntry> = entries.iter().filter(|e| e.outcome == "dead_end").collect();
+    let tentative: Vec<&MemoryEntry> = entries
+        .iter()
+        .filter(|e| e.outcome == "unrecorded")
+        .collect();
 
     let lessons_dir = astria_dir.join("reflections");
     std::fs::create_dir_all(&lessons_dir)?;
     let mut out = String::from("# Lessons\n\n");
-    out.push_str(&format!("Memory entries: {total}\n\n"));
+    out.push_str(&format!(
+        "Memory entries: {} — experiential lessons, kept separate from structural graph facts.\n\n",
+        entries.len()
+    ));
     let mut tallies: Vec<(String, usize)> = outcomes.into_iter().collect();
     tallies.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     for (kind, count) in &tallies {
         out.push_str(&format!("- **{kind}**: {count}\n"));
     }
-    if !entries.is_empty() {
-        out.push_str("\n## Recorded Q/A pairs\n\n");
-        for (question, outcome) in &entries {
-            out.push_str(&format!("- [{outcome}] {question}\n"));
+
+    if !preferred.is_empty() {
+        out.push_str("\n## Preferred sources (corroborated by useful memories)\n\n");
+        for (id, count, last) in preferred.iter().take(10) {
+            let label = node_label(id).unwrap_or_else(|| id.clone());
+            out.push_str(&format!(
+                "- {label} (`{id}`) — cited by {count} useful memories, last {last}\n"
+            ));
         }
     }
+    if !corrections.is_empty() {
+        out.push_str("\n## Corrections to apply\n\n");
+        for entry in corrections.iter().take(15) {
+            let correction = entry.correction.as_deref().unwrap_or_default();
+            out.push_str(&format!(
+                "- {} — {correction}\n",
+                truncate(&entry.question, 100)
+            ));
+        }
+    }
+    if !dead_ends.is_empty() {
+        out.push_str("\n## Known dead ends (do not re-explore blindly)\n\n");
+        for entry in dead_ends.iter().take(15) {
+            out.push_str(&format!("- {}\n", truncate(&entry.question, 100)));
+        }
+    }
+    // Contested evidence: cited as useful AND as dead-end/corrected.
+    let contested: Vec<&String> = preferred
+        .iter()
+        .filter(|(id, _, _)| dead_citations.contains_key(id))
+        .map(|(id, _, _)| id)
+        .collect();
+    if !contested.is_empty() {
+        out.push_str("\n## Contested evidence (useful and dead-end memories disagree)\n\n");
+        for id in contested.iter().take(10) {
+            let label = node_label(id).unwrap_or_else(|| (*id).clone());
+            out.push_str(&format!("- {label} (`{id}`)\n"));
+        }
+    }
+    if !tentative.is_empty() {
+        out.push_str("\n## Tentative findings (verify before relying on them)\n\n");
+        for entry in tentative.iter().take(15) {
+            out.push_str(&format!("- {}\n", truncate(&entry.question, 100)));
+        }
+    }
+
     let lessons_path = lessons_dir.join("LESSONS.md");
     astria_core::writer_lock::write_atomic(&lessons_path, out.as_bytes())?;
     Ok(out)
+}
+
+/// Frontmatter-aware parse of one memory doc: question, outcome,
+/// correction, date, and the cited source node ids. Body `# Q:` lines are
+/// the fallback for docs without frontmatter.
+fn parse_memory_doc(text: &str) -> MemoryEntry {
+    let mut entry = MemoryEntry {
+        outcome: "unrecorded".to_string(),
+        ..Default::default()
+    };
+    let mut in_frontmatter = false;
+    let mut seen_first_fence = false;
+    let mut in_sources = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            if !seen_first_fence {
+                seen_first_fence = true;
+                in_frontmatter = true;
+                continue;
+            } else if in_frontmatter {
+                in_frontmatter = false;
+                continue;
+            }
+        }
+        if in_frontmatter {
+            if let Some(rest) = trimmed.strip_prefix("source_nodes:") {
+                in_sources = rest.trim().is_empty();
+                continue;
+            }
+            if in_sources {
+                if let Some(id) = trimmed.strip_prefix("- ") {
+                    entry.source_nodes.push(id.trim().to_string());
+                    continue;
+                }
+                in_sources = false;
+            }
+            if let Some(q) = trimmed.strip_prefix("question: ") {
+                entry.question = q.trim_matches('"').to_string();
+            } else if let Some(o) = trimmed.strip_prefix("outcome: ") {
+                entry.outcome = o.trim().to_string();
+            } else if let Some(c) = trimmed.strip_prefix("correction: ") {
+                entry.correction = Some(c.trim_matches('"').to_string());
+            } else if let Some(d) = trimmed.strip_prefix("date: ") {
+                entry.date = d.trim().parse().unwrap_or(0);
+            }
+        } else if let Some(q) = trimmed.strip_prefix("# Q: ") {
+            entry.question = q.trim().to_string();
+        }
+    }
+    entry
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -272,11 +457,122 @@ mod tests {
         let db = open_db_in_memory().unwrap();
         save_result(&db, &gdir, "Q one?", "A", Some("useful"), None, &[]).unwrap();
         save_result(&db, &gdir, "Q two?", "B", Some("dead_end"), None, &[]).unwrap();
-        let lessons = reflect(&gdir).unwrap();
+        let lessons = reflect(&gdir, Some(&db)).unwrap();
         assert!(lessons.contains("Memory entries: 2"));
         assert!(lessons.contains("**useful**: 1"));
         assert!(lessons.contains("**dead_end**: 1"));
         assert!(gdir.join("reflections").join("LESSONS.md").exists());
+    }
+
+    #[test]
+    fn reflect_is_actionable_and_drops_deleted_citations() {
+        let dir = tempfile::tempdir().unwrap();
+        let gdir = dir.path().join(".astria");
+        std::fs::create_dir_all(gdir.join("memory")).unwrap();
+        let db = open_db_in_memory().unwrap();
+        db.execute(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES ('live', 'live()', 'code', 'f.py')",
+            [],
+        )
+        .unwrap();
+        // Useful memory citing a live node and a deleted node.
+        save_result(
+            &db,
+            &gdir,
+            "Where is auth?",
+            "middleware",
+            Some("useful"),
+            None,
+            &["live".to_string(), "deleted".to_string()],
+        )
+        .unwrap();
+        save_result(
+            &db,
+            &gdir,
+            "Where is auth exactly?",
+            "middleware again",
+            Some("useful"),
+            None,
+            &["live".to_string()],
+        )
+        .unwrap();
+        // Dead end citing the same node: contested evidence.
+        save_result(
+            &db,
+            &gdir,
+            "Is auth in views?",
+            "no",
+            Some("dead_end"),
+            None,
+            &["live".to_string()],
+        )
+        .unwrap();
+        // A correction to apply.
+        save_result(
+            &db,
+            &gdir,
+            "Old claim about cache?",
+            "wrong",
+            Some("corrected"),
+            Some("cache lives in redis, not memory"),
+            &[],
+        )
+        .unwrap();
+        // Unverified memory.
+        save_result(
+            &db,
+            &gdir,
+            "Maybe about billing?",
+            "unsure",
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
+
+        let lessons = reflect(&gdir, Some(&db)).unwrap();
+        assert!(lessons.contains("experiential lessons"), "{lessons}");
+        assert!(lessons.contains("## Preferred sources"));
+        assert!(
+            lessons.contains("live()"),
+            "preferred sources show labels: {lessons}"
+        );
+        assert!(lessons.contains("2 useful memories"));
+        assert!(lessons.contains("## Known dead ends"));
+        assert!(lessons.contains("Is auth in views?"));
+        assert!(lessons.contains("## Corrections to apply"));
+        assert!(lessons.contains("redis"));
+        assert!(lessons.contains("## Contested evidence"));
+        assert!(lessons.contains("## Tentative findings"));
+        assert!(lessons.contains("Maybe about billing?"));
+        // The deleted node's id must not appear anywhere.
+        assert!(!lessons.contains("deleted"), "{lessons}");
+    }
+
+    #[test]
+    fn save_result_records_outcome_for_promotion_gating() {
+        let dir = tempfile::tempdir().unwrap();
+        let gdir = dir.path().join(".astria");
+        std::fs::create_dir_all(&gdir).unwrap();
+        let db = open_db_in_memory().unwrap();
+        save_result(
+            &db,
+            &gdir,
+            "How does AUTH work?",
+            "x",
+            Some("dead_end"),
+            None,
+            &[],
+        )
+        .unwrap();
+        let (outcome,): (String,) = db
+            .query_row(
+                "SELECT outcome FROM memory_outcomes WHERE question = 'how does auth work?'",
+                [],
+                |r| Ok((r.get(0)?,)),
+            )
+            .unwrap();
+        assert_eq!(outcome, "dead_end");
     }
 
     #[test]

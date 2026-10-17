@@ -9,9 +9,13 @@ pub mod refs;
 pub mod schema;
 pub mod walkers;
 
+mod project;
+mod types;
 pub use engine::extract;
+pub use project::{load_import_context, ImportContext};
 pub use refs::resolve_cross_file_references;
-pub use schema::{ExtractedEdge, ExtractedNode, Extraction};
+pub use schema::{ExtractedEdge, ExtractedNode, Extraction, ExtractionStatus};
+pub use types::{add_dispatch_edges, build_type_index, resolve_typed_receivers};
 pub use walkers::{declaration_spans, extract_source};
 
 /// The content-hash family the extraction layer stores under: the plain

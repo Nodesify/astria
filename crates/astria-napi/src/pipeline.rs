@@ -152,6 +152,9 @@ fn run_pipeline_under_state_lock(
             format!("path does not exist: {}", root.display()),
         )));
     };
+    // Project language overrides (".astria.toml [languages]") must be in
+    // place before discovery and extraction classify a single file.
+    apply_language_overrides(&root);
     // Fresh accounting for every run: the budget is read once here
     // (ASTRIA_LLM_BUDGET, total tokens, 0 = unlimited) and the counters
     // start at zero so a run's printed spend is its own.
@@ -429,6 +432,9 @@ fn run_pipeline_inner(
             &build_configuration,
             options.cli_version,
         )?;
+        // After publish: the manifest rows it wrote must exist before their
+        // per-file extraction status can land on them.
+        record_extraction_status(root, db, &extractions);
         (build_result, semantic_stats)
     } else {
         (
@@ -653,6 +659,92 @@ fn run_pipeline_inner(
     })
 }
 
+/// Per-file extraction completeness into the manifest: complete/partial/
+/// unsupported/skipped/suspicious-empty plus parser-error notes, keyed the
+/// same way `update_manifest` keys rows (root-relative, normalized). A
+/// row that is not updated here keeps its previous status — correct for
+/// unchanged files, whose extraction was not re-run.
+fn record_extraction_status(
+    root: &Path,
+    db: &Connection,
+    extractions: &[astria_extract::Extraction],
+) {
+    let mut stmt = match db.prepare(
+        "UPDATE file_manifest SET extraction_status = ?1, extraction_notes = ?2 WHERE file_path = ?3",
+    ) {
+        Ok(stmt) => stmt,
+        Err(e) => {
+            eprintln!("warning: cannot record extraction status: {e}");
+            return;
+        }
+    };
+    for extraction in extractions {
+        let relative = extraction
+            .file_path
+            .strip_prefix(root)
+            .unwrap_or(&extraction.file_path);
+        let key = astria_paths::normalize(relative);
+        let notes = serde_json::to_string(&extraction.notes).unwrap_or_else(|_| "[]".into());
+        if let Err(e) = stmt.execute(rusqlite::params![extraction.status.as_str(), notes, key,]) {
+            eprintln!(
+                "warning: failed to record extraction status for {}: {e}",
+                extraction.file_path.display()
+            );
+        }
+    }
+}
+
+/// Load `[languages]` extension overrides from the project's `.astria.toml`
+/// and install them process-wide: a repo whose `.inc` files are PHP sources
+/// (or whose `.tpl` templates are TypeScript) can say so once and
+/// discovery, parser selection, watch, and extraction-cache identity all
+/// follow. Invalid entries warn and are skipped; a missing file means no
+/// overrides. Remapping an extension re-extracts exactly its files — the
+/// extraction cache key embeds the language name.
+pub fn apply_language_overrides(root: &Path) {
+    let path = root.join(".astria.toml");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let parsed: toml::Table = match text.parse() {
+        Ok(table) => table,
+        Err(e) => {
+            eprintln!("warning: {} failed to parse: {e}", path.display());
+            return;
+        }
+    };
+    let Some(section) = parsed.get("languages") else {
+        return;
+    };
+    let Some(table) = section.as_table() else {
+        eprintln!(
+            "warning: {}: [languages] must be a table of \".ext\" = \"Language\" entries",
+            path.display()
+        );
+        return;
+    };
+    let entries: Vec<(String, String)> = table
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+        .collect();
+    let (map, warnings) = astria_core::languages::parse_extension_overrides(&entries);
+    for warning in warnings {
+        eprintln!("warning: {}: {warning}", path.display());
+    }
+    if map.is_empty() {
+        astria_core::languages::clear_extension_overrides();
+    } else {
+        eprintln!(
+            "[astria] language overrides: {}",
+            map.iter()
+                .map(|(ext, id)| format!(".{ext} → {}", id.registration().name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        astria_core::languages::set_extension_overrides(map);
+    }
+}
+
 /// Open an existing graph database. Unlike `db::open_db`, this never creates
 /// anything — a missing graph is a hard error so read-only commands (stats,
 /// query, explain, export, ...) fail loudly instead of silently materializing
@@ -665,6 +757,10 @@ pub fn load_graph_db(root: &Path) -> astria_core::Result<Connection> {
             p.display()
         )));
     }
+    // Read-only commands must classify files with the same overrides the
+    // build used (risk snapshots, freshness) — cheap, and a no-op without
+    // a config file.
+    apply_language_overrides(root);
     db::open_db(&p)
 }
 
@@ -679,6 +775,7 @@ pub fn load_graph_db_flexible(path: &Path) -> astria_core::Result<(Connection, O
     }
     let repo_db = path.join(".astria").join("db.sqlite");
     if repo_db.exists() {
+        apply_language_overrides(path);
         return Ok((
             db::open_db(&repo_db)?,
             Some(repo_db.parent().unwrap().to_path_buf()),
@@ -829,6 +926,109 @@ mod tests {
         )
         .unwrap();
         astria_cluster::cluster(db).unwrap();
+    }
+
+    #[test]
+    fn extraction_status_recorded_into_manifest() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("ok.rs");
+        let bad = dir.path().join("broken.rs");
+        std::fs::write(
+            &good,
+            b"fn a() {}
+",
+        )
+        .unwrap();
+        std::fs::write(
+            &bad,
+            b"fn b() {
+",
+        )
+        .unwrap();
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        for file in [&good, &bad] {
+            db.execute(
+                "INSERT INTO file_manifest (file_path, content_hash, file_type, language, last_seen_at, size_bytes)
+                 VALUES (?1, 'h', 'Code', 'Rust', '0', 1)",
+                rusqlite::params![astria_paths::normalize(
+                    file.strip_prefix(dir.path()).unwrap_or(file)
+                )],
+            )
+            .unwrap();
+        }
+        let extractions =
+            astria_extract::extract(&[good.clone(), bad.clone()], dir.path(), &db).unwrap();
+        record_extraction_status(dir.path(), &db, &extractions);
+        let (status, notes): (String, Option<String>) = db
+            .query_row(
+                "SELECT extraction_status, extraction_notes FROM file_manifest WHERE file_path = ?1",
+                rusqlite::params![astria_paths::normalize(
+                    good.strip_prefix(dir.path()).unwrap_or(&good)
+                )],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "complete");
+        assert!(notes.is_none() || notes.as_deref() == Some("[]"));
+        let (status, _): (String, Option<String>) = db
+            .query_row(
+                "SELECT extraction_status, extraction_notes FROM file_manifest WHERE file_path = ?1",
+                rusqlite::params![astria_paths::normalize(
+                    bad.strip_prefix(dir.path()).unwrap_or(&bad)
+                )],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "partial", "broken syntax must surface as partial");
+    }
+
+    #[test]
+    fn astria_toml_language_overrides_remap_extraction() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // .inc is Pascal/Delphi by default; this project says it is PHP.
+        // Extraction must classify the file as PHP and carry that language
+        // into the stored node set.
+        std::fs::write(
+            dir.path().join(".astria.toml"),
+            "[languages]
+\".inc\" = \"PHP\"
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("header.inc"),
+            "<?php
+function theme_header() {
+  render_brand();
+}
+",
+        )
+        .unwrap();
+
+        apply_language_overrides(dir.path());
+        assert_eq!(
+            astria_core::languages::for_extension(".inc").map(|l| l.name),
+            Some("PHP")
+        );
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        let extracted =
+            astria_extract::extract(&[dir.path().join("header.inc")], dir.path(), &db).unwrap();
+        assert_eq!(extracted[0].language, "PHP");
+        assert!(
+            extracted[0]
+                .nodes
+                .iter()
+                .any(|n| n.label.contains("theme_header")),
+            "PHP function should be extracted: {:?}",
+            extracted[0].nodes
+        );
+        astria_core::languages::clear_extension_overrides();
+        assert_eq!(
+            astria_core::languages::for_extension(".inc").map(|l| l.name),
+            Some("Pascal/Delphi")
+        );
     }
 
     #[test]

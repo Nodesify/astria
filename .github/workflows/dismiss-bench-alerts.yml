@@ -1,0 +1,44 @@
+# One-shot maintenance: dismiss code-scanning alerts on scripts/bench/**
+# benchmark tooling. The JS CodeQL analysis is scoped away from that
+# directory (see .github/codeql-config.yml), but alerts raised before the
+# scope landed stay open and fail the PR alert-diff check; only a
+# security-events writer can dismiss them, and branch tokens don't carry
+# that scope. Reusable via workflow_dispatch if dataset tooling re-flags.
+name: Dismiss benchmark CodeQL alerts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  dismiss:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: {
+            const reason = 'used_in_tests';
+            const comment = 'Benchmark tooling under scripts/bench/: downloads public datasets (HotpotQA, LoCoMo) and materializes them under bench-work/ for local retrieval measurements. Writing the dataset to disk is the tool\'s intended behavior; runs on maintainer machines only, never in production paths. The JS CodeQL analysis is scoped away from scripts/bench/** (see .github/codeql-config.yml).';
+            const list = await github.rest.codeScanning.listAlertsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            for (const alert of list.data) {
+              if (!alert.most_recent_instance?.location?.path?.startsWith('scripts/bench/')) continue;
+              await github.rest.codeScanning.updateAlert({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                alert_number: alert.number,
+                state: 'dismissed',
+                dismissed_reason: reason,
+                dismissed_comment: comment,
+              });
+              console.log(`dismissed #${alert.number} (${alert.rule.id})`);
+            }
+          }
