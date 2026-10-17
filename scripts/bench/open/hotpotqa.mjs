@@ -39,17 +39,29 @@ console.log(`fetched ${questions.length} questions`);
 // Fresh directory per run: a locked .astria db (AV or a lingering process)
 // must not wedge the whole adapter.
 const corpusDir = path.join(work, `hotpotqa-corpus-${Date.now()}`);
+const corpusDirResolved = path.resolve(corpusDir);
 mkdirSync(corpusDir, { recursive: true });
+// Dataset titles become file names: strip separator/reserved characters,
+// collapse dot-runs (a '..' title must not traverse out of the corpus
+// directory), and verify every resolved write target stays inside it.
+const safeName = (title) =>
+  String(title).replaceAll(/[<>:"/\\|?*\x00-\x1f]/g, '_').replaceAll(/\.{2,}/g, '_');
+const insideCorpus = (name) => {
+  const target = path.resolve(corpusDir, name);
+  if (!target.startsWith(corpusDirResolved + path.sep)) {
+    throw new Error(`unsafe corpus file name derived from dataset title: ${name}`);
+  }
+  return target;
+};
 const gold = [];
 questions.forEach((q, qi) => {
   const ns = String(qi).padStart(3, '0');
   const titles = q.context.title;
   titles.forEach((title, ti) => {
     const body = q.context.sentences[ti].join('');
-    const safe = title.replaceAll(/[<>:"/\\|?*]/g, '_');
-    writeFileSync(path.join(corpusDir, `q${ns}--${safe}.md`), `# ${title}\n\n${body}\n`);
+    writeFileSync(insideCorpus(`q${ns}--${safeName(title)}.md`), `# ${title}\n\n${body}\n`);
   });
-  gold.push({ id: q.id, ns, gold: q.supporting_facts.title.map(t => `q${ns}--${t.replaceAll(/[<>:"/\\|?*]/g, '_')}.md`) });
+  gold.push({ id: q.id, ns, gold: q.supporting_facts.title.map(t => `q${ns}--${safeName(t)}.md`) });
 });
 
 const build = run(process.execPath, [cli, 'run', corpusDir]);
