@@ -48,7 +48,7 @@
   "devDependencies": {
     "tsx": "^4.23.15",
     "typescript": "^7",
-    "@types/node": "^22",
+    "@types/node": "^26",
     "@napi-rs/cli": "^3.10.8"
   },
   "engines": {
