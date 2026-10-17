@@ -128,17 +128,23 @@ export function symbolIndex(gdir: string): SymbolEntry[] | null {
   try {
     const graphPath = join(gdir, 'graph.json');
     const cachePath = indexCachePath(gdir);
+    // No existsSync probes: reads go through try/catch so a file removed
+    // between check and use is just a miss (and the checker sees no
+    // check-then-use race).
     try {
-      if (existsSync(cachePath) && statSync(cachePath).mtimeMs >= statSync(graphPath).mtimeMs) {
-        const cached = JSON.parse(readFileSync(cachePath, 'utf8'));
-        if (cached && Array.isArray(cached.symbols)) return cached.symbols as SymbolEntry[];
+      const cached = JSON.parse(readFileSync(cachePath, 'utf8'));
+      if (cached && Array.isArray(cached.symbols) && statSync(cachePath).mtimeMs >= statSync(graphPath).mtimeMs) {
+        return cached.symbols as SymbolEntry[];
       }
     } catch {
-      // Corrupt or half-written cache — fall through to a rebuild.
+      // Missing or corrupt cache — fall through to a rebuild.
     }
 
-    if (statSync(graphPath).size > CONTEXT_MAX_GRAPH_BYTES) return null;
-    const raw = JSON.parse(readFileSync(graphPath, 'utf8'));
+    // Single read, then size-check the bytes: no existsSync/stat race, and
+    // oversized graphs are rejected before JSON parsing burns memory.
+    const graphBytes = readFileSync(graphPath);
+    if (graphBytes.byteLength > CONTEXT_MAX_GRAPH_BYTES) return null;
+    const raw = JSON.parse(graphBytes.toString('utf8'));
     const degree = new Map<string, number>();
     for (const e of raw.edges || []) {
       degree.set(e.source, (degree.get(e.source) || 0) + 1);
