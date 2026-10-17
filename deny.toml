@@ -28,6 +28,9 @@ allow = [
   "CDLA-Permissive-2.0",
   "MPL-2.0",
   "BSL-1.0",
+  # bzip2-1.0.6 — the bzip2 license (BSD-derived with attribution);
+  # new dependency of zip 9 via bzip2-rs.
+  "bzip2-1.0.6",
 ]
 # Confidence threshold for license text detection.
 confidence-threshold = 0.93
