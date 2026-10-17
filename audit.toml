@@ -1,0 +1,18 @@
+# cargo-audit / audit-check configuration.
+# Entries here are REVIEWED exceptions, each with the reason it is safe to
+# carry and what would make it unsafe. Revisit on every dependency bump.
+
+[advisories]
+
+ignore = [
+    # zip 8.6.0 (RUSTSEC-2026-0367/0368/0369 — symlink/SUID handling in
+    # ZipArchive::extract and ZipStreamReader::extract): reaches this tree
+    # only through calamine 0.36.1, which uses zip for READING xlsx parts
+    # (by_name/read) — the vulnerable extract() APIs are never called, and
+    # astria-office additionally enforces per-part size limits before
+    # parsing. No calamine release adopting zip 9 exists yet; remove these
+    # ignores when it ships (track calamine upstream).
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]
