@@ -14,11 +14,11 @@ use tree_sitter::{Node, Parser};
 #[derive(Debug, Clone)]
 struct ReceiverBinding {
     file: PathBuf,
-    /// Enclosing class label for fields and constructor parameter
-    /// properties; None for locals declared outside any class.
-    class_label: Option<String>,
     receiver: String,
     type_name: String,
+    /// Byte range of the lexical scope (or owning class for fields).
+    scope: std::ops::Range<usize>,
+    field: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -42,11 +42,58 @@ enum DeclKind {
     Interface,
 }
 
+#[derive(Debug)]
+struct ReceiverCall {
+    position: usize,
+    class_scope: Option<std::ops::Range<usize>>,
+}
+
+/// Find the scope that owns a declaration. `var` belongs to its function,
+/// while let/const also respect blocks and loop scopes.
+fn binding_scope(mut node: Node, function_only: bool) -> std::ops::Range<usize> {
+    while let Some(parent) = node.parent() {
+        node = parent;
+        let function = matches!(
+            node.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "generator_function_declaration"
+                | "generator_function"
+                | "arrow_function"
+                | "method_definition"
+                | "program"
+        );
+        if function
+            || (!function_only
+                && matches!(
+                    node.kind(),
+                    "statement_block"
+                        | "for_statement"
+                        | "for_in_statement"
+                        | "switch_body"
+                        | "catch_clause"
+                ))
+        {
+            return node.byte_range();
+        }
+    }
+    node.byte_range()
+}
+
+fn class_scope(mut node: Node) -> std::ops::Range<usize> {
+    while !matches!(node.kind(), "class_declaration" | "class") {
+        let Some(parent) = node.parent() else { break };
+        node = parent;
+    }
+    node.byte_range()
+}
+
 #[derive(Debug, Default)]
 pub struct TypeIndex {
     bindings: Vec<ReceiverBinding>,
     heritage: Vec<Heritage>,
     declarations: Vec<Declaration>,
+    calls: HashMap<(String, u32, String), Vec<ReceiverCall>>,
 }
 
 impl TypeIndex {
@@ -135,6 +182,35 @@ impl<'a> Walker<'a> {
         node.utf8_text(self.source).unwrap_or("")
     }
 
+    /// Destructured names shadow outer bindings even when their type is unknown.
+    fn block_pattern(&mut self, node: Node, scope: std::ops::Range<usize>) {
+        match node.kind() {
+            "identifier" | "shorthand_property_identifier_pattern" => {
+                self.index.bindings.push(ReceiverBinding {
+                    file: self.file.clone(),
+                    receiver: self.text(node).to_string(),
+                    type_name: String::new(),
+                    scope,
+                    field: false,
+                });
+            }
+            "pair_pattern" | "assignment_pattern" | "object_assignment_pattern" => {
+                if let Some(value) = node
+                    .child_by_field_name("value")
+                    .or_else(|| node.child_by_field_name("left"))
+                {
+                    self.block_pattern(value, scope);
+                }
+            }
+            _ => {
+                let mut cursor = node.walk();
+                for child in node.named_children(&mut cursor) {
+                    self.block_pattern(child, scope.clone());
+                }
+            }
+        }
+    }
+
     fn walk(&mut self, node: Node) {
         match node.kind() {
             "class_declaration" | "class" => {
@@ -169,7 +245,7 @@ impl<'a> Walker<'a> {
             | "public_field_definition"
             | "property_signature"
             | "property_declaration" => {
-                if let (Some(class), Some(name)) =
+                if let (Some(_), Some(name)) =
                     (self.class_stack.last(), node.child_by_field_name("name"))
                 {
                     let receiver = self.text(name).to_string();
@@ -189,9 +265,10 @@ impl<'a> Walker<'a> {
                     if let Some(type_name) = type_name {
                         self.index.bindings.push(ReceiverBinding {
                             file: self.file.clone(),
-                            class_label: Some(class.clone()),
                             receiver,
                             type_name,
+                            scope: class_scope(node),
+                            field: true,
                         });
                     }
                 }
@@ -215,24 +292,75 @@ impl<'a> Walker<'a> {
                     let Some(name) = declarator.child_by_field_name("name") else {
                         continue;
                     };
+                    if name.kind() != "identifier" {
+                        self.block_pattern(
+                            name,
+                            binding_scope(node, node.kind() == "variable_declaration"),
+                        );
+                        continue;
+                    }
                     let receiver = self.text(name).to_string();
                     let mut type_name = declarator
                         .child_by_field_name("type")
-                        .map(|ty| bare_type_name(self.text(ty)))
+                        .map(|ty| bare_type_name(self.text(ty).trim_start_matches(':')))
                         .unwrap_or_default();
                     if type_name.is_empty() {
                         if let Some(value) = declarator.child_by_field_name("value") {
                             type_name = new_expression_type(value, self.source).unwrap_or_default();
                         }
                     }
-                    if !type_name.is_empty() {
-                        self.index.bindings.push(ReceiverBinding {
-                            file: self.file.clone(),
-                            class_label: self.class_stack.last().cloned(),
-                            receiver,
-                            type_name,
+                    self.index.bindings.push(ReceiverBinding {
+                        file: self.file.clone(),
+                        receiver,
+                        type_name,
+                        scope: binding_scope(node, node.kind() == "variable_declaration"),
+                        field: false,
+                    });
+                }
+                self.walk_children(node);
+            }
+            "required_parameter" | "optional_parameter" | "catch_clause" => {
+                if let Some(name) = node
+                    .child_by_field_name("pattern")
+                    .or_else(|| node.child_by_field_name("parameter"))
+                {
+                    self.block_pattern(
+                        name,
+                        if node.kind() == "catch_clause" {
+                            node.byte_range()
+                        } else {
+                            binding_scope(node, true)
+                        },
+                    );
+                }
+                self.walk_children(node);
+            }
+            "arrow_function" => {
+                if let Some(name) = node.child_by_field_name("parameter") {
+                    self.index.bindings.push(ReceiverBinding {
+                        file: self.file.clone(),
+                        receiver: self.text(name).to_string(),
+                        type_name: String::new(),
+                        scope: node.byte_range(),
+                        field: false,
+                    });
+                }
+                self.walk_children(node);
+            }
+            "call_expression" => {
+                if let Some(function) = node.child_by_field_name("function") {
+                    self.index
+                        .calls
+                        .entry((
+                            file_key(&self.file),
+                            node.start_position().row as u32 + 1,
+                            crate::naming::make_target_id(self.text(function)),
+                        ))
+                        .or_default()
+                        .push(ReceiverCall {
+                            position: node.start_byte(),
+                            class_scope: self.class_stack.last().map(|_| class_scope(node)),
                         });
-                    }
                 }
                 self.walk_children(node);
             }
@@ -284,9 +412,10 @@ impl<'a> Walker<'a> {
                 if !type_name.is_empty() {
                     self.index.bindings.push(ReceiverBinding {
                         file: self.file.clone(),
-                        class_label: self.class_stack.last().cloned(),
                         receiver,
                         type_name,
+                        scope: class_scope(method),
+                        field: true,
                     });
                 }
             }
@@ -518,21 +647,6 @@ pub fn resolve_typed_receivers(results: &[Extraction], index: &TypeIndex) -> Typ
             continue;
         }
         let file = file_key(&ext.file_path);
-        // The caller's enclosing class: `contains` edges are the walker's
-        // own membership record (ids flatten labels, so prefix matching on
-        // class ids does not work).
-        let class_label_by_id: HashMap<&str, &str> = ext
-            .nodes
-            .iter()
-            .filter(|n| n.node_type == "class")
-            .map(|n| (n.id.as_str(), n.label.as_str()))
-            .collect();
-        let mut class_of_member: HashMap<&str, &str> = HashMap::new();
-        for edge in &ext.edges {
-            if edge.relation == "contains" && class_label_by_id.contains_key(edge.source.as_str()) {
-                class_of_member.insert(edge.target.as_str(), edge.source.as_str());
-            }
-        }
         for (edge_index, edge) in ext.edges.iter().enumerate() {
             if edge.relation != "calls" || !edge.target.starts_with("receiver::") {
                 continue;
@@ -548,28 +662,56 @@ pub fn resolve_typed_receivers(results: &[Extraction], index: &TypeIndex) -> Typ
             let Some((receiver, method)) = normalized.rsplit_once('.') else {
                 continue;
             };
-            let receiver = receiver.trim_start_matches("this.");
-            let caller_class = class_of_member
-                .get(edge.source.as_str())
-                .and_then(|class_id| class_label_by_id.get(class_id))
-                .map(|label| label.to_string());
-            let Some(type_name) = index
-                .bindings
-                .iter()
-                .filter(|b| file_key(&b.file) == file)
-                .filter(|b| match (&b.class_label, &caller_class) {
-                    (Some(binding_class), Some(caller)) => binding_class == caller,
-                    (None, None) => true,
-                    // A method body sees its class fields; a binding
-                    // recorded inside the class matches any member.
-                    (Some(_), None) => false,
-                    (None, Some(_)) => false,
-                })
-                .find(|b| b.receiver == receiver)
-                .map(|b| b.type_name.clone())
+            let field = receiver.starts_with("this.");
+            let receiver = receiver.strip_prefix("this.").unwrap_or(receiver);
+            let Some(line) = edge.source_line else {
+                continue;
+            };
+            let Some(calls) = index
+                .calls
+                .get(&(file.clone(), line, qualified.to_string()))
             else {
                 continue;
             };
+            // Edges have line precision only. If multiple calls on that line
+            // resolve differently, leave the edge unresolved instead of guessing.
+            let mut resolved = None;
+            let mut ambiguous = calls.is_empty();
+            for call in calls {
+                let visible: Vec<_> = index
+                    .bindings
+                    .iter()
+                    .filter(|b| {
+                        file_key(&b.file) == file
+                            && b.field == field
+                            && crate::naming::make_target_id(&b.receiver).replace("::", ".")
+                                == receiver
+                            && b.scope.contains(&call.position)
+                            && (!field || call.class_scope.as_ref() == Some(&b.scope))
+                    })
+                    .collect();
+                let nearest = visible.iter().map(|b| b.scope.len()).min();
+                let mut bindings = visible
+                    .into_iter()
+                    .filter(|b| Some(b.scope.len()) == nearest);
+                let Some(binding) = bindings.next() else {
+                    ambiguous = true;
+                    break;
+                };
+                if binding.type_name.is_empty() || bindings.next().is_some() {
+                    ambiguous = true;
+                    break;
+                }
+                if resolved.as_ref().is_some_and(|ty| ty != &binding.type_name) {
+                    ambiguous = true;
+                    break;
+                }
+                resolved = Some(binding.type_name.clone());
+            }
+            if ambiguous {
+                continue;
+            }
+            let Some(type_name) = resolved else { continue };
 
             let candidates = view.resolve_type(&file, &type_name);
             if candidates.is_empty() {
