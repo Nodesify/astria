@@ -237,6 +237,7 @@ fn module_candidates<'a>(
     // path-shape guessing, and its miss means the specifier is unknown to
     // the project (fall through unchanged).
     if let Some(key) = imports.and_then(|ctx| ctx.module_key(module)) {
+        let key = module_path(std::path::Path::new(&key));
         let mut mapped = modules.get(&key).cloned().unwrap_or_default();
         // Files are indexed with and without their extension.
         if mapped.is_empty() {
