@@ -101,8 +101,8 @@ where
             chunk.chars().count(),
             crate::enrichment::MAX_OUTPUT_TOKENS_EXTRACT,
         )
-        .map_err(&incomplete)?;
-        let part = raw(chunk, file_type).map_err(&incomplete)?;
+        .map_err(incomplete)?;
+        let part = raw(chunk, file_type).map_err(incomplete)?;
         parts.push(part);
     }
     let mut extraction = sanitize_extraction(merge_extractions(parts));
