@@ -16,9 +16,9 @@ ordering jitter inside that set — graph-content evolution (new node and
 edge types) changes which near-tie evidence ranks first. A real
 degradation moves a question out of the top-5 entirely and trips the
 strict recall@5 gate instead. It rejects mismatched corpus content, golden content,
-harness content, method, tokenizer, depth, top-k, budget, extraction/line contract,
+harness content, method, tokenizer, depth, top-k, budget, line contract,
 graph build configuration, or context policy.
-Different engine artifacts are expected; their hashes and commits are provenance,
+Different engine artifacts are expected; their hashes, commits, and extraction-cache versions are provenance,
 not comparison identity. Failed or definition-free references cannot support a
 comparison. Raw budget overshoot in an older engine is recorded but does not
 prevent a newer engine from improving it while retaining retrieval quality.
