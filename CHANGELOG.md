@@ -4,8 +4,10 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## Unreleased
+## [1.4.0] — 2026-10-22
 
+- Keep typed receiver bindings scoped to their function or block; parse annotated
+  locals correctly and resolve exact TypeScript path aliases.
 - Refresh graphs across complete merge/fast-forward ranges and all changed graph inputs.
 - Report ambiguous explicit seeds with candidate IDs and locations through CLI/MCP,
   retaining complete structured candidates while bounding rendered context.
