@@ -218,6 +218,8 @@ impl JevClient {
     /// object so malformed responses fail loudly instead of silently
     /// judging everything as "keep".
     fn judge(&self, state: &Value, questions: &Value) -> Result<Value> {
+        let state = redact_json_text(state.clone());
+        let questions = redact_json_text(questions.clone());
         let body = serde_json::to_string(&json!({
             "model": self.config.model,
             "state": state,
@@ -244,7 +246,10 @@ impl JevClient {
             .map_err(|e| AstriaError::Graph(format!("Failed to parse Jev response: {e}")))?;
         crate::enrichment::record_usage(&json);
         if json.get("answers").is_none() {
-            let preview: String = response.chars().take(200).collect();
+            let preview: String = astria_core::security::redact_secrets(&response)
+                .chars()
+                .take(200)
+                .collect();
             return Err(AstriaError::Graph(format!(
                 "Jev returned no answers: {preview}"
             )));
@@ -511,7 +516,10 @@ pub(crate) fn build_verify_request(
         "edges": edges,
     });
     if let Some(content) = content {
-        let content_preview: String = content.chars().take(MAX_VERIFY_CONTENT_CHARS).collect();
+        let content_preview: String = astria_core::security::redact_secrets(content)
+            .chars()
+            .take(MAX_VERIFY_CONTENT_CHARS)
+            .collect();
         state["content"] = json!(content_preview);
     }
     json!({
@@ -613,6 +621,7 @@ mod tests {
 
     fn sample_extraction() -> SemanticExtraction {
         SemanticExtraction {
+            coverage: None,
             nodes: vec![
                 SemanticNode {
                     id: "a".into(),
@@ -880,6 +889,7 @@ mod tests {
 
         // -- verify: a small synthetic extraction re-judged by Jev --
         let extraction = SemanticExtraction {
+            coverage: None,
             nodes: vec![
                 SemanticNode {
                     id: "user_service".into(),
@@ -954,4 +964,23 @@ mod tests {
             perm.iter().map(|&i| &questions[i]).collect::<Vec<_>>()
         );
     }
+}
+
+/// Redact values structurally so credentials cannot invalidate JSON escaping.
+fn redact_json_text(mut value: Value) -> Value {
+    match &mut value {
+        Value::String(text) => *text = astria_core::security::redact_secrets(text),
+        Value::Array(items) => {
+            for item in items {
+                *item = redact_json_text(item.take());
+            }
+        }
+        Value::Object(fields) => {
+            for item in fields.values_mut() {
+                *item = redact_json_text(item.take());
+            }
+        }
+        _ => {}
+    }
+    value
 }

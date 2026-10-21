@@ -228,7 +228,9 @@ pub fn summarize_community(
     size: usize,
     members: &[String],
 ) -> Result<CommunityNaming> {
-    let user_prompt = community_label_user_prompt(hub_label, size, members);
+    let user_prompt = astria_core::security::redact_secrets(&community_label_user_prompt(
+        hub_label, size, members,
+    ));
     let _reservation = reserve_budget(user_prompt.len(), MAX_OUTPUT_TOKENS_COMPLETE)?;
     let text = backend.complete(community_label_system_prompt(), &user_prompt)?;
     parse_community_naming(&text)
@@ -255,12 +257,15 @@ pub fn parse_community_naming(text: &str) -> Option<CommunityNaming> {
         let (start, end) = (trimmed.find('{')?, trimmed.rfind('}')?);
         parse(&trimmed[start..=end])
     })?;
-    let label = raw.label.trim().to_string();
+    let label = astria_core::security::redact_secrets(raw.label.trim());
     if label.is_empty() {
         return None;
     }
     let label: String = label.chars().take(MAX_LABEL_CHARS).collect();
-    let summary: String = raw.summary.trim().chars().take(MAX_SUMMARY_CHARS).collect();
+    let summary: String = astria_core::security::redact_secrets(raw.summary.trim())
+        .chars()
+        .take(MAX_SUMMARY_CHARS)
+        .collect();
     Some(CommunityNaming { label, summary })
 }
 
@@ -322,7 +327,11 @@ pub fn link_concepts(
     symbols: &[String],
     concepts: &[(String, String)],
 ) -> Result<Vec<ConceptLink>> {
-    let user_prompt = deep_link_user_prompt(file_display, symbols, concepts);
+    let user_prompt = astria_core::security::redact_secrets(&deep_link_user_prompt(
+        file_display,
+        symbols,
+        concepts,
+    ));
     let _reservation = reserve_budget(user_prompt.len(), MAX_OUTPUT_TOKENS_COMPLETE)?;
     let text = backend.complete(deep_link_system_prompt(), &user_prompt)?;
     Ok(parse_deep_links(&text))

@@ -48,6 +48,7 @@ export interface DiagnoseReportJs {
   /** Files whose last extraction was not complete, "path: status". */
   incompleteFiles: Array<string>;
   text: string;
+  semanticCoverage: Array<string>;
 }
 
 export interface RiskReportJs {
@@ -150,6 +151,10 @@ export interface QueryResultJs {
   snapshotEstimatedBytes: number;
   /** Explicitly supplied seeds that resolved to no node. */
   unresolvedSeeds: string[];
+  ambiguousSeeds: Array<{
+    seed: string;
+    candidates: Array<{ id: string; label: string; sourceFile: string; sourceLine?: number | null; repo?: string | null }>;
+  }>;
 }
 
 export interface QueryNodeJs {

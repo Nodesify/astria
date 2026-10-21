@@ -14,7 +14,7 @@ mod render;
 mod result;
 mod scoring;
 mod store;
-pub use result::{QueryEdge, QueryNode, QueryResponse};
+pub use result::{AmbiguousSeed, QueryEdge, QueryNode, QueryResponse, SeedCandidate};
 
 #[allow(unused_imports)]
 pub use render::count_response_tokens;
@@ -351,6 +351,7 @@ fn query_graph_loaded(
     // miss, never a silent switch back to keyword seeds.
     let has_explicit_seeds = seeds.iter().any(|s| !s.trim().is_empty());
     let mut unresolved_seeds: Vec<String> = Vec::new();
+    let mut ambiguous_seeds = Vec::new();
     let mut explicit_seed_nodes: Vec<NodeIndex> = Vec::new();
     if has_explicit_seeds {
         for seed in seeds {
@@ -358,29 +359,35 @@ fn query_graph_loaded(
             if seed.is_empty() {
                 continue;
             }
-            match resolve_explicit_seed(db, &loaded, seed) {
-                Some(idx) => {
+            match resolve_explicit_seed(db, &loaded, seed)? {
+                SeedResolution::Unique(idx) => {
                     if !explicit_seed_nodes.contains(&idx) {
                         explicit_seed_nodes.push(idx);
                     }
                 }
-                None => unresolved_seeds.push(seed.to_string()),
+                SeedResolution::Missing => unresolved_seeds.push(seed.to_string()),
+                SeedResolution::Ambiguous(candidates) => ambiguous_seeds.push(AmbiguousSeed {
+                    seed: seed.to_string(),
+                    candidates,
+                }),
             }
         }
         if explicit_seed_nodes.is_empty() {
             let suggestions =
                 nearest_labels(&loaded, &unresolved_seeds.join(" "), SUGGESTION_COUNT);
             let mut msg = format!(
-                "No matching nodes for seeds: {}. All supplied seeds must resolve; no keyword fallback was applied.",
-                unresolved_seeds.join(", ")
+                "No uniquely matching nodes for {} supplied seeds. No keyword fallback was applied.",
+                seeds.len()
             );
             if !suggestions.is_empty() {
                 msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
             }
+            msg.push_str(&ambiguity_text(&ambiguous_seeds, budget));
             let (text, _) = render_page("", &[format!("{msg}\n")], 0, budget)?;
             return Ok(QueryResponse {
                 text,
                 unresolved_seeds,
+                ambiguous_seeds,
                 ..Default::default()
             });
         }
@@ -717,6 +724,7 @@ fn query_graph_loaded(
             unresolved_seeds.join(", ")
         ));
     }
+    header.push_str(&ambiguity_text(&ambiguous_seeds, budget));
     let relevance: HashMap<NodeIndex, f64> = scored.iter().map(|(s, i)| (*i, *s)).collect();
     // Degree without dispatch edges: interface-dispatch links are possible
     // implementations, not proven calls, and must not win ordering ties.
@@ -749,69 +757,118 @@ fn query_graph_loaded(
     response.node_count = visited.len();
     response.edge_count = edges_seen.len();
     response.unresolved_seeds = unresolved_seeds;
+    response.ambiguous_seeds = ambiguous_seeds;
     Ok(response)
 }
 
-/// Resolve one explicitly supplied seed to a node. Exact id first (a stub
-/// never shadows its real definition), then exact label with stubs
-/// deprioritized, then the bare symbol name (`.foo()` labels resolve as
-/// `foo`), then a source-file suffix that names exactly one node. Returns
-/// `None` when nothing matches or a suffix is ambiguous — the caller
-/// reports the seed rather than guessing.
-fn resolve_explicit_seed(db: &Connection, loaded: &LoadedGraph, seed: &str) -> Option<NodeIndex> {
+enum SeedResolution {
+    Unique(NodeIndex),
+    Missing,
+    Ambiguous(Vec<SeedCandidate>),
+}
+
+/// Exact IDs are decisive; labels, bare names, and source suffixes must
+/// identify exactly one node. Ambiguous candidates are disclosed, never ranked.
+fn resolve_explicit_seed(
+    db: &Connection,
+    loaded: &LoadedGraph,
+    seed: &str,
+) -> astria_core::Result<SeedResolution> {
     if let Some(&idx) = loaded.id_to_idx.get(seed) {
-        let is_stub: bool = db
-            .query_row(
-                "SELECT file_type = 'stub' FROM nodes WHERE id = ?1",
-                rusqlite::params![seed],
-                |r| r.get(0),
-            )
-            .unwrap_or(false);
-        if !is_stub {
-            return Some(idx);
-        }
-        let bare = bare_symbol_name(seed);
-        if let Some(id) = astria_core::db::prefer_non_stub_id(db, &bare) {
-            if let Some(&better) = loaded.id_to_idx.get(id.as_str()) {
-                return Some(better);
-            }
-        }
-        return Some(idx);
+        return Ok(SeedResolution::Unique(idx));
     }
-    let labeled: Option<String> = db
-        .query_row(
-            "SELECT id FROM nodes WHERE label = ?1 ORDER BY file_type = 'stub', id LIMIT 1",
-            rusqlite::params![seed],
-            |r| r.get(0),
-        )
-        .ok();
-    if let Some(id) = labeled {
-        if let Some(&idx) = loaded.id_to_idx.get(id.as_str()) {
-            return Some(idx);
-        }
-    }
-    let bare = bare_symbol_name(seed);
-    if let Some(id) = astria_core::db::prefer_non_stub_id(db, &bare) {
-        if let Some(&idx) = loaded.id_to_idx.get(id.as_str()) {
-            return Some(idx);
-        }
-    }
-    // Source-file suffix: "src/lib.rs" or "lib.rs". A suffix hitting more
-    // than one node is ambiguous and resolves to nothing.
-    let norm_query = seed.replace('\\', "/");
-    let suffix = format!("%{}", norm_query.trim_start_matches('/'));
-    let mut stmt = db
-        .prepare("SELECT id FROM nodes WHERE source_file LIKE ?1")
-        .ok()?;
-    let matches: Vec<String> = stmt
-        .query_map(rusqlite::params![suffix], |r| r.get(0))
-        .ok()?
-        .filter_map(|r| r.ok())
+    let nodes = &loaded.graph;
+    let mut matches: Vec<_> = nodes
+        .node_indices()
+        .filter(|&i| nodes[i].label == seed)
         .collect();
-    match matches.len() {
-        1 => loaded.id_to_idx.get(matches[0].as_str()).copied(),
-        _ => None,
+    if matches.is_empty() {
+        let bare = bare_symbol_name(seed);
+        matches = nodes
+            .node_indices()
+            .filter(|&i| bare_symbol_name(&nodes[i].label) == bare)
+            .collect();
     }
+    if matches.is_empty() {
+        let normalized = seed.replace('\\', "/");
+        let suffix = normalized.trim_start_matches('/');
+        matches = nodes
+            .node_indices()
+            .filter(|&i| {
+                let path = nodes[i].source_file.replace('\\', "/");
+                !suffix.is_empty() && (path == suffix || path.ends_with(&format!("/{suffix}")))
+            })
+            .collect();
+    }
+    matches.sort_by(|&a, &b| nodes[a].id.cmp(&nodes[b].id));
+    Ok(match matches.len() {
+        0 => SeedResolution::Missing,
+        1 => SeedResolution::Unique(matches[0]),
+        _ => {
+            let mut candidates = Vec::new();
+            for idx in matches {
+                let node = &nodes[idx];
+                let repo =
+                    db.query_row("SELECT repo FROM nodes WHERE id = ?1", [&node.id], |r| {
+                        r.get(0)
+                    })?;
+                candidates.push(SeedCandidate {
+                    id: node.id.clone(),
+                    label: node.label.clone(),
+                    source_file: loaded.display_path(&node.source_file),
+                    source_line: node.source_line,
+                    repo,
+                });
+            }
+            SeedResolution::Ambiguous(candidates)
+        }
+    })
+}
+
+/// Keep diagnostics small enough that ambiguity cannot crowd the query page
+/// out of its budget. Every candidate remains in the structured response.
+fn ambiguity_text(seeds: &[AmbiguousSeed], budget: i64) -> String {
+    if seeds.is_empty() {
+        return String::new();
+    }
+    let total: usize = seeds.iter().map(|s| s.candidates.len()).sum();
+    let summary = format!(
+        "\n# {} ambiguous seeds, {} candidates; supply an exact node id. Full candidates: --json / structured ambiguousSeeds.\n",
+        seeds.len(), total
+    );
+    let limit = (budget.max(0) as usize / 4).min(512);
+    let mut text = summary.clone();
+    let mut shown = 0;
+    'candidates: for item in seeds {
+        for candidate in &item.candidates {
+            let line = format!(
+                "# seed={:?} candidate id={} label={:?} src={}:{} repo={}\n",
+                item.seed,
+                candidate.id,
+                candidate.label,
+                candidate.source_file,
+                candidate
+                    .source_line
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".into()),
+                candidate.repo.as_deref().unwrap_or("local")
+            );
+            let next = format!("{text}{line}");
+            // Reserve space for the omission count as well as the summary.
+            if count_response_tokens(&next) + 16 > limit {
+                break 'candidates;
+            }
+            text = next;
+            shown += 1;
+        }
+    }
+    if shown < total {
+        text.push_str(&format!(
+            "# {} additional candidates in structured ambiguousSeeds.\n",
+            total - shown
+        ));
+    }
+    text
 }
 
 /// Strip the `.foo()` decoration used by method labels down to the bare

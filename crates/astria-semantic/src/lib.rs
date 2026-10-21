@@ -156,7 +156,7 @@ pub fn backend_from_env() -> Result<Box<dyn SemanticBackend>> {
 /// invalidate cached results produced under the tighter cap.
 pub fn cache_configuration(backend: &dyn SemanticBackend) -> String {
     format!(
-        "semantic-v2\n{}\n{MAX_CHUNK_CHARS}:{}\n{}\n{}\n{}",
+        "semantic-v3-redacted\n{}\n{MAX_CHUNK_CHARS}:{}\n{}\n{}\n{}",
         backend.cache_identity(),
         max_chunks(),
         system_prompt("code"),
@@ -287,8 +287,20 @@ pub fn extract_semantic_with_sources(
             {
                 Err(e) => results.push((path.clone(), Err(e))),
                 Ok(_reservation) => {
-                    let vision =
-                        backend.extract_semantic_from_image(&bytes, image_media_type(path));
+                    let vision = backend
+                        .extract_semantic_from_image(&bytes, image_media_type(path))
+                        .map(|mut extraction| {
+                            extraction.coverage = Some(SemanticCoverage {
+                                processed_chunks: 1,
+                                total_chunks: 1,
+                            });
+                            sanitize_extraction(extraction)
+                        })
+                        .map_err(|error| AstriaError::SemanticIncomplete {
+                            processed_chunks: 0,
+                            total_chunks: 1,
+                            reason: astria_core::security::redact_secrets(&error.to_string()),
+                        });
                     results.push((path.clone(), vision));
                 }
             }
@@ -323,6 +335,7 @@ pub fn extract_semantic_with_sources(
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("unknown");
+        let content = astria_core::security::redact_secrets(&content);
         let extraction = backend.extract_semantic(&content, ext);
         results.push((path.clone(), extraction));
     }
@@ -850,6 +863,7 @@ mod tests {
     #[test]
     fn sanitize_clamps_enums_and_drops_dangling_edges() {
         let ext = SemanticExtraction {
+            coverage: None,
             nodes: vec![
                 SemanticNode {
                     id: " a ".into(),
@@ -924,6 +938,7 @@ mod tests {
     #[test]
     fn merge_dedupes_nodes_and_keeps_cross_chunk_edges() {
         let part1 = SemanticExtraction {
+            coverage: None,
             nodes: vec![SemanticNode {
                 id: "a".into(),
                 label: "A".into(),
@@ -933,6 +948,7 @@ mod tests {
             edges: vec![],
         };
         let part2 = SemanticExtraction {
+            coverage: None,
             nodes: vec![
                 SemanticNode {
                     id: "a".into(),
@@ -1034,6 +1050,7 @@ mod tests {
     #[test]
     fn extraction_roundtrip() {
         let ext = SemanticExtraction {
+            coverage: None,
             nodes: vec![SemanticNode {
                 id: "graph_algo".into(),
                 label: "Graph Algorithm".into(),

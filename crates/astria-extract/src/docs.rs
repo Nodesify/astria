@@ -374,6 +374,8 @@ pub(crate) fn extract_text_from_str(
 /// First `max` chars (split on a char boundary) with an ellipsis suffix
 /// when longer.
 fn truncate_with_ellipsis(text: &str, max: usize) -> String {
+    let redacted = astria_core::security::redact_secrets(text);
+    let text = redacted.as_str();
     if text.chars().count() > max {
         let cut: usize = text
             .char_indices()

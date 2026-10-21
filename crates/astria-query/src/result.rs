@@ -26,6 +26,23 @@ pub struct QueryEdge {
     pub source_line: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeedCandidate {
+    pub id: String,
+    pub label: String,
+    pub source_file: String,
+    pub source_line: Option<i64>,
+    pub repo: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmbiguousSeed {
+    pub seed: String,
+    pub candidates: Vec<SeedCandidate>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryResponse {
@@ -47,6 +64,7 @@ pub struct QueryResponse {
     /// source path). Empty unless the caller asked for explicit seeds; when
     /// every supplied seed is unresolved the response is an explicit miss.
     pub unresolved_seeds: Vec<String>,
+    pub ambiguous_seeds: Vec<AmbiguousSeed>,
 }
 
 impl QueryResponse {

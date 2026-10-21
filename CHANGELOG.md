@@ -4,6 +4,24 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## Unreleased
+
+- Refresh graphs across complete merge/fast-forward ranges and all changed graph inputs.
+- Report ambiguous explicit seeds with candidate IDs and locations through CLI/MCP,
+  retaining complete structured candidates while bounding rendered context.
+- Redact credential-shaped source text before retention and semantic requests;
+  exclude credential literals from reference identities.
+- Discover extensionless scripts from bounded shebang reads, including versioned
+  interpreters, with shared parser and cache selection.
+- Extract Kotlin aliases, C# delegates, Dart typedefs, and Swift macros; resolve
+  uniquely supported type references and macro calls without speculative stubs.
+- Infer instance fields from unambiguous assignments, rejecting conflicting,
+  computed-unknown, deleted, static, or shadowed bindings. Preserve punctuation-sensitive
+  symbol identity and exact member spelling.
+- Preserve multiple relationship labels in the viewer's neighbor panel.
+- Record semantic processed/total chunk coverage and incomplete reasons in diagnose;
+  incomplete enrichment still fails without publishing or caching partial results.
+
 ## [1.3.0] — 2026-10-16
 
 The typed-calls release: TypeScript receivers resolve through declared types, interfaces dispatch to implementations, imports resolve through project metadata, and the graph reports how completely it understood each file.

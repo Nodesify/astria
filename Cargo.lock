@@ -137,6 +137,7 @@ version = "1.0.0"
 dependencies = [
  "fs2",
  "petgraph",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
