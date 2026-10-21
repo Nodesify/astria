@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 pub struct ImportContext {
     /// The scanned project root every mapping is relative to.
     root: PathBuf,
-    /// Alias prefixes ("@/") to root-relative directory prefixes ("src/"),
-    /// longest first. From tsconfig/jsconfig `compilerOptions.paths`
-    /// (relative to `baseUrl` when present).
+    /// Alias patterns ("@db" or "@/*") to root-relative target patterns,
+    /// longest wildcard prefix first. Exact aliases take precedence.
+    /// From tsconfig/jsconfig `compilerOptions.paths`, relative to `baseUrl`.
     aliases: Vec<(String, String)>,
     /// Workspace package names ("@scope/pkg", "lib") to their authored
     /// entry source file (absolute, when it exists on disk).
@@ -51,13 +51,22 @@ impl ImportContext {
     }
 
     fn resolve_alias(&self, root: &Path, specifier: &str) -> Option<PathBuf> {
-        for (prefix, replacement) in &self.aliases {
-            if let Some(rest) = specifier.strip_prefix(prefix.as_str()) {
-                if rest.is_empty() {
-                    continue;
-                }
-                let mapped = format!("{replacement}{rest}");
-                return Some(root.join(normalize_separators(&mapped)));
+        if let Some((_, target)) = self
+            .aliases
+            .iter()
+            .find(|(alias, _)| !alias.contains('*') && alias == specifier)
+        {
+            return Some(root.join(target));
+        }
+        for (pattern, target) in &self.aliases {
+            let Some((prefix, suffix)) = pattern.split_once('*') else {
+                continue;
+            };
+            if let Some(capture) = specifier
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix(suffix))
+            {
+                return Some(root.join(target.replace('*', capture)));
             }
         }
         None
@@ -126,23 +135,21 @@ fn load_tsconfig_aliases(root: &Path) -> Vec<(String, String)> {
             let Some(target) = first.as_str() else {
                 continue;
             };
-            // "@/*" → "src/*": keep the wildcard shapes aligned by mapping
-            // the '*' literally — the prefix match + suffix join preserves
-            // the project's intent without glob machinery.
-            let alias_prefix = alias.trim_end_matches('*').to_string();
-            let mut target = normalize_separators(target);
-            let target_prefix = target
-                .trim_end_matches('*')
-                .trim_end_matches('/')
-                .to_string();
-            target = if base == "." {
-                format!("{}/", target_prefix)
-            } else {
-                format!("{}/{}/", normalize_separators(&base), target_prefix)
-            };
-            if !alias_prefix.is_empty() && !target.is_empty() {
-                aliases.push((alias_prefix, target));
+            // Keep exact file targets and wildcard positions intact. TypeScript
+            // permits one wildcard per pattern, including a suffix after it.
+            if alias.is_empty()
+                || target.is_empty()
+                || alias.matches('*').count() > 1
+                || target.matches('*').count() > 1
+                || (!alias.contains('*') && target.contains('*'))
+            {
+                continue;
             }
+            let target = Path::new(&base).join(normalize_separators(target));
+            aliases.push((
+                alias.clone(),
+                normalize_separators(&target.to_string_lossy()),
+            ));
         }
         // First config file that declares paths wins; a second one would
         // describe a different compilation unit.
@@ -151,7 +158,8 @@ fn load_tsconfig_aliases(root: &Path) -> Vec<(String, String)> {
         }
     }
     // Longest alias prefix first so "@app/*" outruns "@/*".
-    aliases.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
+    aliases
+        .sort_by_key(|(pattern, _)| std::cmp::Reverse(pattern.find('*').unwrap_or(pattern.len())));
     aliases.dedup();
     aliases
 }
