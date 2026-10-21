@@ -65,7 +65,8 @@ function testFreshInstall() {
   assert(content.startsWith('#!/usr/bin/env node'), 'fresh install: node shebang');
   assert(content.includes('// astria-hook-start'), 'fresh install: current marker present');
   assert(content.includes('ASTRIA_HOOK_VERSION'), 'fresh install: version sentinel present');
-  assert(content.includes('--if-stale'), 'fresh install: hook throttles by freshness');
+  assert(content.includes('update . --quiet'), 'fresh install: hook inspects inputs quietly');
+  assert(!content.includes('--if-stale'), 'fresh install: recent graphs still inspect changed inputs');
   assert(!content.includes('nodesify-graphify'), 'fresh install: no legacy marker');
 }
 
@@ -76,9 +77,8 @@ function testPostMergeInstall() {
   const content = fs.readFileSync(hookPath(repo, 'post-merge'), 'utf-8');
   assert(content.startsWith('#!/usr/bin/env node'), 'post-merge: node shebang');
   assert(content.includes('// astria-merge-hook-start'), 'post-merge: marker present');
-  // First-parent diff: post-merge must refresh on what the merge brought in.
-  // HEAD~1 (not HEAD^1) so the command survives cmd.exe on Windows.
-  assert(content.includes('HEAD~1 HEAD'), 'post-merge: first-parent diff');
+  // The pre-merge tip covers every incoming commit in a fast-forward merge.
+  assert(content.includes('ORIG_HEAD HEAD'), 'post-merge: diff from pre-merge tip');
   assert(content.includes('.astria'), 'post-merge: watches the graph directory');
 
   const status = statusGitHooks(repo);
