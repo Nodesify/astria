@@ -33,7 +33,8 @@ pub mod writer_lock;
 /// previously cached extractions carry the old folded ids and must be
 /// re-extracted.
 /// v15: qualified call boundaries and exact import module paths retained.
-pub const EXTRACTION_HASH_VERSION: &str = "v16";
+/// v17: retained-text redaction, language coverage, and exact declaration identity.
+pub const EXTRACTION_HASH_VERSION: &str = "v17";
 
 /// Reads `ASTRIA_<name>`. Empty values count as unset. There is no legacy
 /// spelling fallback: pre-1.0 configurations rebuild with current names.

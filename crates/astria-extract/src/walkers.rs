@@ -85,6 +85,7 @@ pub(crate) fn node_signature(node: &Node, source: &[u8], cfg: &LanguageConfig) -
     }
     let raw = std::str::from_utf8(&source[start..body_start.min(source.len())]).unwrap_or("");
     let mut sig = String::new();
+    let raw = astria_core::security::redact_secrets(raw);
     for word in raw.split_whitespace() {
         sig.push_str(word);
         sig.push(' ');
@@ -123,7 +124,7 @@ pub(crate) fn extract_docstring(
                 .trim_end_matches("'''")
                 .trim();
             if !cleaned.is_empty() {
-                return Some(cleaned.to_string());
+                return Some(astria_core::security::sanitize_docstring(cleaned));
             }
         }
     }
@@ -147,6 +148,7 @@ pub(crate) fn item_docstring(state: &ExtractionState, node: &Node) -> Option<Str
 pub(crate) fn const_signature(node: &Node, source: &[u8]) -> Option<String> {
     let raw = node_text(node, source);
     let mut sig = String::new();
+    let raw = astria_core::security::redact_secrets(raw);
     for word in raw.split_whitespace() {
         if sig.len() + word.len() + 1 > 200 {
             break;
@@ -253,7 +255,9 @@ fn collect_string_refs(state: &mut ExtractionState<'_>, node: &Node<'_>) {
         return;
     }
     let literal = unquote_literal(node_text(node, state.source));
-    if !is_reference_literal(literal) {
+    // Credential literals must not survive in reference IDs or edge targets,
+    // even when their displayed labels would be redacted later.
+    if !is_reference_literal(literal) || astria_core::security::redact_secrets(literal) != literal {
         return;
     }
     if !state.string_refs_seen.insert(literal.to_lowercase()) {
@@ -310,8 +314,153 @@ pub(crate) fn synthesize_closure_name(state: &mut ExtractionState<'_>, node: &No
     format!("{}::{{closure#{}}}", scope_display, count)
 }
 
+// Names here follow the installed grammar fields, never whole declaration text.
+fn coverage_declaration<'a>(node: &Node<'a>, language: &str) -> Option<(Node<'a>, &'static str)> {
+    let (field, child, node_type) = match (language, node.kind()) {
+        ("Kotlin", "type_alias") => (Some("type"), "", "type"),
+        ("C#", "delegate_declaration") => (Some("name"), "", "type"),
+        ("Dart", "type_alias") => (None, "type_identifier", "type"),
+        ("Swift", "macro_declaration") => (None, "simple_identifier", "macro"),
+        _ => return None,
+    };
+    let name = if let Some(field) = field {
+        node.child_by_field_name(field)?
+    } else {
+        let mut cursor = node.walk();
+        let mut names = node
+            .named_children(&mut cursor)
+            .filter(|n| n.kind() == child);
+        let name = names.next()?;
+        if names.next().is_some() {
+            return None;
+        }
+        name
+    };
+    (!node.has_error() && !name.is_missing()).then_some((name, node_type))
+}
+
+fn coverage_type_reference(state: &mut ExtractionState, node: &Node) {
+    let name = match (state.cfg.name, node.kind()) {
+        ("Kotlin", "user_type") => {
+            let mut cursor = node.walk();
+            let mut names = node
+                .named_children(&mut cursor)
+                .filter(|n| n.kind() == "identifier");
+            let Some(name) = names.next() else { return };
+            // Qualified names require import/namespace evidence; never shorten them.
+            if names.next().is_some() {
+                return;
+            }
+            node_text(&name, state.source)
+        }
+        ("Dart", "type_identifier") if node.parent().is_some_and(|p| p.kind() == "type") => {
+            node_text(node, state.source)
+        }
+        ("C#", "identifier")
+            if node.parent().is_some_and(|p| {
+                p.child_by_field_name("type").is_some_and(|n| n == *node)
+                    || p.child_by_field_name("returns").is_some_and(|n| n == *node)
+                    || p.kind() == "type_argument_list"
+            }) =>
+        {
+            node_text(node, state.source)
+        }
+        _ => return,
+    };
+    if name.is_empty() || node.has_error() {
+        return;
+    }
+    state.edges.push(ExtractedEdge {
+        source: state
+            .lexical_scopes
+            .last()
+            .unwrap_or(&state.file_id)
+            .clone(),
+        target: format!("type::{name}"),
+        relation: "uses".to_string(),
+        confidence: "INFERRED".to_string(),
+        confidence_score: Some(0.7),
+        source_file: state.file_path.clone(),
+        source_line: Some(node.start_position().row as u32 + 1),
+    });
+}
+
+fn swift_macro_call(state: &mut ExtractionState, caller: &str, node: &Node) {
+    let mut cursor = node.walk();
+    let mut names = node
+        .named_children(&mut cursor)
+        .filter(|n| n.kind() == "simple_identifier");
+    let Some(name) = names.next() else { return };
+    if names.next().is_some() || node.has_error() {
+        return;
+    }
+    let target = format!("macro::{}", node_text(&name, state.source));
+    let line = Some(node.start_position().row as u32 + 1);
+    if state
+        .edges
+        .iter()
+        .any(|edge| edge.target == target && edge.source_line == line && edge.source == caller)
+    {
+        return;
+    }
+    state.edges.push(ExtractedEdge {
+        source: caller.to_string(),
+        target,
+        relation: "calls".to_string(),
+        confidence: "INFERRED".to_string(),
+        confidence_score: Some(0.7),
+        source_file: state.file_path.clone(),
+        source_line: line,
+    });
+}
+
 pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'a>) {
     let kind = node.kind();
+    coverage_type_reference(state, node);
+
+    if let Some((name, node_type)) = coverage_declaration(node, state.cfg.name) {
+        let name = node_text(&name, state.source);
+        let parent = state
+            .lexical_scopes
+            .last()
+            .unwrap_or(&state.file_id)
+            .clone();
+        let id = make_node_id(&[&parent, name]);
+        let line = Some(node.start_position().row as u32 + 1);
+        state.nodes.push(ExtractedNode {
+            id: id.clone(),
+            label: name.to_string(),
+            source_file: state.file_path.clone(),
+            source_line: line,
+            docstring: item_docstring(state, node),
+            signature: node_signature(node, state.source, state.cfg),
+            node_type: node_type.to_string(),
+        });
+        state.edges.push(ExtractedEdge {
+            source: parent,
+            target: id.clone(),
+            relation: "contains".to_string(),
+            confidence: "EXTRACTED".to_string(),
+            confidence_score: Some(1.0),
+            source_file: state.file_path.clone(),
+            source_line: line,
+        });
+        state.lexical_scopes.push(id);
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk_structural(state, &child);
+        }
+        state.lexical_scopes.pop();
+        return;
+    }
+    if state.cfg.name == "Swift" && kind == "macro_invocation" {
+        let caller = state
+            .lexical_scopes
+            .last()
+            .unwrap_or(&state.file_id)
+            .clone();
+        swift_macro_call(state, &caller, node);
+    }
 
     // --- Identifier-shaped string literals ---
     // Kinds whose name ends in "string" are literals in every grammar we
@@ -855,6 +1004,9 @@ fn extract_import_module(text: &str, kind: &str, language: &str) -> Option<Strin
 
 pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, body: &Node<'a>) {
     let kind = body.kind();
+    if state.cfg.name == "Swift" && kind == "macro_invocation" {
+        swift_macro_call(state, caller_id, body);
+    }
     // An expression-bodied arrow can return another function directly.
     // That returned function owns its calls, just like a nested declaration.
     if state.cfg.function_types.contains(&kind) || state.cfg.class_types.contains(&kind) {
@@ -1002,11 +1154,12 @@ fn extract_rationale(state: &mut ExtractionState, source: &[u8]) {
             .map(|(_, id)| id.clone())
             .unwrap_or_else(|| state.file_id.clone());
 
-        let label = if comment_text.len() > 80 {
-            format!("{}: {}", tag, &comment_text[..80])
-        } else {
-            format!("{}: {}", tag, comment_text)
-        };
+        let comment_text = astria_core::security::redact_secrets(comment_text);
+        let label = format!(
+            "{}: {}",
+            tag,
+            comment_text.chars().take(80).collect::<String>()
+        );
 
         state.nodes.push(ExtractedNode {
             id: rid.clone(),

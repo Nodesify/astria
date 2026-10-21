@@ -90,19 +90,41 @@ pub(crate) fn check_cache(db: &Connection, path: &Path, hash: &str) -> Option<Ex
             .as_deref()
             .and_then(|json| serde_json::from_str(json).ok())
             .unwrap_or_default();
-        Some(Extraction {
+        let mut extraction = Extraction {
             file_path: path.to_path_buf(),
             language,
             nodes,
             edges,
             status,
             notes,
-        })
+        };
+        sanitize_retained_text(&mut extraction);
+        Some(extraction)
     })
+}
+
+/// Sanitize complete retained text at the extraction/cache boundary.
+pub(crate) fn sanitize_retained_text(extraction: &mut Extraction) {
+    for node in &mut extraction.nodes {
+        node.label = astria_core::security::sanitize_label(&node.label);
+        node.docstring = node
+            .docstring
+            .as_deref()
+            .map(astria_core::security::sanitize_docstring);
+        node.signature = node
+            .signature
+            .as_deref()
+            .map(astria_core::security::redact_secrets);
+    }
+    for note in &mut extraction.notes {
+        *note = astria_core::security::redact_secrets(note);
+    }
 }
 
 /// Save extraction result to the cache table.
 pub(crate) fn save_cache(db: &Connection, path: &Path, hash: &str, extraction: &Extraction) {
+    let mut extraction = extraction.clone();
+    sanitize_retained_text(&mut extraction);
     let path_str = normalize(path);
     let nodes_json = serde_json::to_string(&extraction.nodes).unwrap_or_default();
     let edges_json = serde_json::to_string(&extraction.edges).unwrap_or_default();

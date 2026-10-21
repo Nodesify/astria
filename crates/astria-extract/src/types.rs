@@ -14,11 +14,12 @@ use tree_sitter::{Node, Parser};
 #[derive(Debug, Clone)]
 struct ReceiverBinding {
     file: PathBuf,
-    /// Enclosing class label for fields and constructor parameter
-    /// properties; None for locals declared outside any class.
-    class_label: Option<String>,
     receiver: String,
     type_name: String,
+    /// Byte range of the lexical scope (or owning class for fields).
+    scope: std::ops::Range<usize>,
+    field: bool,
+    explicit_type: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -42,11 +43,60 @@ enum DeclKind {
     Interface,
 }
 
+#[derive(Debug)]
+struct ReceiverCall {
+    receiver: String,
+    member: String,
+    position: usize,
+    class_scope: Option<std::ops::Range<usize>>,
+}
+
+/// Find the scope that owns a declaration. `var` belongs to its function,
+/// while let/const also respect blocks and loop scopes.
+fn binding_scope(mut node: Node, function_only: bool) -> std::ops::Range<usize> {
+    while let Some(parent) = node.parent() {
+        node = parent;
+        let function = matches!(
+            node.kind(),
+            "function_declaration"
+                | "function_expression"
+                | "generator_function_declaration"
+                | "generator_function"
+                | "arrow_function"
+                | "method_definition"
+                | "program"
+        );
+        if function
+            || (!function_only
+                && matches!(
+                    node.kind(),
+                    "statement_block"
+                        | "for_statement"
+                        | "for_in_statement"
+                        | "switch_body"
+                        | "catch_clause"
+                ))
+        {
+            return node.byte_range();
+        }
+    }
+    node.byte_range()
+}
+
+fn class_scope(mut node: Node) -> std::ops::Range<usize> {
+    while !matches!(node.kind(), "class_declaration" | "class") {
+        let Some(parent) = node.parent() else { break };
+        node = parent;
+    }
+    node.byte_range()
+}
+
 #[derive(Debug, Default)]
 pub struct TypeIndex {
     bindings: Vec<ReceiverBinding>,
     heritage: Vec<Heritage>,
     declarations: Vec<Declaration>,
+    calls: HashMap<(String, u32, String), Vec<ReceiverCall>>,
 }
 
 impl TypeIndex {
@@ -77,15 +127,7 @@ fn bare_type_name(text: &str) -> String {
 pub fn build_type_index(results: &[Extraction]) -> TypeIndex {
     let mut index = TypeIndex::default();
     for ext in results {
-        let is_ts = matches!(ext.language.as_str(), "TypeScript" | "JavaScript")
-            && matches!(
-                ext.file_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_ascii_lowercase())
-                    .as_deref(),
-                Some("ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs")
-            );
+        let is_ts = matches!(ext.language.as_str(), "TypeScript" | "JavaScript");
         if !is_ts {
             continue;
         }
@@ -135,6 +177,116 @@ impl<'a> Walker<'a> {
         node.utf8_text(self.source).unwrap_or("")
     }
 
+    /// Destructured names shadow outer bindings even when their type is unknown.
+    fn block_pattern(&mut self, node: Node, scope: std::ops::Range<usize>) {
+        match node.kind() {
+            "identifier" | "shorthand_property_identifier_pattern" => {
+                self.index.bindings.push(ReceiverBinding {
+                    file: self.file.clone(),
+                    receiver: self.text(node).to_string(),
+                    type_name: String::new(),
+                    scope,
+                    field: false,
+                    explicit_type: false,
+                });
+            }
+            "pair_pattern" | "assignment_pattern" | "object_assignment_pattern" => {
+                if let Some(value) = node
+                    .child_by_field_name("value")
+                    .or_else(|| node.child_by_field_name("left"))
+                {
+                    self.block_pattern(value, scope);
+                }
+            }
+            _ => {
+                let mut cursor = node.walk();
+                for child in node.named_children(&mut cursor) {
+                    self.block_pattern(child, scope.clone());
+                }
+            }
+        }
+    }
+
+    /// Account for every field write, even when the assigned type is unknown.
+    /// A dynamic computed key can touch any field, so it blocks inferred types.
+    fn field_write(&mut self, target: Node, owner: Node, inferred: Option<String>) {
+        match target.kind() {
+            "member_expression" | "subscript_expression" => {
+                let Some(object) = target.child_by_field_name("object") else {
+                    return;
+                };
+                if self.text(object) != "this" {
+                    return;
+                }
+                let receiver = if target.kind() == "member_expression" {
+                    target
+                        .child_by_field_name("property")
+                        .map(|p| self.text(p).to_string())
+                } else {
+                    target.child_by_field_name("index").and_then(|key| {
+                        let text = self.text(key);
+                        (key.kind() == "string" && !text.contains('\\'))
+                            .then(|| text[1..text.len() - 1].to_string())
+                    })
+                }
+                .unwrap_or_default();
+                self.index.bindings.push(ReceiverBinding {
+                    file: self.file.clone(),
+                    receiver,
+                    type_name: inferred.unwrap_or_default(),
+                    scope: class_scope(owner),
+                    field: true,
+                    explicit_type: false,
+                });
+            }
+            "assignment_pattern" | "object_assignment_pattern" => {
+                if let Some(left) = target.child_by_field_name("left") {
+                    self.field_write(left, owner, None);
+                }
+            }
+            _ => {
+                let mut cursor = target.walk();
+                for child in target.named_children(&mut cursor) {
+                    self.field_write(child, owner, None);
+                }
+            }
+        }
+    }
+
+    fn instance_this(&self, mut node: Node) -> bool {
+        while let Some(parent) = node.parent() {
+            node = parent;
+            match node.kind() {
+                "function_declaration"
+                | "function_expression"
+                | "generator_function"
+                | "generator_function_declaration" => return false,
+                "method_definition" => {
+                    let mut cursor = node.walk();
+                    return node
+                        .parent()
+                        .is_some_and(|parent| parent.kind() == "class_body")
+                        && !node
+                            .children(&mut cursor)
+                            .any(|child| child.kind() == "static");
+                }
+                "class_static_block" => return false,
+                "property_definition" | "public_field_definition" | "property_declaration" => {
+                    let mut cursor = node.walk();
+                    if node
+                        .children(&mut cursor)
+                        .any(|child| child.kind() == "static")
+                    {
+                        return false;
+                    }
+                }
+                "class_declaration" | "class" => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn walk(&mut self, node: Node) {
         match node.kind() {
             "class_declaration" | "class" => {
@@ -169,7 +321,15 @@ impl<'a> Walker<'a> {
             | "public_field_definition"
             | "property_signature"
             | "property_declaration" => {
-                if let (Some(class), Some(name)) =
+                let mut cursor = node.walk();
+                let is_static = node
+                    .children(&mut cursor)
+                    .any(|child| child.kind() == "static");
+                if is_static {
+                    self.walk_children(node);
+                    return;
+                }
+                if let (Some(_), Some(name)) =
                     (self.class_stack.last(), node.child_by_field_name("name"))
                 {
                     let receiver = self.text(name).to_string();
@@ -186,12 +346,14 @@ impl<'a> Walker<'a> {
                             node.child_by_field_name("value")
                                 .and_then(|value| new_expression_type(value, self.source))
                         });
-                    if let Some(type_name) = type_name {
+                    if type_name.is_some() || node.child_by_field_name("value").is_some() {
                         self.index.bindings.push(ReceiverBinding {
                             file: self.file.clone(),
-                            class_label: Some(class.clone()),
                             receiver,
-                            type_name,
+                            type_name: type_name.unwrap_or_default(),
+                            scope: class_scope(node),
+                            field: true,
+                            explicit_type: annotation.is_some(),
                         });
                     }
                 }
@@ -215,24 +377,113 @@ impl<'a> Walker<'a> {
                     let Some(name) = declarator.child_by_field_name("name") else {
                         continue;
                     };
+                    if name.kind() != "identifier" {
+                        self.block_pattern(
+                            name,
+                            binding_scope(node, node.kind() == "variable_declaration"),
+                        );
+                        continue;
+                    }
                     let receiver = self.text(name).to_string();
                     let mut type_name = declarator
                         .child_by_field_name("type")
-                        .map(|ty| bare_type_name(self.text(ty)))
+                        .map(|ty| bare_type_name(self.text(ty).trim_start_matches(':')))
                         .unwrap_or_default();
                     if type_name.is_empty() {
                         if let Some(value) = declarator.child_by_field_name("value") {
                             type_name = new_expression_type(value, self.source).unwrap_or_default();
                         }
                     }
-                    if !type_name.is_empty() {
-                        self.index.bindings.push(ReceiverBinding {
-                            file: self.file.clone(),
-                            class_label: self.class_stack.last().cloned(),
-                            receiver,
-                            type_name,
-                        });
+                    self.index.bindings.push(ReceiverBinding {
+                        file: self.file.clone(),
+                        receiver,
+                        type_name,
+                        scope: binding_scope(node, node.kind() == "variable_declaration"),
+                        field: false,
+                        explicit_type: false,
+                    });
+                }
+                self.walk_children(node);
+            }
+            "required_parameter" | "optional_parameter" | "catch_clause" => {
+                if let Some(name) = node
+                    .child_by_field_name("pattern")
+                    .or_else(|| node.child_by_field_name("parameter"))
+                {
+                    self.block_pattern(
+                        name,
+                        if node.kind() == "catch_clause" {
+                            node.byte_range()
+                        } else {
+                            binding_scope(node, true)
+                        },
+                    );
+                }
+                self.walk_children(node);
+            }
+            "arrow_function" => {
+                if let Some(name) = node.child_by_field_name("parameter") {
+                    self.index.bindings.push(ReceiverBinding {
+                        file: self.file.clone(),
+                        receiver: self.text(name).to_string(),
+                        type_name: String::new(),
+                        scope: node.byte_range(),
+                        field: false,
+                        explicit_type: false,
+                    });
+                }
+                self.walk_children(node);
+            }
+            "assignment_expression" | "augmented_assignment_expression" | "update_expression" => {
+                if self.instance_this(node) {
+                    if let Some(left) = node
+                        .child_by_field_name("left")
+                        .or_else(|| node.child_by_field_name("argument"))
+                    {
+                        let inferred = (node.kind() == "assignment_expression")
+                            .then(|| {
+                                node.child_by_field_name("right")
+                                    .and_then(|right| new_expression_type(right, self.source))
+                            })
+                            .flatten();
+                        self.field_write(left, node, inferred);
                     }
+                }
+                self.walk_children(node);
+            }
+            "unary_expression" => {
+                if self.instance_this(node)
+                    && node
+                        .child_by_field_name("operator")
+                        .is_some_and(|op| self.text(op) == "delete")
+                {
+                    if let Some(argument) = node.child_by_field_name("argument") {
+                        self.field_write(argument, node, None);
+                    }
+                }
+                self.walk_children(node);
+            }
+            "call_expression" => {
+                if let Some(function) = node.child_by_field_name("function") {
+                    let Some((receiver, member)) = self.text(function).rsplit_once('.') else {
+                        self.walk_children(node);
+                        return;
+                    };
+                    let this_scope = self.instance_this(node).then(|| class_scope(node));
+                    self.index
+                        .calls
+                        .entry((
+                            file_key(&self.file),
+                            node.start_position().row as u32 + 1,
+                            crate::naming::make_target_id(self.text(function)),
+                        ))
+                        .or_default()
+                        .push(ReceiverCall {
+                            receiver: receiver.to_string(),
+                            member: member.to_string(),
+                            position: node.start_byte(),
+                            class_scope: this_scope,
+                        });
                 }
                 self.walk_children(node);
             }
@@ -284,9 +535,11 @@ impl<'a> Walker<'a> {
                 if !type_name.is_empty() {
                     self.index.bindings.push(ReceiverBinding {
                         file: self.file.clone(),
-                        class_label: self.class_stack.last().cloned(),
                         receiver,
                         type_name,
+                        scope: class_scope(method),
+                        field: true,
+                        explicit_type: true,
                     });
                 }
             }
@@ -356,7 +609,7 @@ struct ClassView {
     /// (file-key, label) -> class-like node ids.
     decl_ids: HashMap<(String, String), Vec<String>>,
     /// class-like node id -> (member label -> member node id).
-    members: HashMap<String, HashMap<String, String>>,
+    members: HashMap<String, HashMap<String, Vec<String>>>,
 }
 
 fn file_key(path: &std::path::Path) -> String {
@@ -365,7 +618,7 @@ fn file_key(path: &std::path::Path) -> String {
 
 fn build_class_view(results: &[Extraction]) -> ClassView {
     let mut decl_ids: HashMap<(String, String), Vec<String>> = HashMap::new();
-    let mut members: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut members: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
     for ext in results {
         if !matches!(ext.language.as_str(), "TypeScript" | "JavaScript") {
             continue;
@@ -405,7 +658,9 @@ fn build_class_view(results: &[Extraction]) -> ClassView {
             members
                 .entry(edge.source.clone())
                 .or_default()
-                .insert(tail, edge.target.clone());
+                .entry(tail)
+                .or_default()
+                .push(edge.target.clone());
         }
     }
     ClassView { decl_ids, members }
@@ -442,25 +697,19 @@ impl ClassView {
         member: &str,
         depth: usize,
     ) -> Option<String> {
-        if depth > 6 {
+        if depth > 6 || class_ids.len() != 1 {
             return None;
         }
-        for id in class_ids {
-            if let Some(member_id) = self.members.get(id).and_then(|m| m.get(member)) {
-                return Some(member_id.clone());
-            }
+        let id = &class_ids[0];
+        if let Some(member_ids) = self.members.get(id).and_then(|m| m.get(member)) {
+            return (member_ids.len() == 1).then(|| member_ids[0].clone());
         }
         for heritage in &index.heritage {
-            let class_labels: Vec<&String> = class_ids
-                .iter()
-                .filter_map(|id| {
-                    self.decl_ids
-                        .iter()
-                        .find(|(_, ids)| ids.contains(id))
-                        .map(|((_, label), _)| label)
-                })
-                .collect();
-            if !class_labels.iter().any(|l| **l == heritage.class_label) {
+            if !self
+                .decl_ids
+                .get(&(file_key(&heritage.file), heritage.class_label.clone()))
+                .is_some_and(|ids| ids.contains(id))
+            {
                 continue;
             }
             let bases: Vec<String> = heritage
@@ -518,21 +767,6 @@ pub fn resolve_typed_receivers(results: &[Extraction], index: &TypeIndex) -> Typ
             continue;
         }
         let file = file_key(&ext.file_path);
-        // The caller's enclosing class: `contains` edges are the walker's
-        // own membership record (ids flatten labels, so prefix matching on
-        // class ids does not work).
-        let class_label_by_id: HashMap<&str, &str> = ext
-            .nodes
-            .iter()
-            .filter(|n| n.node_type == "class")
-            .map(|n| (n.id.as_str(), n.label.as_str()))
-            .collect();
-        let mut class_of_member: HashMap<&str, &str> = HashMap::new();
-        for edge in &ext.edges {
-            if edge.relation == "contains" && class_label_by_id.contains_key(edge.source.as_str()) {
-                class_of_member.insert(edge.target.as_str(), edge.source.as_str());
-            }
-        }
         for (edge_index, edge) in ext.edges.iter().enumerate() {
             if edge.relation != "calls" || !edge.target.starts_with("receiver::") {
                 continue;
@@ -543,31 +777,73 @@ pub fn resolve_typed_receivers(results: &[Extraction], index: &TypeIndex) -> Typ
             else {
                 continue;
             };
-            // make_target_id flattened the dotted expression to '::'.
-            let normalized = qualified.replace("::", ".");
-            let Some((receiver, method)) = normalized.rsplit_once('.') else {
+            let Some(line) = edge.source_line else {
                 continue;
             };
-            let receiver = receiver.trim_start_matches("this.");
-            let caller_class = class_of_member
-                .get(edge.source.as_str())
-                .and_then(|class_id| class_label_by_id.get(class_id))
-                .map(|label| label.to_string());
-            let Some(type_name) = index
-                .bindings
-                .iter()
-                .filter(|b| file_key(&b.file) == file)
-                .filter(|b| match (&b.class_label, &caller_class) {
-                    (Some(binding_class), Some(caller)) => binding_class == caller,
-                    (None, None) => true,
-                    // A method body sees its class fields; a binding
-                    // recorded inside the class matches any member.
-                    (Some(_), None) => false,
-                    (None, Some(_)) => false,
-                })
-                .find(|b| b.receiver == receiver)
-                .map(|b| b.type_name.clone())
+            let Some(calls) = index
+                .calls
+                .get(&(file.clone(), line, qualified.to_string()))
             else {
+                continue;
+            };
+            // Edges have line precision only. If multiple calls on that line
+            // resolve differently, leave the edge unresolved instead of guessing.
+            let mut resolved = None;
+            let mut ambiguous = calls.is_empty();
+            for call in calls {
+                let field = call.receiver.starts_with("this.");
+                let receiver = call
+                    .receiver
+                    .strip_prefix("this.")
+                    .unwrap_or(&call.receiver);
+                let visible: Vec<_> = index
+                    .bindings
+                    .iter()
+                    .filter(|b| {
+                        file_key(&b.file) == file
+                            && b.field == field
+                            && (b.receiver == receiver || (field && b.receiver.is_empty()))
+                            && b.scope.contains(&call.position)
+                            && (!field || call.class_scope.as_ref() == Some(&b.scope))
+                    })
+                    .collect();
+                let nearest = visible.iter().map(|b| b.scope.len()).min();
+                let nearest_bindings: Vec<_> = visible
+                    .into_iter()
+                    .filter(|b| Some(b.scope.len()) == nearest)
+                    .collect();
+                let explicit = field && nearest_bindings.iter().any(|b| b.explicit_type);
+                let bindings: Vec<_> = nearest_bindings
+                    .into_iter()
+                    .filter(|b| !explicit || b.explicit_type)
+                    .collect();
+                let Some(binding) = bindings.first() else {
+                    ambiguous = true;
+                    break;
+                };
+                if binding.type_name.is_empty()
+                    || (!field && bindings.len() != 1)
+                    || bindings
+                        .iter()
+                        .any(|other| other.type_name != binding.type_name)
+                {
+                    ambiguous = true;
+                    break;
+                }
+                let target = (binding.type_name.clone(), call.member.clone());
+                if resolved
+                    .as_ref()
+                    .is_some_and(|previous| previous != &target)
+                {
+                    ambiguous = true;
+                    break;
+                }
+                resolved = Some(target);
+            }
+            if ambiguous {
+                continue;
+            }
+            let Some((type_name, method)) = resolved else {
                 continue;
             };
 
@@ -580,7 +856,7 @@ pub fn resolve_typed_receivers(results: &[Extraction], index: &TypeIndex) -> Typ
                 ));
                 continue;
             }
-            match view.lookup_member(index, &candidates, method, 0) {
+            match view.lookup_member(index, &candidates, &method, 0) {
                 Some(member_id) => rewrites.push((file_index, edge_index, member_id)),
                 None => typed_unresolved.push((
                     file_index,
@@ -654,10 +930,15 @@ pub fn add_dispatch_edges(results: &mut [Extraction], index: &TypeIndex) -> usiz
                 let Some(implementer_members) = view.members.get(implementer_id) else {
                     continue;
                 };
-                for (member_label, interface_member_id) in interface_members {
-                    let Some(impl_member_id) = implementer_members.get(member_label) else {
+                for (member_label, interface_member_ids) in interface_members {
+                    let Some(impl_member_ids) = implementer_members.get(member_label) else {
                         continue;
                     };
+                    if interface_member_ids.len() != 1 || impl_member_ids.len() != 1 {
+                        continue;
+                    }
+                    let interface_member_id = &interface_member_ids[0];
+                    let impl_member_id = &impl_member_ids[0];
                     let Some(ext) = results.iter_mut().find(|e| e.file_path == heritage.file)
                     else {
                         continue;

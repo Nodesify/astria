@@ -41,6 +41,10 @@ jobs:
       - name: Build pinned base runtime
         working-directory: .quality/base-runtime
         run: |
+          # Historical release locks can omit platform optional packages. Repair
+          # only that runtime's lock from its own package manifests before ci;
+          # the base source and both comparison corpora remain pinned unchanged.
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           (cd packages/astria-cli && npm ci)
           cargo build --release --locked -p astria-napi
           mkdir -p packages/astria-cli/dist

@@ -79,6 +79,7 @@ pub(crate) fn post_json(
 /// Last ~400 characters of an error body — enough to diagnose, never a
 /// multi-megabyte dump in a log line.
 fn diagnostic_tail(body: &str) -> String {
+    let body = astria_core::security::redact_secrets(body);
     let trimmed = body.trim();
     if trimmed.chars().count() <= 400 {
         trimmed.to_string()

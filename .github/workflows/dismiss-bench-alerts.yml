@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         with:
-          script: {
+          script: |
             const reason = 'used_in_tests';
             const comment = 'Benchmark tooling under scripts/bench/: downloads public datasets (HotpotQA, LoCoMo) and materializes them under bench-work/ for local retrieval measurements. Writing the dataset to disk is the tool\'s intended behavior; runs on maintainer machines only, never in production paths. The JS CodeQL analysis is scoped away from scripts/bench/** (see .github/codeql-config.yml).';
             const list = await github.rest.codeScanning.listAlertsForRepo({
@@ -41,4 +41,3 @@ jobs:
               });
               console.log(`dismissed #${alert.number} (${alert.rule.id})`);
             }
-          }

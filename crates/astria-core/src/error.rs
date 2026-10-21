@@ -12,6 +12,13 @@ pub enum AstriaError {
     #[error("Graph error: {0}")]
     Graph(String),
 
+    #[error("semantic extraction incomplete: processed {processed_chunks}/{total_chunks} chunks; {reason}")]
+    SemanticIncomplete {
+        processed_chunks: usize,
+        total_chunks: usize,
+        reason: String,
+    },
+
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 }

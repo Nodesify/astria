@@ -68,6 +68,7 @@ pub fn resolve_cross_file_references_with(
     }
     // Build all rewrites before mutating results so lookup references stay valid.
     let mut rewrites = Vec::new();
+    let mut unresolved_named_references = HashSet::new();
     for (file_index, ext) in results.iter().enumerate() {
         let imported_files: Vec<_> = ext
             .edges
@@ -79,7 +80,10 @@ pub fn resolve_cross_file_references_with(
             })
             .collect();
         for (edge_index, edge) in ext.edges.iter().enumerate() {
-            if edge.relation != "calls" && edge.relation != "imports" {
+            if edge.relation != "calls"
+                && edge.relation != "imports"
+                && !(edge.relation == "uses" && edge.target.starts_with("type::"))
+            {
                 continue;
             }
             if edge.target.starts_with("receiver::") {
@@ -110,6 +114,61 @@ pub fn resolve_cross_file_references_with(
                             rewrites.push((file_index, edge_index, node.id.clone()));
                         }
                     }
+                }
+                continue;
+            }
+            if let Some(name) = edge.target.strip_prefix("type::") {
+                let candidates: Vec<_> = results
+                    .iter()
+                    .filter(|result| {
+                        language_family(&result.language) == language_family(&ext.language)
+                    })
+                    .flat_map(|result| &result.nodes)
+                    .filter(|node| {
+                        matches!(node.node_type.as_str(), "type" | "class") && node.label == name
+                    })
+                    .collect();
+                let local: Vec<_> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|node| node.source_file == ext.file_path)
+                    .collect();
+                let selected = if local.is_empty() {
+                    unique_candidate(&candidates)
+                } else {
+                    unique_candidate(&local)
+                };
+                if let Some(node) = selected {
+                    rewrites.push((file_index, edge_index, node.id.clone()));
+                } else {
+                    unresolved_named_references.insert((file_index, edge_index));
+                }
+                continue;
+            }
+            // Swift freestanding macros retain their exact spelling. Unknown
+            // or ambiguous macros have no proven local declaration and must not
+            // become sourceless stubs (standard-library macros are external).
+            if let Some(name) = edge.target.strip_prefix("macro::") {
+                let candidates: Vec<_> = results
+                    .iter()
+                    .filter(|result| result.language == "Swift")
+                    .flat_map(|result| &result.nodes)
+                    .filter(|node| node.node_type == "macro" && node.label == name)
+                    .collect();
+                let local: Vec<_> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|node| node.source_file == ext.file_path)
+                    .collect();
+                let selected = if local.is_empty() {
+                    unique_candidate(&candidates)
+                } else {
+                    unique_candidate(&local)
+                };
+                if let Some(node) = selected {
+                    rewrites.push((file_index, edge_index, node.id.clone()));
+                } else {
+                    unresolved_named_references.insert((file_index, edge_index));
                 }
                 continue;
             }
@@ -199,6 +258,14 @@ pub fn resolve_cross_file_references_with(
         edge.confidence = "RESOLVED".to_string();
         edge.confidence_score = Some(0.85);
     }
+    for (file_index, result) in results.iter_mut().enumerate() {
+        let mut edge_index = 0;
+        result.edges.retain(|_| {
+            let keep = !unresolved_named_references.contains(&(file_index, edge_index));
+            edge_index += 1;
+            keep
+        });
+    }
 }
 
 fn language_family(language: &str) -> &str {
@@ -237,6 +304,7 @@ fn module_candidates<'a>(
     // path-shape guessing, and its miss means the specifier is unknown to
     // the project (fall through unchanged).
     if let Some(key) = imports.and_then(|ctx| ctx.module_key(module)) {
+        let key = module_path(std::path::Path::new(&key));
         let mut mapped = modules.get(&key).cloned().unwrap_or_default();
         // Files are indexed with and without their extension.
         if mapped.is_empty() {

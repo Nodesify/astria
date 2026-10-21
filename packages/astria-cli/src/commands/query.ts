@@ -59,6 +59,7 @@ export async function queryCommand(question: string, opts: {
             elapsedMilliseconds: result.elapsedMilliseconds,
             snapshotEstimatedBytes: result.snapshotEstimatedBytes,
             unresolvedSeeds: result.unresolvedSeeds ?? [],
+            ambiguousSeeds: result.ambiguousSeeds,
             text: result.text,
           },
           null,

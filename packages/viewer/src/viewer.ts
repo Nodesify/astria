@@ -126,14 +126,14 @@ function initData(): void {
     const b = adjacency.get(e.to);
     if (a) a.push(e.to);
     if (b) b.push(e.from);
-    // Relation-aware neighbor lists (deduped, first relation kept) for the
+    // Relation-aware neighbor lists (deduped by neighbor and relation) for the
     // focus panel; edges to unknown ids are ignored.
     if (nodeById.has(e.from) && nodeById.has(e.to)) {
       memberEdges.push(e);
       const ra = relOf.get(e.from);
       const rb = relOf.get(e.to);
-      if (ra && !ra.some((x) => x.id === e.to)) ra.push({ id: e.to, relation: e.relation });
-      if (rb && !rb.some((x) => x.id === e.from)) rb.push({ id: e.from, relation: e.relation });
+      if (ra && !ra.some((x) => x.id === e.to && x.relation === e.relation)) ra.push({ id: e.to, relation: e.relation });
+      if (rb && !rb.some((x) => x.id === e.from && x.relation === e.relation)) rb.push({ id: e.from, relation: e.relation });
     }
   }
   const byKey = new Map<string, DataNode[]>();

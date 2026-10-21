@@ -88,19 +88,26 @@ fn check_semantic_cache(
     let key = semantic_cache_key(path);
     let mut stmt = db
         .prepare(
-            "SELECT nodes, edges FROM extraction_cache WHERE file_path = ?1 AND content_hash = ?2",
+            "SELECT nodes, edges, notes FROM extraction_cache WHERE file_path = ?1 AND content_hash = ?2",
         )
         .ok()?;
     stmt.query_row(rusqlite::params![&key, hash], |row| {
         let nodes_json: String = row.get(0)?;
         let edges_json: String = row.get(1)?;
-        Ok((nodes_json, edges_json))
+        let coverage_json: Option<String> = row.get(2)?;
+        Ok((nodes_json, edges_json, coverage_json))
     })
     .ok()
-    .and_then(|(nodes_json, edges_json)| {
+    .and_then(|(nodes_json, edges_json, coverage_json)| {
         let nodes: Vec<astria_semantic::SemanticNode> = serde_json::from_str(&nodes_json).ok()?;
         let edges: Vec<astria_semantic::SemanticEdge> = serde_json::from_str(&edges_json).ok()?;
-        Some(astria_semantic::SemanticExtraction { nodes, edges })
+        let mut extraction = astria_semantic::SemanticExtraction {
+            nodes,
+            edges,
+            coverage: coverage_json.and_then(|json| serde_json::from_str(&json).ok()),
+        };
+        redact_semantic(&mut extraction);
+        Some(extraction)
     })
 }
 
@@ -110,16 +117,40 @@ fn save_semantic_cache(
     hash: &str,
     extraction: &astria_semantic::SemanticExtraction,
 ) {
+    let mut extraction = extraction.clone();
+    redact_semantic(&mut extraction);
     let key = semantic_cache_key(path);
     let nodes_json = serde_json::to_string(&extraction.nodes).unwrap_or_default();
     let edges_json = serde_json::to_string(&extraction.edges).unwrap_or_default();
+    let coverage_json = serde_json::to_string(&extraction.coverage).unwrap_or_default();
     let now = timestamp();
     if let Err(e) = db.execute(
-        "INSERT OR REPLACE INTO extraction_cache (file_path, content_hash, language, nodes, edges, extracted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![&key, hash, "semantic", nodes_json, edges_json, now],
+        "INSERT OR REPLACE INTO extraction_cache (file_path, content_hash, language, nodes, edges, extracted_at, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![&key, hash, "semantic", nodes_json, edges_json, now, coverage_json],
     ) {
         eprintln!("warning: failed to cache semantic extraction for {}: {}", key, e);
     }
+}
+
+fn redact_semantic(extraction: &mut astria_semantic::SemanticExtraction) {
+    for node in &mut extraction.nodes {
+        node.label = astria_core::security::sanitize_label(&node.label);
+        node.summary = astria_core::security::sanitize_docstring(&node.summary);
+    }
+}
+
+fn record_coverage(
+    db: &Connection,
+    path: &Path,
+    coverage: Option<&astria_semantic::SemanticCoverage>,
+    reason: Option<&str>,
+    cached: bool,
+) -> astria_core::Result<()> {
+    db.execute(
+        "INSERT OR REPLACE INTO semantic_coverage (file_path, processed_chunks, total_chunks, incomplete_reason, cached, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![astria_paths::normalize(path), coverage.map(|c| c.processed_chunks as i64), coverage.map(|c| c.total_chunks as i64), reason, cached, timestamp()],
+    )?;
+    Ok(())
 }
 
 /// Enrich existing extractions with LLM-based semantic data.
@@ -152,6 +183,16 @@ pub(super) fn enrich_with_semantics(
             gated: 0,
         });
     }
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS semantic_coverage (
+        file_path TEXT PRIMARY KEY,
+        processed_chunks INTEGER,
+        total_chunks INTEGER,
+        incomplete_reason TEXT,
+        cached INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+    )",
+    )?;
     let backend = backend_factory()?;
 
     let mut file_to_idx: HashMap<PathBuf, usize> = HashMap::new();
@@ -209,6 +250,7 @@ pub(super) fn enrich_with_semantics(
             None => continue,
         };
         if let Some(extraction) = check_semantic_cache(db, file_path, &hash) {
+            record_coverage(db, file_path, extraction.coverage.as_ref(), None, true)?;
             ready.push((idx, file_path.clone(), extraction));
         } else {
             pending.push(Pending {
@@ -326,10 +368,17 @@ pub(super) fn enrich_with_semantics(
         std::sync::Arc::new(sources),
         astria_semantic::concurrency_from_env(),
     );
+    let mut failures = Vec::new();
     let extraction_by_path: HashMap<PathBuf, astria_semantic::SemanticExtraction> = results
         .into_iter()
         .filter_map(|(path, result)| match result {
             Ok(extraction) => {
+                if let Err(error) =
+                    record_coverage(db, &path, extraction.coverage.as_ref(), None, false)
+                {
+                    failures.push(error.to_string());
+                    return None;
+                }
                 let meta = pending.iter().find(|p| p.path == path);
                 if let Some(meta) = meta {
                     save_semantic_cache(db, &path, &meta.hash, &extraction);
@@ -337,6 +386,24 @@ pub(super) fn enrich_with_semantics(
                 Some((path, extraction))
             }
             Err(e) => {
+                let coverage = match &e {
+                    astria_core::AstriaError::SemanticIncomplete {
+                        processed_chunks,
+                        total_chunks,
+                        ..
+                    } => Some(astria_semantic::SemanticCoverage {
+                        processed_chunks: *processed_chunks,
+                        total_chunks: *total_chunks,
+                    }),
+                    _ => None,
+                };
+                let reason = astria_core::security::redact_secrets(&e.to_string());
+                if let Err(error) =
+                    record_coverage(db, &path, coverage.as_ref(), Some(&reason), false)
+                {
+                    eprintln!("warning: failed to record semantic coverage: {error}");
+                }
+                failures.push(format!("{}: {}", path.display(), e));
                 eprintln!(
                     "warning: semantic extraction failed for {}: {}",
                     path.display(),
@@ -350,7 +417,7 @@ pub(super) fn enrich_with_semantics(
     let failed = pending_paths.len() - extraction_by_path.len();
     if failed > 0 {
         return Err(astria_core::AstriaError::Graph(format!(
-            "semantic extraction failed for {failed} file(s); graph and manifest were not advanced; retry to reuse successful cached results"
+            "semantic extraction failed for {failed} file(s); graph and manifest were not advanced; retry to reuse successful cached results: {}", failures.join("; ")
         )));
     }
     for meta in &pending {

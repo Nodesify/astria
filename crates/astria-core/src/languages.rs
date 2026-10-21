@@ -170,6 +170,70 @@ pub fn for_extension(extension: &str) -> Option<&'static LanguageRegistration> {
     })
 }
 
+/// Resolve extensionless scripts from a bounded, complete shebang line.
+/// Extension mappings take precedence; arbitrary content is never guessed.
+pub fn for_path(path: &std::path::Path) -> Option<&'static LanguageRegistration> {
+    if let Some(extension) = path.extension() {
+        return for_extension(extension.to_str()?);
+    }
+    use std::io::Read;
+    let mut prefix = [0u8; 512];
+    let count = std::fs::File::open(path).ok()?.read(&mut prefix).ok()?;
+    let end = prefix[..count]
+        .iter()
+        .position(|&b| b == b'\n')
+        .or_else(|| (count < prefix.len()).then_some(count))?;
+    for_shebang(std::str::from_utf8(&prefix[..end]).ok()?)
+}
+
+pub fn for_shebang(line: &str) -> Option<&'static LanguageRegistration> {
+    let mut words = line.strip_prefix("#!")?.split_ascii_whitespace();
+    let executable = words.next()?;
+    let mut interpreter = executable.rsplit('/').next()?;
+    if interpreter == "env" {
+        interpreter = words.next()?;
+        if interpreter == "-S" || interpreter == "--split-string" {
+            interpreter = words.next()?;
+        }
+        // Only explicit env assignments are skipped; unknown options fail closed.
+        while interpreter.contains('=') && !interpreter.starts_with('-') {
+            let key = interpreter.split_once('=')?.0;
+            if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                return None;
+            }
+            interpreter = words.next()?;
+        }
+    }
+    let interpreter = interpreter.rsplit('/').next()?;
+    let interpreters = [
+        ("python", LanguageId::Python),
+        ("node", LanguageId::Javascript),
+        ("nodejs", LanguageId::Javascript),
+        ("ruby", LanguageId::Ruby),
+        ("sh", LanguageId::Shell),
+        ("bash", LanguageId::Shell),
+        ("dash", LanguageId::Shell),
+        ("ksh", LanguageId::Shell),
+        ("php", LanguageId::Php),
+        ("lua", LanguageId::Lua),
+        ("swift", LanguageId::Swift),
+        ("julia", LanguageId::Julia),
+        ("Rscript", LanguageId::R),
+        ("pwsh", LanguageId::Powershell),
+        ("powershell", LanguageId::Powershell),
+    ];
+    interpreters.into_iter().find_map(|(name, id)| {
+        let version = interpreter.strip_prefix(name)?;
+        // Permit an exact executable or a numeric dotted version, never an
+        // arbitrary shared prefix such as python-config or bash-helper.
+        let matches = version.is_empty()
+            || version
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
+        matches.then_some(id.registration())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

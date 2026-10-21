@@ -3,21 +3,22 @@
 use std::collections::HashMap;
 use std::path::{Component, Path};
 
-use astria_core::ids::{normalize_id, normalize_id_case_preserved};
+use astria_core::ids::{normalize_id, normalize_symbol_id};
 use sha2::{Digest, Sha256};
 
 /// Join parts with `::` for hierarchical node IDs (e.g. "src_lib::greeter::greet").
 /// Each part goes through case-preserving identity normalization: word
 /// characters are kept with their original case (so case-distinct
-/// declarations `Foo`/`foo` are different symbols), while punctuation and
-/// Unicode compatibility forms still normalize. Search text and reference
+/// declarations `Foo`/`foo` are different symbols), as are `$`, `#`, and
+/// underscore-distinct code identifiers. Other punctuation and Unicode
+/// compatibility forms still normalize. Search text and reference
 /// matching use the case-folded [`make_target_id`] — structural identity and
 /// normalized search text stay separate concerns.
 pub(crate) fn make_node_id(parts: &[&str]) -> String {
     parts
         .iter()
         .filter(|p| !p.trim().is_empty())
-        .map(|p| normalize_id_case_preserved(p))
+        .map(|p| normalize_symbol_id(p, true))
         .collect::<Vec<_>>()
         .join("::")
 }
@@ -27,14 +28,16 @@ pub(crate) fn make_node_id(parts: &[&str]) -> String {
 pub(crate) fn make_target_id(name: &str) -> String {
     name.replace("::", ".")
         .split('.')
-        .map(normalize_id)
+        .map(|part| normalize_symbol_id(part.trim_end_matches("()"), false))
         .collect::<Vec<_>>()
         .join("::")
 }
 
 /// Document slugs and link stems are text identifiers, not qualified symbols.
 pub(crate) fn make_text_id(name: &str) -> String {
-    name.split("::")
+    let redacted = astria_core::security::redact_secrets(name);
+    redacted
+        .split("::")
         .map(normalize_id)
         .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
