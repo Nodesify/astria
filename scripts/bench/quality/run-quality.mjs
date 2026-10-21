@@ -304,7 +304,10 @@ async function main() {
   const harnessHash = createHash('sha256');
   for (const file of [fileURLToPath(import.meta.url), path.join(scriptDir, 'gate.mjs'), path.join(scriptDir, 'lexical-baseline.mjs'), path.join(scriptDir, '../tokenize.mjs')]) harnessHash.update(readFileSync(file));
   const graphMeta = opts.baseline ? null : JSON.parse(readFileSync(path.join(opts.root, '.astria/graph.json'), 'utf8'))._meta;
-  payload.comparison_identity = { contract, line_contract: 'one-based-declaration-line', graph_build_configuration: graphMeta?.build_configuration ?? null, extraction_hash_version: graphMeta?.extraction_hash_version ?? null, corpus_sha256: corpusHash.digest('hex'), golden_sha256: payload.provenance.golden_sha256, harness_sha256: harnessHash.digest('hex'), method: payload.method, tokenizer: tok.name, budget: payload.query_budget, depth: payload.query_depth, k: opts.k, context_policy: payload.context_policy, baseline_policy: payload.baseline_policy };
+  // Extractor revisions are the implementation under comparison; retain their
+  // identity as provenance without requiring the baseline to use the same one.
+  payload.provenance.extraction_hash_version = graphMeta?.extraction_hash_version ?? null;
+  payload.comparison_identity = { contract, line_contract: 'one-based-declaration-line', graph_build_configuration: graphMeta?.build_configuration ?? null, corpus_sha256: corpusHash.digest('hex'), golden_sha256: payload.provenance.golden_sha256, harness_sha256: harnessHash.digest('hex'), method: payload.method, tokenizer: tok.name, budget: payload.query_budget, depth: payload.query_depth, k: opts.k, context_policy: payload.context_policy, baseline_policy: payload.baseline_policy };
   payload.gate_failures = gate(payload, { minRecall: opts.min_recall5, minDefinitionRecall: opts.min_definition_recall5, baselineFile: opts.compare });
   mkdirSync(path.dirname(opts.out), { recursive: true });
   writeFileSync(opts.out, JSON.stringify(payload, null, 2) + '\n');
