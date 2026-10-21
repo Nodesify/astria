@@ -6,6 +6,8 @@ this file is the per-version summary.
 
 ## [1.4.0] — 2026-10-22
 
+- Update rustls-webpki to 0.103.16 and webpki-roots to 1.0.10 to reject
+  distrusted certificate paths (RUSTSEC-2026-0382 and RUSTSEC-2026-0381).
 - Keep typed receiver bindings scoped to their function or block; parse annotated
   locals correctly and resolve exact TypeScript path aliases.
 - Refresh graphs across complete merge/fast-forward ranges and all changed graph inputs.

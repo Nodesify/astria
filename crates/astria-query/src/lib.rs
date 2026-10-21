@@ -379,6 +379,9 @@ fn query_graph_loaded(
                 "No uniquely matching nodes for {} supplied seeds. No keyword fallback was applied.",
                 seeds.len()
             );
+            if !unresolved_seeds.is_empty() {
+                msg.push_str(&unresolved_text(&unresolved_seeds, budget));
+            }
             if !suggestions.is_empty() {
                 msg.push_str(&format!(" Did you mean: {}?", suggestions.join(", ")));
             }
@@ -827,6 +830,33 @@ fn resolve_explicit_seed(
 
 /// Keep diagnostics small enough that ambiguity cannot crowd the query page
 /// out of its budget. Every candidate remains in the structured response.
+/// Keep ordinary miss diagnostics useful without allowing long seed lists to
+/// exhaust the response budget. Complete names remain in unresolved_seeds.
+fn unresolved_text(seeds: &[String], budget: i64) -> String {
+    let limit = usize::try_from(budget)
+        .unwrap_or(0)
+        .saturating_div(8)
+        .min(256);
+    let mut text = String::from(" Unresolved seeds:");
+    let mut shown = 0;
+    for seed in seeds {
+        let preview: String = seed.chars().take(80).collect();
+        let next = format!("{text} {preview:?};");
+        if count_response_tokens(&next) + 16 > limit {
+            break;
+        }
+        text = next;
+        shown += 1;
+    }
+    if shown < seeds.len() {
+        text.push_str(&format!(
+            " {} additional in structured unresolvedSeeds.",
+            seeds.len() - shown
+        ));
+    }
+    text
+}
+
 fn ambiguity_text(seeds: &[AmbiguousSeed], budget: i64) -> String {
     if seeds.is_empty() {
         return String::new();
