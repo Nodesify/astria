@@ -29,6 +29,7 @@ use astria_gws::GwsError;
 /// semantic pass enriches exactly this text instead of re-reading the raw
 /// bytes.
 fn save_derived_text(db: &Connection, file_path: &Path, hash: &str, text: &str) {
+    let text = astria_core::security::redact_secrets(text);
     let key = astria_paths::normalize(file_path);
     if let Err(e) = db.execute(
         "INSERT OR REPLACE INTO derived_text (file_path, content_hash, text) VALUES (?1, ?2, ?3)",
@@ -42,6 +43,18 @@ fn save_derived_text(db: &Connection, file_path: &Path, hash: &str, text: &str) 
 }
 
 pub fn extract(
+    files: &[PathBuf],
+    root: &Path,
+    db: &Connection,
+) -> Result<Vec<Extraction>, AstriaError> {
+    let mut results = extract_inner(files, root, db)?;
+    for extraction in &mut results {
+        crate::cache::sanitize_retained_text(extraction);
+    }
+    Ok(results)
+}
+
+fn extract_inner(
     files: &[PathBuf],
     root: &Path,
     db: &Connection,
@@ -288,7 +301,7 @@ pub fn extract(
             results.push(crate::langs::pascal::extract_regex(file_path, naming)?);
             continue;
         }
-        let cfg = match langs::get_language_for_extension(ext) {
+        let cfg = match langs::get_language_for_path(file_path) {
             Some(c) => c,
             None => {
                 // Media can receive semantic facts, but has no structural

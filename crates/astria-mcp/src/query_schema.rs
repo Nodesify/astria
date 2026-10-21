@@ -25,6 +25,12 @@ pub(super) fn output_schema() -> Value {
             "checkMilliseconds": {"type": "integer"}, "error": {"type": ["string", "null"]}
         }},
         "renderedTokens": {"type": "integer"}, "elapsedMilliseconds": {"type": "integer"}, "snapshotEstimatedBytes": {"type": "integer"},
+        "ambiguousSeeds": {"type": "array", "items": {"type": "object", "required": ["seed", "candidates"], "properties": {
+            "seed": {"type": "string"}, "candidates": {"type": "array", "items": {"type": "object", "required": ["id", "label", "sourceFile", "sourceLine", "repo"], "properties": {
+                "id": {"type": "string"}, "label": {"type": "string"}, "sourceFile": {"type": "string"},
+                "sourceLine": {"type": ["integer", "null"]}, "repo": {"type": ["string", "null"]}
+            }}}
+        }}},
         "unresolvedSeeds": {"type": "array", "items": {"type": "string"}}
     }})
 }

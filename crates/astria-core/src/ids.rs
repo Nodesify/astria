@@ -38,6 +38,34 @@ pub fn normalize_id_case_preserved(raw: &str) -> String {
     collapse_punctuation(&folded)
 }
 
+/// Code identifiers retain punctuation that is meaningful to JS/TS identity.
+/// In particular `foo`, `_foo`, `$foo`, and `#foo` are different members.
+/// General prose/path segments continue to use the usual normalization.
+pub fn normalize_symbol_id(raw: &str, preserve_case: bool) -> String {
+    let mut current = raw.to_string();
+    for _ in 0..MAX_ROUNDS {
+        let folded = if preserve_case {
+            current.clone()
+        } else {
+            current.chars().flat_map(char::to_lowercase).collect()
+        };
+        let next: String = folded.nfkc().collect();
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    if !current.is_empty()
+        && current
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '$' | '#'))
+    {
+        current
+    } else {
+        collapse_punctuation(&current)
+    }
+}
+
 /// Shared tail of both normalizers: keep Unicode word characters, collapse
 /// everything else to single underscores, trim the ends.
 fn collapse_punctuation(current: &str) -> String {

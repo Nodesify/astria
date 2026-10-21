@@ -4,16 +4,18 @@ import { execSync } from 'child_process';
 import { writeTextAtomic, withInstallLock } from './atomic';
 
 const UPDATE_HELPER = `
-const ASTRIA_HOOK_VERSION = '4';
+const ASTRIA_HOOK_VERSION = '5';
 // Prefer a workspace-local CLI, then a locally-installed package, and only
 // then whatever is on PATH — a stale global install would rebuild the graph
 // with old pipeline code and silently regress the report.
-// update . accepts --quiet/--if-stale since 1.0.7; older CLIs error on the
+// update . accepts --quiet since 1.0.7; older CLIs error on the
 // unknown flags, so each invocation style retries in plain form before
 // moving to the next executable. All failures are swallowed: a hook must
 // never break a commit.
 function runAstriaUpdate() {
-  const flagged = 'update . --quiet --if-stale 10';
+  // Always inspect inputs: a recent graph can still have changed configuration
+  // or newly added files outside its previous manifest.
+  const flagged = 'update . --quiet';
   const attempts = [
     'node packages/astria-cli/dist/index.js ' + flagged,
     'node packages/astria-cli/dist/index.js update .',
@@ -54,11 +56,7 @@ try {
   const changed = execSync('git diff --name-only HEAD~1 HEAD || git diff --name-only HEAD', { encoding: 'utf-8' }).trim();
   if (!changed) process.exit(0);
 
-  const codeExts = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.go', '.java', '.c', '.h', '.cpp', '.cc', '.cxx', '.hpp']);
-  const hasCode = changed.split(/\\r?\\n/).some(f => codeExts.has(path.extname(f)));
-  if (hasCode && existsSync('.astria')) {
-    runAstriaUpdate();
-  }
+  if (existsSync('.astria')) runAstriaUpdate();
 } catch {}
 // astria-hook-end
 `;
@@ -83,11 +81,9 @@ try {
 // astria-checkout-hook-end
 `;
 
-// post-merge runs after `git merge` — including the merge commits `git pull`
-// creates when it cannot fast-forward. Fast-forward pulls reach no hook at
-// all (replayed remote commits do not fire post-commit), so staleness
-// surfacing (the hook-guard read guard, `astria status`) covers those;
-// squash merges end in an ordinary commit handled by post-commit.
+// post-merge runs after true merges and fast-forward merges, including pulls.
+// ORIG_HEAD records the branch tip before the merge, covering every incoming
+// commit in a multi-commit fast-forward. Squash merges refresh on commit.
 const POST_MERGE_SCRIPT = `// astria-merge-hook-start
 const { execSync } = require('child_process');
 const { existsSync } = require('fs');
@@ -100,20 +96,14 @@ try {
   const gitDir = execSync('git rev-parse --git-dir', { encoding: 'utf-8' }).trim();
   if (existsSync(path.join(gitDir, 'rebase-merge')) || existsSync(path.join(gitDir, 'rebase-apply'))) process.exit(0);
 
-  // The first-parent diff is what the merge brought in relative to the
-  // pre-merge branch state (post-merge only fires on true merges, so HEAD
-  // always has a second parent by the time this runs). HEAD~1 is used over
-  // the equivalent HEAD^1: execSync spawns cmd.exe on Windows, where ^ is
-  // an escape character and would silently mangle the revision.
-  const changed = execSync('git diff --name-only HEAD~1 HEAD || git diff --name-only HEAD', { encoding: 'utf-8' }).trim();
+  // Compare the pre-merge tip with the final tip for both merge kinds.
+  const changed = execSync('git diff --name-only ORIG_HEAD HEAD', { encoding: 'utf-8' }).trim();
   if (!changed) process.exit(0);
 
-  const codeExts = new Set(['.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.go', '.java', '.c', '.h', '.cpp', '.cc', '.cxx', '.hpp']);
-  const hasCode = changed.split(/\\r?\\n/).some(f => codeExts.has(path.extname(f)));
-  if (hasCode) {
-    console.log('[astria] Merge completed - refreshing knowledge graph...');
-    runAstriaUpdate();
-  }
+  // Let update inspect graph inputs; extension allowlists miss documentation,
+  // manifests, configuration, and newly supported languages.
+  console.log('[astria] Merge completed - refreshing knowledge graph...');
+  runAstriaUpdate();
 } catch {}
 // astria-merge-hook-end
 `;
@@ -269,7 +259,7 @@ function installHook(hooksDir: string, def: HookDef): string {
       // Refresh the script body when it predates the current template
       // (sentinel: ASTRIA_HOOK_VERSION resolver). Without this, fixed
       // templates would never reach already-installed hooks.
-      if (!content.includes("ASTRIA_HOOK_VERSION = '4'")) {
+      if (!content.includes("ASTRIA_HOOK_VERSION = '5'")) {
         content = stripMarkerSection(content, def.startMarker, def.endMarker);
         const refreshed =
           content.trim() === '' || SHEBANGS.includes(content.trim())

@@ -59,7 +59,10 @@ pub(crate) fn parse_extraction_text(text: &str) -> Result<SemanticExtraction> {
     }
     Err(AstriaError::Graph(format!(
         "model reply was not valid JSON: {:?}",
-        trimmed.chars().take(120).collect::<String>()
+        astria_core::security::redact_secrets(trimmed)
+            .chars()
+            .take(120)
+            .collect::<String>()
     )))
 }
 
@@ -82,7 +85,9 @@ pub(crate) fn sanitize_extraction(mut ext: SemanticExtraction) -> SemanticExtrac
             && seen_ids.insert(node.id.trim().to_string())
     });
     for node in &mut ext.nodes {
-        node.id = node.id.trim().to_string();
+        node.id = astria_core::security::redact_secrets(node.id.trim());
+        node.label = astria_core::security::sanitize_label(&node.label);
+        node.summary = astria_core::security::sanitize_docstring(&node.summary);
         if !ALLOWED_NODE_TYPES.contains(&node.node_type.as_str()) {
             node.node_type = "concept".to_string();
         }

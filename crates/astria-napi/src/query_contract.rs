@@ -74,6 +74,19 @@ pub struct QueryEdgeJs {
     pub source_line: Option<i64>,
 }
 #[napi(object)]
+pub struct SeedCandidateJs {
+    pub id: String,
+    pub label: String,
+    pub source_file: String,
+    pub source_line: Option<i64>,
+    pub repo: Option<String>,
+}
+#[napi(object)]
+pub struct AmbiguousSeedJs {
+    pub seed: String,
+    pub candidates: Vec<SeedCandidateJs>,
+}
+#[napi(object)]
 pub struct QueryResultJs {
     pub text: String,
     pub node_count: i64,
@@ -90,6 +103,7 @@ pub struct QueryResultJs {
     /// Explicitly supplied seeds that resolved to no node. Empty unless
     /// seeds were requested; all-unresolved seeds yield an explicit miss.
     pub unresolved_seeds: Vec<String>,
+    pub ambiguous_seeds: Vec<AmbiguousSeedJs>,
 }
 impl From<astria_query::QueryResponse> for QueryResultJs {
     fn from(r: astria_query::QueryResponse) -> Self {
@@ -132,6 +146,24 @@ impl From<astria_query::QueryResponse> for QueryResultJs {
             elapsed_milliseconds: r.elapsed_milliseconds as i64,
             snapshot_estimated_bytes: r.snapshot_estimated_bytes as i64,
             unresolved_seeds: r.unresolved_seeds,
+            ambiguous_seeds: r
+                .ambiguous_seeds
+                .into_iter()
+                .map(|s| AmbiguousSeedJs {
+                    seed: s.seed,
+                    candidates: s
+                        .candidates
+                        .into_iter()
+                        .map(|c| SeedCandidateJs {
+                            id: c.id,
+                            label: c.label,
+                            source_file: c.source_file,
+                            source_line: c.source_line,
+                            repo: c.repo,
+                        })
+                        .collect(),
+                })
+                .collect(),
         }
     }
 }

@@ -61,11 +61,11 @@ pub fn classify_file(path: &Path) -> Option<FileType> {
             return None;
         }
     }
-    let ext = path.extension()?.to_str()?.to_lowercase();
-    let ext_with_dot = format!(".{}", ext);
-    if astria_core::languages::for_extension(&ext).is_some() {
+    if astria_core::languages::for_path(path).is_some() {
         return Some(FileType::Code);
     }
+    let ext = path.extension()?.to_str()?.to_lowercase();
+    let ext_with_dot = format!(".{}", ext);
     if DOC_EXTENSIONS.contains(&ext_with_dot.as_str()) {
         return Some(FileType::Document);
     }
@@ -189,9 +189,14 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
         }
 
         seen_paths.insert(rel_str.clone());
-        let hash = hash_bytes(&bytes);
+        let mut hash = hash_bytes(&bytes);
+        let selected_language = astria_core::languages::for_path(path);
+        if let Some(language) = selected_language {
+            hash.push(':');
+            hash.push_str(language.name);
+        }
 
-        let language = language_for_extension(ext).map(|s| s.to_string());
+        let language = selected_language.map(|language| language.name.to_string());
 
         let stored_hash: Option<String> = db
             .query_row(

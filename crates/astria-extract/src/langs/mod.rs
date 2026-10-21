@@ -47,10 +47,19 @@ pub use config::LanguageConfig;
 macro_rules! register_configs {
     ($( $id:ident, $name:literal, $extensions:expr, $module:ident::$config:ident; )*) => {
         pub fn get_language_for_extension(ext: &str) -> Option<&'static LanguageConfig> {
-            use astria_core::languages::{for_extension, LanguageId};
-            Some(match for_extension(ext)?.id {
+            use astria_core::languages::for_extension;
+            Some(config_for_id(for_extension(ext)?.id))
+        }
+
+        pub fn get_language_for_path(path: &std::path::Path) -> Option<&'static LanguageConfig> {
+            Some(config_for_id(astria_core::languages::for_path(path)?.id))
+        }
+
+        pub fn config_for_id(id: astria_core::languages::LanguageId) -> &'static LanguageConfig {
+            use astria_core::languages::LanguageId;
+            match id {
                 $( LanguageId::$id => $module::$config(), )*
-            })
+            }
         }
 
         pub fn all_languages() -> Vec<&'static LanguageConfig> {

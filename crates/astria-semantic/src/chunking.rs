@@ -80,27 +80,37 @@ where
     F: Fn(&str, &str) -> Result<SemanticExtraction>,
 {
     let cap = crate::max_chunks();
-    let chunks = split_chunks(content);
+    let content = astria_core::security::redact_secrets(content);
+    let chunks = split_chunks(&content);
     if chunks.len() > cap {
         let skipped: usize = chunks[cap..].iter().map(|c| c.chars().count()).sum();
-        return Err(AstriaError::Graph(format!(
-            "{file_type} content needs {} chunks, over the {cap}-chunk extraction cap; \
-             ~{skipped} characters would have gone unenriched and a truncated result must not \
-             be published as complete — raise ASTRIA_LLM_MAX_CHUNKS or split the file",
-            chunks.len()
-        )));
+        return Err(AstriaError::SemanticIncomplete {
+            processed_chunks: 0,
+            total_chunks: chunks.len(),
+            reason: format!("{file_type} exceeds the {cap}-chunk extraction cap; ~{skipped} characters exceed the cap; raise ASTRIA_LLM_MAX_CHUNKS or split the file"),
+        });
     }
     let mut parts = Vec::new();
     for chunk in &chunks {
-        // Per-request reservation: input estimate for this chunk plus the
-        // full output allowance the wire request permits.
+        let incomplete = |error: AstriaError| AstriaError::SemanticIncomplete {
+            processed_chunks: parts.len(),
+            total_chunks: chunks.len(),
+            reason: astria_core::security::redact_secrets(&error.to_string()),
+        };
         let _reservation = crate::enrichment::reserve_budget(
             chunk.chars().count(),
             crate::enrichment::MAX_OUTPUT_TOKENS_EXTRACT,
-        )?;
-        parts.push(raw(chunk, file_type)?);
+        )
+        .map_err(&incomplete)?;
+        let part = raw(chunk, file_type).map_err(&incomplete)?;
+        parts.push(part);
     }
-    Ok(sanitize_extraction(merge_extractions(parts)))
+    let mut extraction = sanitize_extraction(merge_extractions(parts));
+    extraction.coverage = Some(SemanticCoverage {
+        processed_chunks: chunks.len(),
+        total_chunks: chunks.len(),
+    });
+    Ok(extraction)
 }
 
 #[cfg(test)]

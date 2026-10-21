@@ -32,11 +32,20 @@ pub struct SemanticEdge {
     pub confidence_score: Option<f64>,
 }
 
+/// Actual text chunks completed by the extraction driver, never model supplied.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SemanticCoverage {
+    pub processed_chunks: usize,
+    pub total_chunks: usize,
+}
+
 /// The result of semantic extraction on a single piece of content.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SemanticExtraction {
     pub nodes: Vec<SemanticNode>,
     pub edges: Vec<SemanticEdge>,
+    #[serde(default)]
+    pub coverage: Option<SemanticCoverage>,
 }
 
 impl SemanticExtraction {
@@ -44,6 +53,7 @@ impl SemanticExtraction {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
+            coverage: None,
         }
     }
 }

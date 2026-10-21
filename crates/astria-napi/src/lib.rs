@@ -28,6 +28,8 @@ pub struct DiagnoseReportJs {
     pub extraction_status_counts: Vec<String>,
     /// Files whose last extraction was not complete ("path: status").
     pub incomplete_files: Vec<String>,
+    /// Per-file semantic chunk coverage, including incomplete reasons.
+    pub semantic_coverage: Vec<String>,
     pub text: String,
 }
 
@@ -37,6 +39,24 @@ pub fn diagnose_graph(root: String) -> napi::Result<DiagnoseReportJs> {
     let (db, _) = pipeline::load_graph_db_flexible(&root_pb)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let report = diagnose::diagnose(&db).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let semantic_coverage: Vec<String> = db.prepare(
+        "SELECT file_path, processed_chunks, total_chunks, incomplete_reason, cached FROM semantic_coverage ORDER BY file_path"
+    ).ok().map(|mut statement| {
+        statement.query_map([], |row| {
+            let path: String = row.get(0)?;
+            let processed: Option<i64> = row.get(1)?;
+            let total: Option<i64> = row.get(2)?;
+            let reason: Option<String> = row.get(3)?;
+            let cached: bool = row.get(4)?;
+            Ok(format!("{path}: {}/{} chunks{}{}", processed.map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()), total.map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()), if cached { " (cached)" } else { "" }, reason.map(|r| format!("; incomplete: {r}")).unwrap_or_default()))
+        }).map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default()
+    }).unwrap_or_default();
+    let mut text = diagnose::render(&report);
+    if !semantic_coverage.is_empty() {
+        text.push_str("\nSemantic chunk coverage (last attempt per file):\n");
+        text.push_str(&semantic_coverage.join("\n"));
+        text.push('\n');
+    }
     Ok(DiagnoseReportJs {
         node_count: report.node_count as i64,
         edge_count: report.edge_count as i64,
@@ -65,7 +85,8 @@ pub fn diagnose_graph(root: String) -> napi::Result<DiagnoseReportJs> {
             .iter()
             .map(|(path, status)| format!("{path}: {status}"))
             .collect(),
-        text: diagnose::render(&report),
+        semantic_coverage,
+        text,
     })
 }
 

@@ -1,4 +1,51 @@
 use std::path::Path;
+use std::sync::LazyLock;
+
+/// Redact recognizable credentials without treating ordinary hashes or identifiers as secrets.
+/// Call on the complete input before truncating, persisting, or sending it to a model.
+pub fn redact_secrets(text: &str) -> String {
+    static PATTERNS: LazyLock<Vec<regex::Regex>> = LazyLock::new(|| {
+        [
+            r"(?s)-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----.*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)",
+            r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b",
+            r"\b(?:sk-[A-Za-z0-9_-]{12,}|(?:ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{12,}|glpat-[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|AIza[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{12,}|npm_[A-Za-z0-9]{12,}|hf_[A-Za-z0-9]{16,}|pypi-[A-Za-z0-9_-]{16,}|lin_api_[A-Za-z0-9]{16,}|dop_v1_[A-Za-z0-9]{16,})\b",
+        ].iter().map(|pattern| regex::Regex::new(pattern).expect("valid secret pattern")).collect()
+    });
+    static BEARER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)\bBearer[ \t]+["']?([^\s"'`<>,;]+)["']?"#)
+            .expect("valid Bearer pattern")
+    });
+    static URL_PASSWORD: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)([a-z][a-z0-9+.-]*://[^\s/@:"']+:)[^\s/@"']+(@)"#)
+            .expect("valid URL password pattern")
+    });
+    let mut redacted = text.to_owned();
+    for pattern in PATTERNS.iter() {
+        redacted = pattern.replace_all(&redacted, "[REDACTED]").into_owned();
+    }
+    redacted = BEARER
+        .replace_all(&redacted, |captures: &regex::Captures<'_>| {
+            // Common prose about the scheme is not itself a credential.
+            if matches!(
+                captures[1].to_ascii_lowercase().as_str(),
+                "authentication"
+                    | "authorization"
+                    | "credentials"
+                    | "credential"
+                    | "scheme"
+                    | "token"
+                    | "tokens"
+            ) {
+                captures[0].to_owned()
+            } else {
+                "Bearer [REDACTED]".to_owned()
+            }
+        })
+        .into_owned();
+    URL_PASSWORD
+        .replace_all(&redacted, "${1}[REDACTED]${2}")
+        .into_owned()
+}
 
 const MAX_TEXT_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 const MAX_BINARY_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
@@ -44,7 +91,7 @@ pub fn check_file_size(path: &Path, size_bytes: u64) -> bool {
 
 /// Sanitize a node label: strip control chars and cap length.
 pub fn sanitize_label(label: &str) -> String {
-    let cleaned: String = label
+    let cleaned: String = redact_secrets(label)
         .chars()
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
         .take(MAX_LABEL_LEN)
@@ -54,7 +101,7 @@ pub fn sanitize_label(label: &str) -> String {
 
 /// Sanitize a docstring: strip control chars and cap length.
 pub fn sanitize_docstring(doc: &str) -> String {
-    let cleaned: String = doc
+    let cleaned: String = redact_secrets(doc)
         .chars()
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
         .take(MAX_DOCSTRING_LEN)
