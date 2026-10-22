@@ -21,6 +21,8 @@ You drop into an unfamiliar repo and need to know: what is load-bearing here, wh
 
 ## Where to go next
 
+- [AI workflow and evidence contract](./guides/ai-workflow) — a step-by-step procedure for agents, with source and uncertainty rules
+
 - [Getting started](./getting-started) — install and run your first graph
 - [Agent integration](./guides/mcp-and-agents) — wire the graph into Claude Code, Codex, Cursor, …
 - [CLI reference](./reference/cli) — every command and flag
