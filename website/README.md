@@ -85,10 +85,14 @@ search entry from the `themes` block in `docusaurus.config.js` and add an
 
 ## llms.txt
 
-`docusaurus-plugin-llms` generates `llms.txt` / `llms-full.txt` into the
-build output — the whole site as plain markdown for AI agents, which is
-rather the point of this project. Verify after a build:
-`ls build/llms.txt build/llms-full.txt`.
+`docusaurus-plugin-llms` generates `llms.txt`, `llms-full.txt`, and individual
+Markdown pages into the build output. The source is the first release in
+`versions.json` (`versioned_docs/version-<version>`), with blog content included.
+The export identifies its version and distinguishes dated blog claims from
+current reference behavior. Next content is not silently mixed into the release.
+The AI workflow and architecture lead the index. Verify the version header,
+release-post inclusion, and emitted Markdown targets after a production build;
+check the deployed `/astria/llms.txt` and `/astria/llms-full.txt` after Pages deploys.
 
 ## Diagrams
 
