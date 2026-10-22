@@ -45,6 +45,10 @@ The table lists configured tree-sitter node kinds, not a promise of complete lan
 
 AST source lines are one-based. Embedded JavaScript/TypeScript lines in Vue, Svelte, and Astro are translated back to their original component file. Call resolution retains lexical scopes, supported import paths, and language evidence. Unknown instance receivers remain unresolved: a call such as row.get() cannot bind to an unrelated class method named get. Explicit self/this calls use the enclosing class; statically qualified paths and exact assigned JavaScript member declarations can resolve when their evidence selects one declaration. These AST bindings remain name inference, not compiler-proven call targets; use a standard SCIP index for compiler-provided symbol relationships.
 
+Extensionless scripts are discovered from a bounded, complete shebang line, including supported versioned interpreters such as \`python3.12\` and \`node22\`. Discovery and parser/cache selection use the same language registration. Explicit project language overrides remain available through \`.astria.toml\`.
+
+Additional declaration handling includes Kotlin type aliases, C# delegates, Dart typedefs, and Swift macros. These special walker paths are not all represented by the container/function columns below. Type references and Swift macro calls resolve only when supported evidence selects a unique declaration.
+
 | Language | Discovered extensions | Class/container kinds | Function kinds | Import kinds | Call kind | Closure kinds |
 | --- | --- | --- | --- | --- | --- | --- |
 ${rows.join('\n')}
