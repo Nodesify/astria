@@ -70,6 +70,7 @@ astria history [--limit 20] [--graph .]        # Show recent query history
 
 ### Query flags {#query-flags}
 
+- `--seed <symbol>` — repeatable explicit entry point: a node ID, label, bare symbol name, or unique source path. Ambiguous names return candidate IDs and locations instead of choosing a declaration. Re-run with the exact candidate ID. JSON exposes complete `ambiguousSeeds` and `unresolvedSeeds`; rendered diagnostics stay within the text budget. When no explicit seed resolves, the query reports a miss rather than falling back to keywords.
 - `--dfs` — depth-first instead of breadth-first traversal
 - `--depth N` — maximum traversal depth
 - `--budget N` — maximum query text tokens using `o200k_base`, including headers and continuation metadata (default 2000)
@@ -83,11 +84,13 @@ astria history [--limit 20] [--graph .]        # Show recent query history
 
 `god-nodes`, `communities`, and `neighbors` give the CLI the same answers the [MCP tools](./mcp-tools) expose, so scripts and non-MCP agents can reach them too.
 
+TypeScript import resolution uses project metadata: exact and wildcard `tsconfig` path aliases with `baseUrl`, workspace package entries, and scoped subpaths can resolve to authored source files. Generated build output is not substituted for authored source. Changes to graph-input configuration refresh affected bindings on the next update.
+
 `status` judges freshness from the graph itself, not just file timestamps: every `run`/`update` stamps the npm CLI version and the extraction-rules version into the graph, and `status --json` exposes them (`astriaVersion`, `extractionHashVersion`, `currentExtractionHashVersion`, `extractionOutdated`) so tooling can detect a graph that predates the installed binary's extraction rules. Graphs built before stamping report nulls.
 
 CLI and MCP share hybrid retrieval and load a fresh SQLite graph snapshot for each request. Query output reports when the graph was last built, so agents can judge freshness. Repeated queries promote recurring node pairs into `learned` edges — see [learning from usage](#learning-from-usage).
 
-Query ranking favors complete identifier matches and implementing definitions. Explicit requests for tests, examples, or documentation retain those results; inline Rust test functions are classified from their test attributes and modules. JavaScript and TypeScript extraction includes functions assigned to variables, object properties, members, and CommonJS exports. Static receiver names can resolve calls, but runtime receiver types and aliases are not inferred. Python overload declarations yield to a concrete implementation in the same scope, preserving its body and documentation.
+Query ranking favors complete identifier matches and implementing definitions. Explicit requests for tests, examples, or documentation retain those results; inline Rust test functions are classified from their test attributes and modules. JavaScript and TypeScript extraction includes functions assigned to variables, object properties, members, and CommonJS exports. TypeScript receivers can resolve through declared types, constructor parameter properties, typed fields and locals, and `new` assignments. Bindings remain scoped to their function or block; unambiguous instance-field assignments can supply type evidence, while conflicting, deleted, computed-unknown, static, or shadowed bindings remain unresolved. These are source-derived bindings, not proof of runtime dispatch. Python overload declarations yield to a concrete implementation in the same scope, preserving its body and documentation.
 
 Query budgets must be positive and large enough for metadata and the next complete record; otherwise the query returns an error. Continuation cursors address the current result's node and edge records. Start a new query after rebuilding the graph, and do not reuse cursors from older versions that counted only nodes.
 

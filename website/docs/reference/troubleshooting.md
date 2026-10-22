@@ -29,8 +29,10 @@ Every `query` output reports when the graph was last built, so you can judge fre
 ```bash
 astria update <path>          # incremental — only changed files
 astria watch <path>           # or keep it fresh automatically
-astria hook install           # or refresh quietly after every commit (throttled)
+astria hook install           # refresh after commits, checkouts, and merges
 ```
+
+The post-merge hook checks the complete `ORIG_HEAD..HEAD` range, including fast-forward pulls, rather than just the final commit. Changes to graph inputs can require a refresh even when the final commit does not touch source code. Re-run `astria hook install` after upgrading to replace installed hooks with the current implementation. Run `astria update .` once after upgrading so extraction-cache and symbol-identity changes are reflected in the graph.
 
 ## A query returns "No confident match"
 

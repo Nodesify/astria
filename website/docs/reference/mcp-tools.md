@@ -39,6 +39,9 @@ BFS/DFS traversal of the knowledge graph for a natural-language question. Return
 | `directed` | boolean | `false` | Follow edges only in stored direction (caller → callee, importer → module) |
 | `detail` | `all` \| `high` | `all` | `high` keeps only `EXTRACTED`/`DECLARED` facts (a provenance-class filter, not a numeric threshold; inferred, semantic and learned edges are dropped) and prefers file-level nodes when ranking at equal relevance |
 | `cursor` | integer | `0` | Continuation token from a previous truncated result |
+| `seeds` | string[] | `[]` | Explicit node IDs, labels, symbol names, or unique source paths; ambiguous names report candidates instead of selecting one |
+
+Structured results include `ambiguousSeeds` with candidate IDs and locations and `unresolvedSeeds` for missing names. Choose an exact candidate ID and query again to disambiguate. If no explicit seed resolves, the server returns an explicit miss; it does not substitute keyword seeds. The rendered text is budgeted, while structured candidate lists remain complete.
 
 CLI and MCP use the same query engine, including optional embedding recall when compiled with the `embed` feature and both node embeddings and a cached model are available. Queries never download a model. Each operation reloads a consistent SQLite graph snapshot, so long-running MCP sessions see subsequent database updates.
 
@@ -52,7 +55,7 @@ Aider-style repo map: files ranked by PageRank over the reference graph, with to
 
 | Argument | Type | Default | Notes |
 |---|---|---|---|
-| `budget` | integer | `2000` | Approximate size cap — the map is cut at ~3 characters per budget unit (no tokenizer pass, unlike `query_graph`) |
+| `budget` | integer | `2000` | Response-token budget; complete records are retained using the response tokenizer |
 | `detail` | `all` \| `high` | `all` | |
 
 ### `explain`

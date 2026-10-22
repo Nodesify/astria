@@ -51,14 +51,17 @@ const config = {
       ({
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
-          // 1.1.0 is the latest release; website/docs tracks the next one.
-          lastVersion: '1.1.0',
+          // The 1.4.0 snapshot is the release documentation; docs tracks Next.
+          lastVersion: '1.4.0',
           versions: {
             current: {
               label: 'Next',
               banner: 'unreleased',
             },
             '1.1.0': {
+              banner: 'none',
+            },
+            '1.4.0': {
               banner: 'none',
             },
             '1.0.12': {
@@ -80,10 +83,8 @@ const config = {
               banner: 'none',
             },
           },
-          // website/ currently lives on the develop branch; switch back to
-          // main once it is merged there, or edit links will 404.
           editUrl: ({ versionDocsDirPath, docPath }) =>
-            `https://github.com/Nodesify/astria/edit/develop/website/${versionDocsDirPath}/${docPath}`,
+            `https://github.com/Nodesify/astria/edit/main/website/${versionDocsDirPath}/${docPath}`,
         },
         blog: {
           showReadingTime: true,
