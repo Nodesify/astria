@@ -15,6 +15,32 @@ npm install -g @nodesify/astria
 
 Requires no Rust toolchain on supported platforms — ships prebuilt native binaries via napi-rs. Node.js >= 22. Keep optional dependencies enabled. See [installation lifecycle](./guides/installation-lifecycle) for supported targets, upgrades and removal.
 
+## Complete your first change investigation
+
+Start with structural indexing; it needs no API key:
+
+```bash
+astria run . --backend none
+astria status
+astria query "where is request authentication implemented"
+```
+
+Take an exact node ID from the answer, then run `astria explain <node-id>`
+and `astria affected <node-id>` before editing its implementation. Open the
+cited source to verify the behavior. After editing, run `astria update .`.
+
+Each query node includes a retrieval reason in text and `retrievalReason` in
+structured CLI/MCP output. This describes selection evidence, not a probability
+that the answer is correct. Relationship confidence describes a separate fact:
+`RESOLVED` is name-derived binding; `INFERRED` requires additional source review.
+An absent relationship does not establish that no runtime dependency exists.
+
+For compiler-backed precision, generate a SCIP index using your language's
+indexer, then run `astria add --scip <index-file>`. Run `astria status` after
+source changes: stale compiler indexes require regeneration and reimport;
+structural updates alone cannot restore compiler evidence. JSON status includes
+`recommendations` for automation. See the CLI reference for graph selection.
+
 ## Build your first graph
 
 Drop into any project folder and run:

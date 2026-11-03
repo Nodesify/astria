@@ -140,6 +140,10 @@ pub(crate) fn subgraph_to_text(
     // first, then nodes by traversal distance to those seeds, and only
     // then by degree. Pure degree ordering buried the files the question
     // was actually about beneath graph-wide hubs.
+    let declaration = |n: &NodeData| {
+        n.file_type == "code" && !n.source_file.is_empty()
+            && n.source_line.is_some() && !label_is_file(&n.label)
+    };
     let mut node_list: Vec<NodeIndex> = visited.iter().copied().collect();
     node_list.sort_by(|&a, &b| {
         let na = &loaded.graph[a];
@@ -166,6 +170,10 @@ pub(crate) fn subgraph_to_text(
                     .copied()
                     .unwrap_or(u32::MAX)
                     .cmp(&distance.get(&b).copied().unwrap_or(u32::MAX))
+            })
+            .then_with(|| {
+                if prefer_files { std::cmp::Ordering::Equal }
+                else { declaration(nb).cmp(&declaration(na)) }
             })
             .then_with(|| {
                 // Structural degree only: dispatch edges (possible
@@ -212,6 +220,16 @@ pub(crate) fn subgraph_to_text(
                 label, node.id, loc, comm
             )
         };
+        let retrieval_reason = if node.source_file.is_empty() {
+            "unresolved relationship endpoint".to_string()
+        } else if relevance.get(&idx).copied().unwrap_or(0.0) > 0.0 {
+            "query relevance (lexical or embedding evidence)".to_string()
+        } else if let Some(hops) = distance.get(&idx) {
+            format!("graph neighbor: {hops} hops from a seed")
+        } else {
+            "graph traversal neighbor".to_string()
+        };
+        line.push_str(&format!("  retrieval: {retrieval_reason}\n"));
         // Chunked bodies cite their covered line range so agents can quote
         // exact spans; harness parsers only read the src= token, so the
         // range rides on its own line.
@@ -242,6 +260,7 @@ pub(crate) fn subgraph_to_text(
             }
         }
         node_records.push(QueryNode {
+            retrieval_reason,
             id: node.id.clone(),
             label,
             file_type: node.file_type.clone(),
