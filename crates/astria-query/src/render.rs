@@ -141,8 +141,10 @@ pub(crate) fn subgraph_to_text(
     // then by degree. Pure degree ordering buried the files the question
     // was actually about beneath graph-wide hubs.
     let declaration = |n: &NodeData| {
-        n.file_type == "code" && !n.source_file.is_empty()
-            && n.source_line.is_some() && !label_is_file(&n.label)
+        n.file_type == "code"
+            && !n.source_file.is_empty()
+            && n.source_line.is_some()
+            && !label_is_file(&n.label)
     };
     let mut node_list: Vec<NodeIndex> = visited.iter().copied().collect();
     node_list.sort_by(|&a, &b| {
@@ -172,8 +174,11 @@ pub(crate) fn subgraph_to_text(
                     .cmp(&distance.get(&b).copied().unwrap_or(u32::MAX))
             })
             .then_with(|| {
-                if prefer_files { std::cmp::Ordering::Equal }
-                else { declaration(nb).cmp(&declaration(na)) }
+                if prefer_files {
+                    std::cmp::Ordering::Equal
+                } else {
+                    declaration(nb).cmp(&declaration(na))
+                }
             })
             .then_with(|| {
                 // Structural degree only: dispatch edges (possible
