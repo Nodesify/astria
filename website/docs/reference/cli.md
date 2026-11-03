@@ -235,3 +235,16 @@ astria doctor [--graph .] [--scope project|user] [--json]
 ```
 
 Checks Node, native loading, embedding support, executable resolution, scoped integrations, managed file integrity, permissions, git hooks and graph compatibility. Exit 1 on errors; warnings are advisory. Installation defaults to project scope. Project and global data deletion are separate options; the combined `--purge` option is removed. See [Install, upgrade and remove Astria](../guides/installation-lifecycle) for setup, recovery and package removal.
+
+## Retrieval explanations and refresh recommendations
+
+Query nodes include `retrievalReason` in structured output and a `retrieval:` line
+in rendered text. This identifies query relevance, traversal neighbors, or an
+unresolved endpoint; it is separate from relationship evidence and is not a
+calibrated correctness score. Located code declarations win relevance/distance
+ties over file hubs unless file preference is requested. Explanations count
+against the rendered token budget.
+
+`astria status --json` includes a `recommendations` array. Regenerate stale SCIP
+indexes from current source and reimport them with `astria add --scip <index-file>`;
+`astria update .` refreshes structural facts but does not regenerate compiler indexes.
