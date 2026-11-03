@@ -5,9 +5,11 @@
 
 ## Find the relevant code, inspect its relationships, and check what might depend on a change.
 
-*By the [Nodesify](https://nodesify.com) team · October 2026*
+_By the [Nodesify](https://nodesify.com) team · October 2026_
 
-*Disclosure: we build and maintain Astria. The examples and measurements below come from our own development work.*
+_Updated October 22, 2026 for Astria 1.4.0. Historical investigations and measurements retain their original version and date._
+
+_Disclosure: we build and maintain Astria. The examples and measurements below come from our own development work._
 
 ## The ritual
 
@@ -23,7 +25,7 @@ We built [Astria](https://github.com/Nodesify/astria) at [Nodesify](https://node
 
 ![Illustrative graph: a file contains a handler, a caller connects to it through a resolved name, and an unresolved call points to a name with no defining file](images/00-relationship-map.png)
 
-*Solid edges show directly extracted structure. Dashed edges show name-derived relationships; their labels distinguish resolved bindings from unresolved targets.*
+_Solid edges show directly extracted structure. Dashed edges show name-derived relationships; their labels distinguish resolved bindings from unresolved targets._
 
 Astria stores a graph in SQLite under `.astria/`. Nodes represent functions, types, files, packages, document sections, and unresolved names. Edges represent relationships such as containment, calls, imports, and uses.
 
@@ -35,10 +37,20 @@ Structural extraction uses Rust and tree-sitter and needs no API key. Local embe
 
 ## Build your first graph
 
+### What changed in 1.4.0
+
+The current release makes supported relationships more precise and uncertainty easier to inspect. Typed receiver bindings stay inside their function or block, exact TypeScript aliases resolve to authored source, and instance-field assignments supply type evidence only when unambiguous. Explicit query seeds disclose same-name candidates instead of choosing a declaration silently.
+
+Graph refreshes now cover the complete incoming merge range, including fast-forward pulls. Supported extensionless scripts and additional declarations broaden extraction, while `astria diagnose` reports semantic chunk coverage and incomplete reasons. Credential-shaped text is redacted before retention and semantic requests; pattern detection does not guarantee that arbitrary confidential content is safe to send to a provider.
+
+Read [Astria 1.4: From Source Files to Agent Evidence](https://nodesify.com/blog/astria-1-4-source-to-agent-evidence) for the architecture diagram and examples. The [AI workflow](https://nodesify.github.io/astria/docs/guides/ai-workflow) defines how to query, disambiguate, verify, and refresh. The historical HTTP example and October 6 measurements below retain their original source and evaluation context; these updates do not establish a new retrieval-quality result.
+
+### Install and refresh
+
 With **Node.js 22 or newer**, run these commands from your repository:
 
 ```sh
-npm install -g @nodesify/astria
+npm install -g @nodesify/astria@1.4.0
 astria run .
 astria map
 ```
@@ -49,7 +61,9 @@ Verify that the installation is available in the terminal where you will use it:
 astria --version
 ```
 
-For the release described here, this prints `1.1.0`. A newer installation may print a different version. After `astria run .`, check that `.astria/graph_report.md` exists and that `astria map` returns repository content. If the command is missing, reopen the terminal and check your npm global executable directory is on `PATH`. If the map is empty, check the indexed directory and the language-support table before investigating retrieval quality.
+The pinned installation above prints `1.4.0`. The worked source investigation and October 6 evaluation in this article originally used 1.1.0; do not read their results as a new 1.4.0 benchmark. After `astria run .`, check that `.astria/graph_report.md` exists and that `astria map` returns repository content. If the command is missing, reopen the terminal and check your npm global executable directory is on `PATH`. If the map is empty, check the indexed directory and the language-support table before investigating retrieval quality.
+
+For an existing graph, run `astria update .` after upgrading so extraction-rule and symbol-identity changes are reflected in the graph. If you use Git hooks, run `astria hook install` again to replace the installed scripts with the current versions. Use node IDs from the refreshed graph.
 
 Prebuilt native binaries are distributed for supported platforms, so npm installation needs no Rust toolchain. Build time depends on repository size, hardware, and enabled features.
 
@@ -71,7 +85,7 @@ Reading the [HTTP server source at the evaluated commit](https://github.com/Node
 
 ![Simplified source flow: handle_connection invokes route_early; failed authorization returns 401 before reading the body; requests that pass the early checks proceed to body reading and route, which checks authorization again](images/01-request-path.png)
 
-*Simplified from the source. Host and origin checks are omitted. The early rejection returns before body reading and the later route call.*
+_Simplified from the source. Host and origin checks are omitted. The early rejection returns before body reading and the later route call._
 
 Both `route_early()` and `route()` invoke `authorized()` and construct a 401 JSON response on failure. The live connection handler calls `route_early()` before reading the request body. Editing only the later `route()` response would miss the response actually returned for a rejected request.
 
@@ -94,7 +108,7 @@ For this task, source inspection points to keeping both unauthorized-response pa
 
 ![Six-step investigation loop: ask, inspect evidence, read source, check dependents, edit, then refresh the graph before the next investigation](images/02-workflow.png)
 
-*The graph organizes the investigation. Source inspection determines behavior; refreshing keeps the next investigation current.*
+_The graph organizes the investigation. Source inspection determines behavior; refreshing keeps the next investigation current._
 
 The CLI and MCP server share a retrieval engine. MCP—the Model Context Protocol—lets an agent call tools exposed by a server. Astria's tools include `repo_map`, `query_graph`, `explain`, `shortest_path`, and `affected`.
 
@@ -151,6 +165,6 @@ Try [Astria's getting-started guide](https://nodesify.github.io/astria/) on a re
 
 <!-- PUBLISH: replace the local evidence link with the public evidence-package URL and companion links with published article URLs; see README.md. -->
 
-*About Nodesify: [Nodesify](https://nodesify.com) is a Malaysia-based custom software development and IT consulting company, and the team behind [Astria](https://github.com/Nodesify/astria).*
+_About Nodesify: [Nodesify](https://nodesify.com) is a Malaysia-based custom software development and IT consulting company, and the team behind [Astria](https://github.com/Nodesify/astria)._
 
-*Astria is MIT-licensed and independently implemented, inspired by Graphify without affiliation or endorsement.*
+_Astria is MIT-licensed and independently implemented, inspired by Graphify without affiliation or endorsement._
