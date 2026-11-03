@@ -52,7 +52,7 @@ const config = {
       ({
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
-          // The 1.4.0 snapshot is the release documentation; docs tracks Next.
+          // The newest snapshot is the release documentation; docs tracks Next.
           lastVersion: docsVersion,
           versions: {
             current: {
@@ -62,6 +62,7 @@ const config = {
             '1.1.0': {
               banner: 'none',
             },
+            '1.5.0': { banner: 'none' },
             '1.4.0': {
               banner: 'none',
             },

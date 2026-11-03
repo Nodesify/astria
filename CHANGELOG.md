@@ -4,6 +4,15 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.5.0] — 2026-11-03
+
+- Explain query-node retrieval evidence in rendered and structured CLI/MCP answers.
+- Prefer located code declarations over file hubs at equal relevance and traversal distance.
+- Add actionable structural and compiler-index refresh recommendations to status output.
+- Guide first-time users through locating, inspecting, and assessing a change.
+- Explain downstream evaluation comparison blockers and missing measurement counts.
+- Upgrade calamine, ZIP, Zstandard, Tokio, and chacha20 dependencies to address security advisories and remove obsolete audit exceptions.
+
 ## [1.4.0] — 2026-10-22
 
 - Update rustls-webpki to 0.103.16 and webpki-roots to 1.0.10 to reject
@@ -603,3 +612,5 @@ See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 [0.6.0]: https://github.com/Nodesify/astria/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Nodesify/astria/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Nodesify/astria/compare/v0.3.0...v0.4.0
+
+[1.5.0]: https://github.com/Nodesify/astria/compare/v1.4.0...v1.5.0
