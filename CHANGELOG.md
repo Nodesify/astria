@@ -4,6 +4,43 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.6.0] — 2026-11-05
+
+- Report path confidence honestly: among equal-length shortest routes the most
+  conservative one wins (weakest hop chosen, marked, and named in a closing
+  summary with the tie count); weaker parallel edges survive as `also seen`
+  lines instead of being dropped.
+- Read `[query] budget` and `[query] depth` from `.astria.toml` as project
+  defaults — explicit flags always win, malformed entries warn and fall back.
+- Bound each watch rebuild with `--timeout` / `ASTRIA_REBUILD_TIMEOUT`
+  (default 600s, `0` disables) so one hung rebuild cannot stall the watcher.
+- Cache the Claude backend's stable system prompt with `cache_control`
+  (`ASTRIA_CLAUDE_PROMPT_CACHE=0` restores the plain string) and count cached
+  tokens back into the input ledger.
+- Emit `inherits` edges for TypeScript-family `extends`/`implements` clauses,
+  resolving through CommonJS require bindings; extract TS abstract classes as
+  class-kind nodes.
+- Extract Go interfaces as nodes with their methods, dispatch interface
+  methods to implicit implementers (capped at 10, same-package types
+  preferred), and resolve member calls on declared-receiver locals
+  (`var s T`, `s := T{}`, `s := new(T)`).
+- Resolve Python module-level singleton member calls (`g = Service()` then
+  `g.ping()`) with rebinding and shadowing guards.
+- Recover calls written inside Rust expression macros (`println!`, `vec!`, …)
+  by re-parsing token trees; `macro_rules!` bodies stay untouched.
+- Word hook-guard reminders as facts rather than imperatives, skip project
+  hints for externally-scoped searches, and gate single-file Grep in strict
+  mode only when the graph indexes the file.
+- Cover more credential shapes in redaction (Slack `xoxe-` refresh tokens,
+  underscore-glued token prefixes, empty-user URL passwords).
+- Parse markdown per CommonMark: closing `#` runs, three-space indent limit,
+  hash-only headings, and fenced-code tracking so headings and links inside
+  fences stay literal.
+- Add a hub bypass check to the skills: report files that reimplement a hub's
+  distinctive literals without ever calling it.
+- Extraction hash bumped to v18 — first build after upgrading re-extracts
+  cached files once.
+
 ## [1.5.0] — 2026-11-03
 
 - Explain query-node retrieval evidence in rendered and structured CLI/MCP answers.
