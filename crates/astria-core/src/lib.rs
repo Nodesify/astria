@@ -34,7 +34,9 @@ pub mod writer_lock;
 /// re-extracted.
 /// v15: qualified call boundaries and exact import module paths retained.
 /// v17: retained-text redaction, language coverage, and exact declaration identity.
-pub const EXTRACTION_HASH_VERSION: &str = "v17";
+/// v18: Rust expression-macro call recovery, CommonMark markdown rules,
+/// TypeScript abstract classes as class-kind nodes.
+pub const EXTRACTION_HASH_VERSION: &str = "v18";
 
 /// Reads `ASTRIA_<name>`. Empty values count as unset. There is no legacy
 /// spelling fallback: pre-1.0 configurations rebuild with current names.
