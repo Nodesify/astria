@@ -334,6 +334,27 @@ pub fn reflect(root: String) -> napi::Result<String> {
     feedback::reflect(&dir, Some(&db)).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
+/// Project-level `[query]` defaults from `.astria.toml` (budget, depth).
+/// Read-only: no graph has to exist, and nothing is ever created.
+#[napi(object)]
+pub struct QueryDefaultsJs {
+    pub budget: Option<u32>,
+    pub depth: Option<u32>,
+    /// Why a value was rejected, when one was; the caller falls back to the
+    /// built-in defaults for that setting.
+    pub warning: Option<String>,
+}
+
+#[napi]
+pub fn query_defaults(root: String) -> QueryDefaultsJs {
+    let defaults = pipeline::read_query_defaults(Path::new(&root));
+    QueryDefaultsJs {
+        budget: defaults.budget,
+        depth: defaults.depth,
+        warning: defaults.warning,
+    }
+}
+
 #[napi(object)]
 pub struct GlobalAddResultJs {
     pub tag: String,

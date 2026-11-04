@@ -17,8 +17,14 @@ pub(crate) fn extract_markdown(path: &Path, naming: &Path) -> Result<Extraction,
     ))
 }
 
-static MD_HEADING_RE: std::sync::LazyLock<regex::Regex> =
-    std::sync::LazyLock::new(|| regex::Regex::new(r"^(#{1,6})\s+(.+)$").expect("static regex"));
+/// ATX headings per CommonMark: up to three leading spaces (four is an
+/// indented code block), 1-6 `#`, then a space/tab before the text. The
+/// text is captured raw — the optional closing `#` run is stripped in code
+/// because it must be preceded by whitespace (or be the whole content),
+/// which a regex alone cannot express.
+static MD_HEADING_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^ {0,3}(#{1,6})[ \t]+(.*)$").expect("static regex")
+});
 static MD_LINK_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").expect("static regex")
 });
@@ -76,77 +82,125 @@ pub(crate) fn extract_markdown_from_string(
         }
     };
 
+    // Fenced code block state per CommonMark: (fence char, opening length).
+    // Inside a fence every line is literal — headings and links do not
+    // parse. A closing fence is the same char, at least as long, with
+    // nothing but trailing whitespace after it.
+    let mut fence: Option<(char, usize)> = None;
+
     for (line_no, line) in content.lines().enumerate() {
-        // Parse headings
-        if let Some(caps) = MD_HEADING_RE.captures(line) {
-            flush_pending(&mut pending, &mut nodes, &mut edges);
-            let hashes = caps.get(1).unwrap().as_str().len();
-            let title = caps.get(2).unwrap().as_str().trim().to_string();
-            let level = hashes;
-            // A punctuation-only heading ("# ...") slugifies to empty, which
-            // would make the section id equal the file node's id — a
-            // guaranteed duplicate within the extraction.
-            let slug = {
-                let s = make_text_id(&title);
-                if s.is_empty() {
-                    "section".to_string()
-                } else {
-                    s
-                }
-            };
-            let section_id = {
-                let base = make_node_id(&[&fid, &slug]);
-                if seen_section_ids.insert(base.clone()) {
-                    base
-                } else {
-                    let mut n = 2usize;
-                    loop {
-                        let candidate = make_node_id(&[&fid, &format!("{slug}-{n}")]);
-                        if seen_section_ids.insert(candidate.clone()) {
-                            break candidate;
-                        }
-                        n += 1;
+        let rest = line.trim_start_matches([' ', '\t']);
+        let indent = line.len() - rest.len();
+        let mut in_fence = false;
+        if let Some((ch, open_len)) = fence {
+            let run = rest.chars().take_while(|&c| c == ch).count();
+            if run >= open_len && rest[run..].trim().is_empty() {
+                fence = None;
+            }
+            in_fence = true;
+        } else {
+            // Opening fence: 3+ backticks or tildes within three columns.
+            // A backtick fence's info string may not contain a backtick.
+            for ch in ['`', '~'] {
+                let run = rest.chars().take_while(|&c| c == ch).count();
+                if run >= 3 && indent <= 3 {
+                    let info = &rest[run..];
+                    if ch != '`' || !info.contains('`') {
+                        fence = Some((ch, run));
+                        in_fence = true;
+                        break;
                     }
                 }
-            };
-
-            nodes.push(ExtractedNode {
-                id: section_id.clone(),
-                label: title,
-                source_file: path.to_path_buf(),
-                source_line: Some(line_no as u32 + 1),
-                docstring: None,
-                signature: None,
-                node_type: "section".to_string(),
-            });
-
-            // Pop stack until we find a parent with lower level
-            while let Some((parent_level, _)) = heading_stack.last() {
-                if *parent_level < level {
-                    break;
-                }
-                heading_stack.pop();
             }
+        }
 
-            // Edge: parent heading → this heading, or file → this heading
-            let parent_id = heading_stack
-                .last()
-                .map(|(_, id)| id.clone())
-                .unwrap_or_else(|| file_id.clone());
+        // Parse headings — never inside a fenced code block.
+        if !in_fence {
+            if let Some(caps) = MD_HEADING_RE.captures(line) {
+                let hashes = caps.get(1).unwrap().as_str().len();
+                // CommonMark closing sequence: a trailing `#` run preceded
+                // by whitespace (or the entire content) is not the title.
+                let raw = caps.get(2).unwrap().as_str().trim_end();
+                let stripped = raw.trim_end_matches('#');
+                let title_src = if stripped.len() < raw.len()
+                    && (stripped.is_empty() || stripped.ends_with([' ', '\t']))
+                {
+                    stripped
+                } else {
+                    raw
+                };
+                let title = title_src.trim().to_string();
+                // A heading that strips to nothing ("## ##") mints no node;
+                // the line is ordinary body text.
+                if !title.is_empty() {
+                    flush_pending(&mut pending, &mut nodes, &mut edges);
+                    let level = hashes;
+                    // A punctuation-only heading ("# ...") slugifies to empty, which
+                    // would make the section id equal the file node's id — a
+                    // guaranteed duplicate within the extraction.
+                    let slug = {
+                        let s = make_text_id(&title);
+                        if s.is_empty() {
+                            "section".to_string()
+                        } else {
+                            s
+                        }
+                    };
+                    let section_id = {
+                        let base = make_node_id(&[&fid, &slug]);
+                        if seen_section_ids.insert(base.clone()) {
+                            base
+                        } else {
+                            let mut n = 2usize;
+                            loop {
+                                let candidate = make_node_id(&[&fid, &format!("{slug}-{n}")]);
+                                if seen_section_ids.insert(candidate.clone()) {
+                                    break candidate;
+                                }
+                                n += 1;
+                            }
+                        }
+                    };
 
-            edges.push(ExtractedEdge {
-                source: parent_id,
-                target: section_id.clone(),
-                relation: "contains".to_string(),
-                confidence: "EXTRACTED".to_string(),
-                confidence_score: Some(1.0),
-                source_file: path.to_path_buf(),
-                source_line: Some(line_no as u32 + 1),
-            });
+                    nodes.push(ExtractedNode {
+                        id: section_id.clone(),
+                        label: title,
+                        source_file: path.to_path_buf(),
+                        source_line: Some(line_no as u32 + 1),
+                        docstring: None,
+                        signature: None,
+                        node_type: "section".to_string(),
+                    });
 
-            heading_stack.push((level, section_id.clone()));
-            pending = Some((section_id, slug, line_no as u32 + 2, String::new()));
-            continue;
+                    // Pop stack until we find a parent with lower level
+                    while let Some((parent_level, _)) = heading_stack.last() {
+                        if *parent_level < level {
+                            break;
+                        }
+                        heading_stack.pop();
+                    }
+
+                    // Edge: parent heading → this heading, or file → this heading
+                    let parent_id = heading_stack
+                        .last()
+                        .map(|(_, id)| id.clone())
+                        .unwrap_or_else(|| file_id.clone());
+
+                    edges.push(ExtractedEdge {
+                        source: parent_id,
+                        target: section_id.clone(),
+                        relation: "contains".to_string(),
+                        confidence: "EXTRACTED".to_string(),
+                        confidence_score: Some(1.0),
+                        source_file: path.to_path_buf(),
+                        source_line: Some(line_no as u32 + 1),
+                    });
+
+                    heading_stack.push((level, section_id.clone()));
+                    pending = Some((section_id, slug, line_no as u32 + 2, String::new()));
+                    continue;
+                }
+            }
         }
 
         // Body text accumulates under the open section, or the document
@@ -167,34 +221,37 @@ pub(crate) fn extract_markdown_from_string(
             }
         }
 
-        // Parse links (only local .md references)
-        for cap in MD_LINK_RE.captures_iter(line) {
-            let link_target = cap.get(2).unwrap().as_str();
-            // Only reference local markdown files
-            if link_target.starts_with("http") || link_target.starts_with('#') {
-                continue;
-            }
-            let target_path = if link_target.starts_with('/') {
-                link_target.to_string()
-            } else {
-                // Relative path — just use the file stem as target
-                link_target.to_string()
-            };
-            let target_stem = std::path::Path::new(&target_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            if !target_stem.is_empty() {
-                let target_id = make_text_id(target_stem);
-                edges.push(ExtractedEdge {
-                    source: file_id.clone(),
-                    target: target_id,
-                    relation: "references".to_string(),
-                    confidence: "EXTRACTED".to_string(),
-                    confidence_score: Some(0.8),
-                    source_file: path.to_path_buf(),
-                    source_line: Some(line_no as u32 + 1),
-                });
+        // Parse links (only local .md references) — inside a fence a link
+        // is literal text, not structure.
+        if !in_fence {
+            for cap in MD_LINK_RE.captures_iter(line) {
+                let link_target = cap.get(2).unwrap().as_str();
+                // Only reference local markdown files
+                if link_target.starts_with("http") || link_target.starts_with('#') {
+                    continue;
+                }
+                let target_path = if link_target.starts_with('/') {
+                    link_target.to_string()
+                } else {
+                    // Relative path — just use the file stem as target
+                    link_target.to_string()
+                };
+                let target_stem = std::path::Path::new(&target_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                if !target_stem.is_empty() {
+                    let target_id = make_text_id(target_stem);
+                    edges.push(ExtractedEdge {
+                        source: file_id.clone(),
+                        target: target_id,
+                        relation: "references".to_string(),
+                        confidence: "EXTRACTED".to_string(),
+                        confidence_score: Some(0.8),
+                        source_file: path.to_path_buf(),
+                        source_line: Some(line_no as u32 + 1),
+                    });
+                }
             }
         }
     }
@@ -853,6 +910,72 @@ mod tests {
             content,
             Path::new("docs/notes.md"),
         )
+    }
+
+    #[test]
+    fn atx_closing_hash_run_is_not_the_title() {
+        // CommonMark: "## Setup ##" is titled "Setup".
+        let ex = extract_md("## Setup ##\nbody\n");
+        let section = ex.nodes.iter().find(|n| n.node_type == "section").unwrap();
+        assert_eq!(section.label, "Setup");
+        // A glued trailing hash is NOT a closing sequence ("C# stay").
+        let ex = extract_md("## C# stay\nbody\n");
+        let section = ex.nodes.iter().find(|n| n.node_type == "section").unwrap();
+        assert_eq!(section.label, "C# stay");
+    }
+
+    #[test]
+    fn hash_only_heading_mints_no_node() {
+        let ex = extract_md("## ##\nreal body\n");
+        assert!(
+            !ex.nodes.iter().any(|n| n.node_type == "section"),
+            "hash-only heading must not become a section: {:?}",
+            ex.nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>()
+        );
+        // The line is ordinary body text.
+        let chunks: Vec<_> = ex.nodes.iter().filter(|n| n.docstring.is_some()).collect();
+        assert!(chunks
+            .iter()
+            .any(|c| c.docstring.as_deref().unwrap().contains("## ##")));
+    }
+
+    #[test]
+    fn heading_indent_up_to_three_spaces_four_is_code() {
+        let ex = extract_md("   ## Indented\nbody\n");
+        assert!(ex.nodes.iter().any(|n| n.label == "Indented"));
+        // Four spaces is an indented code block, not a heading.
+        let ex = extract_md("    ## Not a heading\nbody\n");
+        assert!(!ex.nodes.iter().any(|n| n.label == "Not a heading"));
+    }
+
+    #[test]
+    fn fenced_code_blocks_hide_headings_and_links() {
+        let ex = extract_md(
+            "# Real\n\n```ts\n## Fake heading\n[link](other.md)\nconst x = 1;\n```\n\nafter\n",
+        );
+        assert!(ex.nodes.iter().any(|n| n.label == "Real"));
+        assert!(
+            !ex.nodes.iter().any(|n| n.label == "Fake heading"),
+            "heading inside a fence leaked: {:?}",
+            ex.nodes.iter().map(|n| n.label.clone()).collect::<Vec<_>>()
+        );
+        assert!(
+            !ex.edges
+                .iter()
+                .any(|e| e.relation == "references" && e.target.contains("other")),
+            "link inside a fence leaked"
+        );
+        // A closing fence must be at least as long as the opener; shorter
+        // runs keep the fence open, so the heading after them stays hidden.
+        let ex = extract_md("````md\n### inside\n```\nstill inside\n````\n## After\n");
+        assert!(!ex.nodes.iter().any(|n| n.label == "inside"));
+        assert!(!ex.nodes.iter().any(|n| n.label == "still inside"));
+        assert!(ex.nodes.iter().any(|n| n.label == "After"));
+        // Tilde fences close only with tildes; the backtick line inside is
+        // literal text.
+        let ex = extract_md("~~~\n## hidden by tilde\n~~~\n## Visible\n");
+        assert!(!ex.nodes.iter().any(|n| n.label == "hidden by tilde"));
+        assert!(ex.nodes.iter().any(|n| n.label == "Visible"));
     }
 
     #[test]

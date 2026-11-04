@@ -1,11 +1,11 @@
-import { queryGraph } from '../native';
+import { queryDefaults, queryGraph } from '../native';
 import { DEFAULT_QUERY_BUDGET } from '../defaults';
 
 export async function queryCommand(question: string, opts: {
   graph: string;
   dfs: boolean;
-  depth: string;
-  budget: string;
+  depth?: string;
+  budget?: string;
   directed?: boolean;
   detail?: string;
   cursor?: string;
@@ -15,8 +15,12 @@ export async function queryCommand(question: string, opts: {
 }) {
   try {
     const mode = opts.dfs ? 'dfs' : 'bfs';
-    const depth = Number(opts.depth ?? '2');
-    const budget = Number(opts.budget ?? String(DEFAULT_QUERY_BUDGET));
+    // Resolution order per setting: explicit flag > [query] in .astria.toml >
+    // built-in default. A malformed project setting warns and falls back.
+    const project = queryDefaults(opts.graph);
+    if (project.warning) console.error(`warning: ${project.warning}`);
+    const depth = Number(opts.depth ?? String(project.depth ?? 2));
+    const budget = Number(opts.budget ?? String(project.budget ?? DEFAULT_QUERY_BUDGET));
     const cursor = Number(opts.cursor ?? '0');
     if (![depth, budget, cursor].every(Number.isSafeInteger) || depth < 0 || cursor < 0) {
       throw new Error('depth, budget and cursor must be integers; depth and cursor must be nonnegative');

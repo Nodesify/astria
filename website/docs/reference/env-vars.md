@@ -26,6 +26,7 @@ Activates the `enrich_with_semantics()` pipeline stage (docs, papers, images →
 | `ASTRIA_REFRESH_POLICY` | `1` permits an explicit indexing-policy replacement. The CLI sets it for `--refresh-policy`; changing to a paid policy also requires a positive `--llm-budget`. Ordinary updates reuse the saved profile |
 | `ASTRIA_LLM_MAX_CHUNKS` | Per-file semantic extraction chunk cap (default `8`, clamped to 1–64). Content needing more chunks fails loudly instead of being truncated and cached as complete — raise this for oversized generated files |
 | `ASTRIA_LLM_COMMUNITY_MAX` | Cap on community-naming LLM calls per run for `--label-communities` (default `48`) |
+| `ASTRIA_CLAUDE_PROMPT_CACHE` | `0` disables Anthropic prompt caching for the Claude backend (restores the plain-string system prompt); unset or any other value keeps the large, stable system prompt marked `cache_control`, billing repeat calls at the cached rate. Cached tokens are counted into the input ledger either way |
 | `ASTRIA_SNAPSHOT_CACHE_ENTRIES` | Process-wide graph snapshot cache capacity (default `3`, clamped to 1–16). Each entry holds one project's full node+edge snapshot, keyed by database path and publication generation; raise it for MCP servers alternating across many repositories, lower it to bound memory |
 | `OPENAI_API_KEY` | Fallback key for the OpenAI-compatible backend |
 | `OPENAI_BASE_URL` | Fallback base URL for the OpenAI-compatible backend when `ASTRIA_LLM_BASE_URL` is unset |
@@ -135,6 +136,14 @@ Appends a JSONL line (ts, kind, question, nodes, duration_ms) per query for agen
 | `ASTRIA_QUERY_LOG` | Path of the JSONL log file; any non-empty value is used verbatim as the path (there is no `=1` shortcut — use `ASTRIA_QUERY_LOG_ENABLE` for the default location) |
 | `ASTRIA_QUERY_LOG_ENABLE` | `1` turns logging on with the default path (`~/.cache/astria-queries.log`) |
 | `ASTRIA_QUERY_LOG_DISABLE` | `1` always wins — logging is off regardless of the other two |
+
+## Watch
+
+Each watch rebuild runs as a child `astria update`; a bound keeps one hung rebuild from stalling the watcher.
+
+| Variable | Purpose |
+|---|---|
+| `ASTRIA_REBUILD_TIMEOUT` | Seconds a single watch rebuild may run before it is terminated (default `600`; `0` disables the bound). The watcher reports the termination and continues with the next queued rebuild; the `--timeout` flag overrides |
 
 ## Export targets
 

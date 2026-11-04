@@ -851,6 +851,89 @@ pub fn record_query_feedback(
     }
 }
 
+/// Project-level query defaults from `.astria.toml`'s `[query]` section:
+/// `budget` (1..=100_000 tokens) and `depth` (0..=32 hops) — the same clamps
+/// the MCP schema enforces. Explicit CLI flags always win over these values;
+/// a malformed file, section, or entry leaves that default unset (the caller
+/// falls back to the built-in) and reports why through `warning`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct QueryDefaults {
+    pub budget: Option<u32>,
+    pub depth: Option<u32>,
+    pub warning: Option<String>,
+}
+
+/// The inclusive upper bounds a `[query]` entry must satisfy, kept identical
+/// to the MCP tool schema so a config accepted here is accepted there too.
+const QUERY_BUDGET_MAX: u32 = 100_000;
+const QUERY_DEPTH_MAX: u32 = 32;
+
+/// Read `[query]` defaults from `<root>/.astria.toml`. A missing file or a
+/// missing `[query]` section is not an error: both mean "use the built-in
+/// defaults" with no warning.
+pub fn read_query_defaults(root: &Path) -> QueryDefaults {
+    let path = root.join(".astria.toml");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return QueryDefaults::default();
+    };
+    let parsed: toml::Table = match text.parse() {
+        Ok(table) => table,
+        Err(e) => {
+            return QueryDefaults {
+                warning: Some(format!("{} failed to parse: {e}", path.display())),
+                ..QueryDefaults::default()
+            };
+        }
+    };
+    let Some(section) = parsed.get("query") else {
+        return QueryDefaults::default();
+    };
+    let Some(table) = section.as_table() else {
+        return QueryDefaults {
+            warning: Some(format!(
+                "{}: [query] must be a table of budget/depth entries",
+                path.display()
+            )),
+            ..QueryDefaults::default()
+        };
+    };
+    let mut defaults = QueryDefaults::default();
+    let mut problems: Vec<String> = Vec::new();
+    // depth 0 is a legal value even though budget's floor is 1; both share
+    // an inclusive upper bound so one entry helper covers them.
+    let mut entry = |value: &toml::Value, name: &str, max: u32| -> Option<u32> {
+        match value.as_integer() {
+            Some(n) if (1..=max as i64).contains(&n) => Some(n as u32),
+            Some(0) if name == "depth" => Some(0),
+            Some(n) => {
+                problems.push(format!("[query] {name} = {n} is outside the allowed range"));
+                None
+            }
+            None => {
+                problems.push(format!(
+                    "[query] {name} must be an integer, found {}",
+                    value.type_str()
+                ));
+                None
+            }
+        }
+    };
+    if let Some(value) = table.get("budget") {
+        defaults.budget = entry(value, "budget", QUERY_BUDGET_MAX);
+    }
+    if let Some(value) = table.get("depth") {
+        defaults.depth = entry(value, "depth", QUERY_DEPTH_MAX);
+    }
+    if !problems.is_empty() {
+        defaults.warning = Some(format!(
+            "{}: {} (using built-in defaults for those settings)",
+            path.display(),
+            problems.join("; ")
+        ));
+    }
+    defaults
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1414,5 +1497,89 @@ function theme_header() {
         let after = community_assignments(&db);
         assert_ne!(before, after, "membership writes must be detectable");
         assert_eq!(after.get("a"), Some(&Some(3)));
+    }
+
+    #[test]
+    fn query_defaults_missing_file_or_section_is_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        // No .astria.toml at all.
+        assert_eq!(read_query_defaults(dir.path()), QueryDefaults::default());
+        // A file with other sections but no [query].
+        std::fs::write(
+            dir.path().join(".astria.toml"),
+            "[languages]
+",
+        )
+        .unwrap();
+        assert_eq!(read_query_defaults(dir.path()), QueryDefaults::default());
+    }
+
+    #[test]
+    fn query_defaults_reads_budget_and_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".astria.toml"),
+            "[query]
+budget = 3500
+depth = 4
+",
+        )
+        .unwrap();
+        let defaults = read_query_defaults(dir.path());
+        assert_eq!(defaults.budget, Some(3500));
+        assert_eq!(defaults.depth, Some(4));
+        assert_eq!(defaults.warning, None);
+    }
+
+    #[test]
+    fn query_defaults_depth_zero_is_legal() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".astria.toml"),
+            "[query]
+depth = 0
+",
+        )
+        .unwrap();
+        let defaults = read_query_defaults(dir.path());
+        assert_eq!(defaults.depth, Some(0));
+        assert_eq!(defaults.warning, None);
+    }
+
+    #[test]
+    fn query_defaults_malformed_entries_warn_and_fall_back() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".astria.toml"),
+            "[query]
+budget = \"lots\"
+depth = 99
+",
+        )
+        .unwrap();
+        let defaults = read_query_defaults(dir.path());
+        assert_eq!(defaults.budget, None);
+        assert_eq!(defaults.depth, None);
+        let warning = defaults.warning.expect("malformed entries must warn");
+        assert!(warning.contains("budget must be an integer"), "{warning}");
+        assert!(warning.contains("depth = 99"), "{warning}");
+    }
+
+    #[test]
+    fn query_defaults_non_table_section_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".astria.toml"),
+            "query = 3
+",
+        )
+        .unwrap();
+        let defaults = read_query_defaults(dir.path());
+        assert_eq!(defaults.budget, None);
+        assert!(defaults
+            .warning
+            .as_deref()
+            .unwrap_or_default()
+            .contains("[query] must be a table"));
     }
 }

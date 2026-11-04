@@ -414,6 +414,109 @@ fn swift_macro_call(state: &mut ExtractionState, caller: &str, node: &Node) {
     });
 }
 
+/// Rust expression macros whose token trees hold ordinary expressions: the
+/// grammar keeps macro contents as raw tokens, so a call written inside
+/// `println!("{}", helper())` or `vec![helper()]` is invisible to the
+/// generic walker. The token tree is re-parsed as an expression to recover
+/// those calls. `macro_rules!` bodies and custom DSL macros stay untouched
+/// (anything not on this allowlist is skipped).
+#[cfg(feature = "lang-rust")]
+const RUST_EXPRESSION_MACROS: &[&str] = &[
+    "println",
+    "eprintln",
+    "print",
+    "eprint",
+    "write",
+    "writeln",
+    "format",
+    "format_args",
+    "vec",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "matches",
+    "dbg",
+    "panic",
+    "todo",
+    "unimplemented",
+    "unreachable",
+];
+
+#[cfg(feature = "lang-rust")]
+fn rust_macro_token_calls(state: &mut ExtractionState, caller: &str, node: &Node) {
+    let Some(name_node) = node.child_by_field_name("macro") else {
+        return;
+    };
+    let macro_name = node_text(&name_node, state.source);
+    if !RUST_EXPRESSION_MACROS.contains(&macro_name) {
+        return;
+    }
+    let Some(tokens) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "token_tree")
+    else {
+        return;
+    };
+    let text = node_text(&tokens, state.source);
+    // Strip only the outermost delimiter so nested trees keep theirs.
+    let Some(inner) = text
+        .strip_prefix('(')
+        .and_then(|t| t.strip_suffix(')'))
+        .or_else(|| text.strip_prefix('[').and_then(|t| t.strip_suffix(']')))
+        .or_else(|| text.strip_prefix('{').and_then(|t| t.strip_suffix('}')))
+    else {
+        return;
+    };
+    thread_local! {
+        static MACRO_PARSER: std::cell::RefCell<tree_sitter::Parser> =
+            std::cell::RefCell::new({
+                let mut parser = Parser::new();
+                parser
+                    .set_language(&tree_sitter_rust::LANGUAGE.into())
+                    .expect("rust grammar registers");
+                parser
+            });
+    }
+    let Some(tree) = MACRO_PARSER.with_borrow_mut(|parser| parser.parse(inner, None)) else {
+        return;
+    };
+    let line = Some(node.start_position().row as u32 + 1);
+    // Walk the re-parsed snippet independently: its nodes are not tied to
+    // the file's source buffer, so the generic walker cannot see them.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "call_expression" {
+            if let Some(name) = extract_callee_name(&current, inner.as_bytes()) {
+                if !is_language_builtin(&name, state.cfg.name) {
+                    let callee_id = call_target(state, caller, &name);
+                    if seen.insert(callee_id.clone()) {
+                        state.edges.push(ExtractedEdge {
+                            source: caller.to_string(),
+                            target: callee_id,
+                            relation: "calls".to_string(),
+                            confidence: "INFERRED".to_string(),
+                            confidence_score: Some(0.7),
+                            source_file: state.file_path.clone(),
+                            source_line: line,
+                        });
+                    }
+                }
+            }
+        }
+        let mut cursor = current.walk();
+        for child in current.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+}
+
+#[cfg(not(feature = "lang-rust"))]
+fn rust_macro_token_calls(_state: &mut ExtractionState, _caller: &str, _node: &Node) {}
+
 pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'a>) {
     let kind = node.kind();
     coverage_type_reference(state, node);
@@ -1006,6 +1109,9 @@ pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, b
     let kind = body.kind();
     if state.cfg.name == "Swift" && kind == "macro_invocation" {
         swift_macro_call(state, caller_id, body);
+    }
+    if state.cfg.name == "Rust" && kind == "macro_invocation" {
+        rust_macro_token_calls(state, caller_id, body);
     }
     // An expression-bodied arrow can return another function directly.
     // That returned function owns its calls, just like a nested declaration.

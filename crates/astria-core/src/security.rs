@@ -8,7 +8,10 @@ pub fn redact_secrets(text: &str) -> String {
         [
             r"(?s)-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----.*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)",
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b",
-            r"\b(?:sk-[A-Za-z0-9_-]{12,}|(?:ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{12,}|glpat-[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|AIza[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{12,}|npm_[A-Za-z0-9]{12,}|hf_[A-Za-z0-9]{16,}|pypi-[A-Za-z0-9_-]{16,}|lin_api_[A-Za-z0-9]{16,}|dop_v1_[A-Za-z0-9]{16,})\b",
+            // `(?:\b|_)` so a token glued into a longer identifier by an
+            // underscore (`token_ghp_...`) is still caught — underscore is a
+            // word character, so a plain \b never fires inside such glue.
+            r"(?:\b|_)(?:sk-[A-Za-z0-9_-]{12,}|(?:ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{12,}|glpat-[A-Za-z0-9_-]{12,}|xox[baprse]-[A-Za-z0-9-]{12,}|AIza[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{12,}|npm_[A-Za-z0-9]{12,}|hf_[A-Za-z0-9]{16,}|pypi-[A-Za-z0-9_-]{16,}|lin_api_[A-Za-z0-9]{16,}|dop_v1_[A-Za-z0-9]{16,})\b",
         ].iter().map(|pattern| regex::Regex::new(pattern).expect("valid secret pattern")).collect()
     });
     static BEARER: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -18,6 +21,10 @@ pub fn redact_secrets(text: &str) -> String {
     static URL_PASSWORD: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(r#"(?i)([a-z][a-z0-9+.-]*://[^\s/@:"']+:)[^\s/@"']+(@)"#)
             .expect("valid URL password pattern")
+    });
+    static URL_EMPTY_USER: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)([a-z][a-z0-9+.-]*://:)[^\s/@"']+(@)"#)
+            .expect("valid empty-user URL password pattern")
     });
     let mut redacted = text.to_owned();
     for pattern in PATTERNS.iter() {
@@ -42,7 +49,10 @@ pub fn redact_secrets(text: &str) -> String {
             }
         })
         .into_owned();
-    URL_PASSWORD
+    redacted = URL_PASSWORD
+        .replace_all(&redacted, "${1}[REDACTED]${2}")
+        .into_owned();
+    URL_EMPTY_USER
         .replace_all(&redacted, "${1}[REDACTED]${2}")
         .into_owned()
 }
@@ -252,6 +262,44 @@ pub fn looks_minified(total_len: u64, sample_len: usize, sample_newlines: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redact_catches_common_token_families() {
+        assert_eq!(redact_secrets("ghp_ABCDEFGHIJKLMNOPQR"), "[REDACTED]");
+        assert_eq!(redact_secrets("sk-ant-api03-ABCDEFGHIJ"), "[REDACTED]");
+        assert!(redact_secrets("see xoxb-1234567890abcdef").contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_catches_underscore_glued_tokens() {
+        // Underscore glue hides the word boundary; the connector itself is
+        // consumed by the redaction, which is safe for labels.
+        let out = redact_secrets("token_ghp_ABCDEFGHIJKLMNOPQR");
+        assert!(!out.contains("ghp_ABCDEFGHIJKLMNOPQR"), "{out}");
+        assert!(out.contains("[REDACTED]"), "{out}");
+    }
+
+    #[test]
+    fn redact_catches_slack_refresh_and_empty_user_url() {
+        // xoxe- refresh tokens join the xox family.
+        assert!(redact_secrets("xoxe-1234567890abcdef").contains("[REDACTED]"));
+        // https://:password@host has an empty user and no password scheme
+        // match without its own pattern.
+        let out = redact_secrets("https://:hunter2@example.com/path");
+        assert!(!out.contains("hunter2"), "{out}");
+        assert!(out.contains("example.com"), "{out}");
+    }
+
+    #[test]
+    fn redact_leaves_ordinary_text_alone() {
+        let prose = "the task list mentions sk-learning and normal URLs like https://example.com/a";
+        assert_eq!(redact_secrets(prose), prose);
+        // Prose about the Bearer scheme is not a credential.
+        assert_eq!(
+            redact_secrets("set the Bearer authentication header"),
+            "set the Bearer authentication header"
+        );
+    }
 
     #[test]
     fn sanitize_label_strips_control_chars() {

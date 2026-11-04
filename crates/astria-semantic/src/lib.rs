@@ -531,11 +531,29 @@ mod tests {
 
     #[test]
     fn claude_request_body_structure() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ASTRIA_CLAUDE_PROMPT_CACHE");
         let backend = ClaudeBackend::new("key".into(), "claude-sonnet-4-20250514".into());
         let body = backend.build_request_body("hello", "rust");
         assert_eq!(body["model"], "claude-sonnet-4-20250514");
         assert_eq!(body["messages"][0]["content"], "hello");
-        assert!(body["system"].as_str().unwrap().contains("rust"));
+        // Cacheable block form: the stable system prompt carries cache_control.
+        assert_eq!(body["system"][0]["type"], "text");
+        assert!(body["system"][0]["text"].as_str().unwrap().contains("rust"));
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn claude_prompt_cache_opt_out_restores_plain_system() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ASTRIA_CLAUDE_PROMPT_CACHE", "0");
+        let backend = ClaudeBackend::new("key".into(), "m".into());
+        let body = backend.build_request_body("hello", "rust");
+        let system = body["system"].as_str().unwrap();
+        assert!(system.contains("rust"));
+        let chat = backend.claude_chat_body("sys", "user");
+        assert_eq!(chat["system"], "sys");
+        std::env::remove_var("ASTRIA_CLAUDE_PROMPT_CACHE");
     }
 
     #[test]
