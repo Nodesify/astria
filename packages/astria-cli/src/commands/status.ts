@@ -14,8 +14,12 @@ export async function statusCommand(opts: { graph: string; json?: boolean }) {
     const published = Number(freshness.graphBuiltAt);
     const ageMinutes = freshness.graphBuiltAt && Number.isFinite(published)
       ? Math.max(0, (Date.now() / 1000 - published) / 60) : null;
+    const recommendations: string[] = [];
+    if (stats.nodeCount === 0 || freshness.status !== 'fresh') recommendations.push('Run astria update with this project path to refresh structural evidence.');
+    if (freshness.staleExternalIndexes.length) recommendations.push('Regenerate each stale compiler index from current source, then run astria add --scip <index-file> with this project as --graph. Structural update does not regenerate compiler indexes.');
     const result = {
       ...freshness,
+      recommendations,
       status: stats.nodeCount === 0 ? 'empty' : freshness.status,
       ageMinutes,
       nodes: stats.nodeCount, edges: stats.edgeCount, communities: stats.communityCount, files: stats.fileCount,
@@ -35,7 +39,7 @@ export async function statusCommand(opts: { graph: string; json?: boolean }) {
       if (freshness.extractionOutdated) console.log('Extraction rules changed; run `astria update .`');
       if (freshness.staleExternalIndexes.length) console.log(`Compiler indexes need reimport: ${freshness.staleExternalIndexes.join(', ')}`);
       if (freshness.error) console.log(`Freshness unavailable: ${freshness.error}`);
-      if (result.status !== 'fresh') console.log('Recommendation: run `astria update .`');
+      for (const recommendation of recommendations) console.log(`Recommendation: ${recommendation}`);
     }
     if (freshness.error) process.exitCode = 1;
   } catch (error: any) {

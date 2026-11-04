@@ -162,3 +162,13 @@ The reporter retains the full planned denominator and prints failures, unfinishe
 For each comparable correct task, cold-task net time is `baseline time - Astria time - initial build time - measured updates`. Reuse break-even is `ceil((initial build + measured updates) / positive task time savings)`. It is unknown when either indexing measurement or comparable task savings is absent, and undefined when Astria saves no time. The value assumes repeated tasks behaving like that specific measured case while reusing the graph; future update costs must be measured and added, not silently assumed free. Build/update timing is excluded from agent wall time and shown explicitly.
 
 Report repetitions and distributions before broad claims. This small diagnostic manifest, serial runs, alternating order, and unflushed filesystem caches provide no statistical significance or universal superiority evidence. Model pricing and dollar savings require separately measured spend; token differences alone are not billing evidence. The reserved Requests/Commander retrieval suites remain untouched until a separately authorized evaluation.
+
+## Diagnose comparison readiness
+
+The report includes `comparison_blockers` for every task pair: missing or
+unfinished runs, unverified models/runtimes, revision mismatches, and correctness
+reviews that are unknown or incorrect. Resolve these before interpreting savings.
+Each aggregate reports `missing_or_noncomparable_pairs` alongside measured pairs;
+unknown measurements never become zero. Use the same frozen tasks and settings
+for both conditions and retain independent rubric reviews. Authoring this report
+does not execute agents or establish a task-quality improvement.

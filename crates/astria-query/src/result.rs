@@ -4,6 +4,8 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryNode {
+    /// Retrieval evidence, not a calibrated confidence or runtime guarantee.
+    pub retrieval_reason: String,
     pub id: String,
     pub label: String,
     pub file_type: String,

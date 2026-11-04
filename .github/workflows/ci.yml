@@ -44,11 +44,6 @@ jobs:
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # ttf-parser (via lopdf <- pdf-extract) is unmaintained upstream with
-          # no fixed version or alternative wired into pdf-extract yet; it only
-          # reads embedded font metrics, not untrusted font files. Re-evaluate
-          # when pdf-extract migrates (suggested successor: skrifa).
-          ignore: RUSTSEC-2026-0192
       - name: Run tests
         run: cargo test --workspace --locked --no-fail-fast
       - name: Check formatting

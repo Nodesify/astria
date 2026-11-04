@@ -47,12 +47,21 @@ const comparisons = results.tasks.map(task => {
   const baseline = reviewed.find(row => row.task_id === task.id && row.condition === 'baseline');
   const astria = reviewed.find(row => row.task_id === task.id && row.condition === 'astria');
   const comparable = [baseline, astria].every(row => row?.status === 'completed' && row.model_verified === true && row.runtime_verified === true && row.post_commit === task.commit && row.correctness === 'correct');
+  const blockers = [];
+  for (const [condition, row] of [['baseline', baseline], ['astria', astria]]) {
+    if (!row) { blockers.push(`${condition}: missing run`); continue; }
+    if (row.status !== 'completed') blockers.push(`${condition}: ${row.status}`);
+    if (row.model_verified !== true) blockers.push(`${condition}: model unverified`);
+    if (row.runtime_verified !== true) blockers.push(`${condition}: runtime unverified`);
+    if (row.post_commit !== task.commit) blockers.push(`${condition}: source revision mismatch`);
+    if (row.correctness !== 'correct') blockers.push(`${condition}: correctness ${row.correctness}`);
+  }
   const savings = metric => comparable && finite(baseline[metric]) && finite(astria[metric]) ? baseline[metric].value - astria[metric].value : null;
   const elapsedSaved = savings('elapsed_seconds');
   const initial = task.projects.astria.indexing.initial_build_seconds;
   const updates = task.projects.astria.indexing.update_seconds;
   const indexingSeconds = finite(initial) && finite(updates) ? initial.value + updates.value : null;
-  return { task_id: task.id, comparable_correct_pair: comparable,
+  return { task_id: task.id, comparable_correct_pair: comparable, comparison_blockers: blockers,
     baseline_status: baseline?.status ?? 'missing', astria_status: astria?.status ?? 'missing',
     baseline_correctness: baseline?.correctness ?? 'unknown', astria_correctness: astria?.correctness ?? 'unknown',
     elapsed_seconds_saved: elapsedSaved, tokens_saved: savings('tokens'), source_reads_saved: savings('source_reads'),
@@ -73,7 +82,7 @@ const conditions = Object.fromEntries(['baseline', 'astria'].map(condition => {
 const metrics = ['elapsed_seconds_saved', 'tokens_saved', 'source_reads_saved', 'wrong_file_edits_saved'];
 const paired = Object.fromEntries(metrics.map(metric => {
   const values = comparisons.map(row => row[metric]).filter(value => value !== null);
-  return [metric, { comparable_measured_pairs: values.length, mean_saved: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null }];
+  return [metric, { comparable_measured_pairs: values.length, missing_or_noncomparable_pairs: comparisons.length - values.length, mean_saved: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null }];
 }));
 console.log(JSON.stringify({ schema_version: 1, results_sha256: hashFile(input), reviews_sha256: reviewFile ? hashFile(reviewFile) : null,
   review_evidence: reviewEvidence, agent_settings_sha256: sha(JSON.stringify(results.agent)), conditions, paired, comparisons,

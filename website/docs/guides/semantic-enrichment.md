@@ -66,6 +66,12 @@ LLM usage: 17 API calls, 3366 in / 1675 out tokens
 - Extraction caches include file content plus the effective backend, endpoint, model, and prompt configuration. Matching inputs reuse output; configuration changes invalidate it. Cached and fresh output follow the same merge path.
 - Failed semantic extraction leaves the core graph and successful-file manifest unadvanced, so a later update retries the work. Derived community-label and deep-link stages run after the core commit and can be retried separately on the next run.
 
+### Source redaction and incomplete extraction
+
+Credential-shaped source text is redacted before retention and semantic requests, and credential literals are excluded from reference identities. This detection covers supported patterns; it is not a guarantee that arbitrary confidential content is safe to send. Choose the files and backend appropriate for your repository.
+
+Run `astria diagnose --graph .` after a failed enrichment attempt to inspect the last per-file semantic coverage: processed/total chunks, cache status, and incomplete reasons. Chunk-limit and provider failures remain failures; partial semantic output is neither published nor cached as a complete result. Correct the cause and retry the update. Coverage describes the last attempt, not successful publication of that attempt.
+
 ### Thematic community labels — `--label-communities`
 
 `astria run . --backend openai --label-communities` names communities with **one LLM call per changed community**:

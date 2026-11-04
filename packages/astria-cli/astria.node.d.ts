@@ -158,6 +158,7 @@ export interface QueryResultJs {
 }
 
 export interface QueryNodeJs {
+  retrievalReason: string
   id: string; label: string; fileType: string; sourceFile: string;
   sourceLine: number | null; community: number | null;
   signature: string | null; summary: string | null;

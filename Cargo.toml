@@ -89,7 +89,7 @@ tree-sitter-solidity = "1.2"
 ureq = "3"
 url = "2.5"
 pdf-extract = "0.12"
-calamine = "0.36"
+calamine = "0.38"
 quick-xml = "0.41"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 unicode-normalization = "0.1"

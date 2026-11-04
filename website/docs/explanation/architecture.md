@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Architecture
-description: How astria works — the eight-stage Rust pipeline, crate responsibilities, the SQLite data model, and why it stays fast.
+description: Source-to-answer architecture, evidence classes, publication boundaries, retrieval, and the shared CLI/MCP query engine.
 keywords: [architecture, pipeline, rust, sqlite, tree-sitter, crates, data model]
 ---
 
@@ -30,7 +30,7 @@ flowchart LR
     G --> H["report()<br/>astria-report"]
 ```
 
-The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`. Validation runs before graph assembly: every node needs id/label/file_type/source_file, every edge needs existing endpoints and a valid confidence class — a corrupted extraction fails the run with the full violation list (`diagnose` reports the same classes of problem read-only on an existing graph).
+The pipeline is orchestrated in `crates/astria-napi/src/pipeline.rs`. Validation runs before graph assembly: nodes need valid identity and type data, located definitions carry source provenance, and edges need existing endpoints and a valid confidence class. Unresolved stubs and references have no owning source file; an empty location is intentional for them. A corrupted extraction fails the run with the full violation list (`diagnose` reports the same classes of problem read-only on an existing graph).
 
 1. **detect()** (`astria-detect`): Discovers files, classifies them (Code, Document, etc.), and uses a SHA-256 manifest to identify changed files since the last run. Manifest ingestion also covers dependency manifests — including Cargo workspace members and internal path dependencies (`crate::*` nodes with `crate_depends_on` edges).
 2. **extract()** (`astria-extract`): Performs AST-based extraction using tree-sitter. Uses 42 registered language configurations; discovery and parser selection share `astria-core/src/languages.rs`, with AST rules in `src/langs/`.
@@ -54,6 +54,68 @@ Validated file-owned graph facts, the file manifest, and `_meta.graph_published_
 Semantic caches include source inputs and non-secret effective backend, endpoint, model, judge, and prompt configuration. Cached and fresh semantic results use the same merge path. Community labels and deep links also fingerprint their effective inputs and configuration. Source changes invalidate deep edges; restoring them requires another run with `--deep`, which replays matching cache entries or generates fresh links.
 
 CLI and MCP queries share a generation-keyed bounded snapshot cache per process. The LRU defaults to 3 entries (`ASTRIA_SNAPSHOT_CACHE_ENTRIES` 1..=16), keyed by database path and publication generation (`_meta.graph_generation`). A hit shares an immutable in-memory snapshot; a generation advance invalidates it. Unstamped databases bypass the cache. Each entry holds a complete node/edge snapshot; separate CLI invocations have separate caches.
+
+## From source files to an answer
+
+The indexing path writes graph facts; the query path reads a published snapshot. Asking a question does not implicitly index missing files or activate an LLM backend.
+
+```mermaid
+flowchart LR
+  S[Source and project metadata] --> X[Discover, parse, redact]
+  X --> R[Resolve supported references]
+  R --> V[Validate facts]
+  V --> DB[(SQLite core publication)]
+  DB --> D[Derived graph passes and artifacts]
+  DB --> Q[Generation-keyed read snapshot]
+  D --> Q
+  Q --> SE[Resolve explicit seeds or rank candidates]
+  SE --> T[Traverse with evidence filters]
+  T --> B[Rank and render within token budget]
+  B --> CLI[CLI JSON or text]
+  B --> MCP[MCP tool result]
+```
+
+### Extraction and reference resolution
+
+Discovery and parser selection share the language registry, including supported extensionless shebang scripts. Extraction records declarations, locations, signatures, and syntax relationships. Incremental parsing reuses versioned caches; the reference pass still reconciles the current corpus so unchanged callers can bind to changed definitions.
+
+Resolution uses lexical scope, supported import paths and project metadata, and available receiver-type evidence. Exact TypeScript aliases and supported workspace entries point to authored source. Local bindings stay within their function or block; instance-field inference requires unambiguous assignments. Conflicts and unknown receivers remain unresolved. Kotlin aliases, C# delegates, Dart typedefs, and Swift macros have dedicated declaration handling. See [language support](../reference/language-support) for the limits of registration.
+
+Credential-shaped source text is redacted before retention and semantic requests. Redaction recognizes patterns; it does not make arbitrary confidential repository content safe to send to a provider. Semantic enrichment is explicitly selected, optional work with separate coverage and spend diagnostics.
+
+### Evidence is part of the answer
+
+| Evidence | What an agent may conclude | Limit |
+| --- | --- | --- |
+| `EXTRACTED` / `DECLARED` | A structural fact or declaration was recorded from its source evidence | Parsing does not prove runtime behavior |
+| `RESOLVED` | Supported source evidence selected a unique endpoint | Name/type-derived binding is not compiler proof |
+| `INFERRED` | A heuristic or possible relationship exists | Includes possible dispatch and learned relationships; verify before asserting a concrete call |
+| `SEMANTIC` | Optional model-based enrichment proposed the relationship | Treat it as model-derived evidence |
+| `AMBIGUOUS` | The stored evidence does not select one certain interpretation | Do not silently choose a target |
+
+`--detail high` retains only `EXTRACTED`/`DECLARED` relationships. It is a provenance filter, not a numeric confidence cutoff. A low confidence score and an evidence class answer different questions. Unresolved nodes with no source location must never be cited as declarations in a referencing file.
+
+### Retrieval and response delivery
+
+1. Load an immutable snapshot keyed by database path and publication generation. The read transaction gives a consistent graph view; a changed generation invalidates the process-local cache.
+2. Resolve explicit seeds by exact ID, then supported labels, bare names, or source suffixes. Ambiguous names disclose candidate IDs and locations. If no supplied seed resolves, return a miss without keyword fallback. Without explicit seeds, rank lexical candidates and optionally merge local embedding candidates when available.
+3. Discover nodes with BFS or DFS to the requested depth. Directed traversal follows stored edge direction; undirected traversal can cross an edge backwards without reversing its reported source and target. Return qualifying relationships among selected nodes, including cycles and seed-to-seed edges.
+4. Rank and render the selected evidence with source locations, graph freshness, and a continuation cursor when needed. The response tokenizer enforces the text budget. Structured metadata, including complete ambiguity candidates, is separate from that text budget; callers must budget the JSON envelope themselves.
+5. Deliver through the shared Rust query engine. The Node CLI reaches Rust through NAPI; the MCP tool dispatcher reaches the same query engine. MCP exposes structured results and rendered context, not an independently generated interpretation of the graph.
+
+The implementation entry points are [pipeline orchestration](https://github.com/Nodesify/astria/blob/v1.4.0/crates/astria-napi/src/pipeline.rs), [reference resolution](https://github.com/Nodesify/astria/blob/v1.4.0/crates/astria-extract/src/refs.rs), [snapshot loading](https://github.com/Nodesify/astria/blob/v1.4.0/crates/astria-query/src/store.rs), [seed selection and query ranking](https://github.com/Nodesify/astria/blob/v1.4.0/crates/astria-query/src/lib.rs), [traversal and rendering](https://github.com/Nodesify/astria/blob/v1.4.0/crates/astria-query/src/render.rs), and [MCP dispatch](https://github.com/Nodesify/astria/blob/v1.4.0/crates/astria-mcp/src/lib.rs).
+
+### Failure and recovery boundaries
+
+| Situation | Published state and response | Next action |
+| --- | --- | --- |
+| Extraction or semantic extraction fails | Core graph and successful manifest do not advance; incomplete semantic output is not cached as complete | Inspect `diagnose`, correct the cause, retry `update` |
+| A derived stage fails after core publication | The successful core commit remains; artifacts or derived content may need reconciliation | Inspect freshness and retry the update; do not assume every output is one atomic bundle |
+| Explicit seed is missing or ambiguous | Missing names and candidate metadata are reported | Choose an exact candidate ID or inspect source; do not invent an endpoint |
+| Graph predates source or extraction rules | Freshness metadata discloses the mismatch | Run `astria update .` before relying on affected relationships |
+| Text budget is exhausted | Output is bounded and may include a continuation cursor | Follow the cursor or narrow the question; absence from one page is not absence from the graph |
+
+For a concrete agent procedure and machine-readable documentation entry points, see [AI workflow](../guides/ai-workflow).
 
 ## Crate responsibilities
 

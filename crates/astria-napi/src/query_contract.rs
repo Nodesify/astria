@@ -54,6 +54,7 @@ pub fn graph_freshness(root: String) -> napi::Result<GraphFreshnessJs> {
 
 #[napi(object)]
 pub struct QueryNodeJs {
+    pub retrieval_reason: String,
     pub id: String,
     pub label: String,
     pub file_type: String,
@@ -116,6 +117,7 @@ impl From<astria_query::QueryResponse> for QueryResultJs {
                 .nodes
                 .into_iter()
                 .map(|n| QueryNodeJs {
+                    retrieval_reason: n.retrieval_reason,
                     id: n.id,
                     label: n.label,
                     file_type: n.file_type,

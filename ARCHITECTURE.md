@@ -41,6 +41,10 @@ Semantic caches include source inputs and non-secret effective backend, endpoint
 
 CLI and MCP queries share a generation-keyed bounded snapshot cache per process. The LRU defaults to 3 entries (`ASTRIA_SNAPSHOT_CACHE_ENTRIES` 1..=16), keyed by database path and publication generation (`_meta.graph_generation`). A hit shares an immutable in-memory snapshot; a generation advance invalidates it. Unstamped databases bypass the cache. Each entry holds a complete node/edge snapshot; separate CLI invocations have separate caches.
 
+## Source-to-answer walkthrough
+
+The [architecture walkthrough](website/docs/explanation/architecture.md#from-source-files-to-an-answer) connects discovery, scoped reference resolution, SQLite publication, generation-keyed reads, seed disambiguation, traversal, token budgeting, and CLI/MCP delivery. It documents evidence classes and failure boundaries. The [AI workflow](website/docs/guides/ai-workflow.md) specifies how agents should query, verify source, assess impact, and refresh; machine-readable site exports use the released documentation snapshot and include dated blog context.
+
 ## Crate Responsibilities
 
 | Crate | Responsibility |
