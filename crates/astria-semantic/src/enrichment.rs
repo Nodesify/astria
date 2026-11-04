@@ -50,8 +50,11 @@ pub fn usage_snapshot() -> TokenUsage {
 /// formats astria speaks — OpenAI-compatible (`usage.prompt_tokens` /
 /// `completion_tokens`), Anthropic (`usage.input_tokens` / `output_tokens`),
 /// Gemini (`usageMetadata.*TokenCount`), and AWS Bedrock Converse
-/// (`usage.inputTokens` / `outputTokens`). A response without a usage
-/// block still counts its call: an unmeasured call must never look free.
+/// (`usage.inputTokens` / `outputTokens`). Anthropic prompt caching reports
+/// `cache_creation_input_tokens` / `cache_read_input_tokens` separately from
+/// (and in addition to) `input_tokens`; those tokens are counted back into
+/// the input ledger so a cached call never looks free. A response without a
+/// usage block still counts its call: an unmeasured call must never look free.
 pub fn record_usage(response: &serde_json::Value) {
     USAGE_CALLS.fetch_add(1, Ordering::Relaxed);
     let usage = response
@@ -67,6 +70,14 @@ pub fn record_usage(response: &serde_json::Value) {
         .or_else(|| usage.get("inputTokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let cached = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+        + usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
     let output = usage
         .get("completion_tokens")
         .or_else(|| usage.get("output_tokens"))
@@ -74,7 +85,7 @@ pub fn record_usage(response: &serde_json::Value) {
         .or_else(|| usage.get("outputTokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    USAGE_INPUT.fetch_add(input, Ordering::Relaxed);
+    USAGE_INPUT.fetch_add(input + cached, Ordering::Relaxed);
     USAGE_OUTPUT.fetch_add(output, Ordering::Relaxed);
 }
 
@@ -428,6 +439,22 @@ mod tests {
         assert_eq!(usage.input, 121);
         assert_eq!(usage.output, 30);
         assert_eq!(usage.calls, 4);
+    }
+
+    #[test]
+    fn record_usage_counts_anthropic_cached_tokens_into_input() {
+        let _guard = COUNTER_LOCK.lock().unwrap();
+        reset_usage();
+        // With prompt caching, Anthropic reports cached tokens separately
+        // from input_tokens; a cached call must not look cheaper than it was.
+        record_usage(&obj(r#"{"usage": {"input_tokens": 100,
+                         "cache_creation_input_tokens": 50,
+                         "cache_read_input_tokens": 200,
+                         "output_tokens": 20}}"#));
+        let usage = usage_snapshot();
+        assert_eq!(usage.input, 350);
+        assert_eq!(usage.output, 20);
+        assert_eq!(usage.calls, 1);
     }
 
     #[test]

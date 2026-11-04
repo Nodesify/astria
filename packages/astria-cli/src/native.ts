@@ -165,6 +165,7 @@ export const neo4jPushCmd = fn('neo4jPushCmd');
 export const healthReport = fn('healthReport');
 export const riskReport = fn('riskReport');
 export const tokenBenchmark = fn('tokenBenchmark');
+export const queryDefaults = fn('queryDefaults');
 export const queryGraph = fn('queryGraph');
 export const callflowMermaid = fn('callflowMermaid');
 export const repoMap = fn('repoMap');

@@ -18,7 +18,7 @@ astria run <path> --embed         # ...also compute local embeddings (similar_to
 astria run <path> --backend openai --model gpt-4o-mini  # ...with LLM semantic enrichment (see Semantic enrichment)
 astria run <path> --global --as <tag>  # ...also merge this repo into the cross-repo global graph (see Global graph)
 astria update <path>              # Reuse cached ASTs, reconcile current corpus; regenerate an existing wiki
-astria watch <path> [--debounce 3000] [--max-wait 15000]  # Reconcile at startup and after file changes
+astria watch <path> [--debounce 3000] [--max-wait 15000] [--timeout 600]  # Reconcile at startup and after file changes; kill a rebuild that exceeds the timeout (0 disables)
 astria cluster-only <path> [--resolution 0.5] [--exclude-hubs]  # Re-cluster + analyze + report without re-extracting
 astria merge <pathA> <pathB> <outPath> [--same-repo]  # Merge two graphs (namespaced per repo; --same-repo shares ids and errors on conflicts)
 astria diff <pathA> <pathB>       # Compare two graphs
@@ -71,13 +71,15 @@ astria history [--limit 20] [--graph .]        # Show recent query history
 ### Query flags {#query-flags}
 
 - `--dfs` — depth-first instead of breadth-first traversal
-- `--depth N` — maximum traversal depth
-- `--budget N` — maximum query text tokens using `o200k_base`, including headers and continuation metadata (default 2000)
+- `--depth N` — maximum traversal depth (default 2, or `[query] depth` in `.astria.toml`; an explicit flag always wins)
+- `--budget N` — maximum query text tokens using `o200k_base`, including headers and continuation metadata (default 2000, or `[query] budget` in `.astria.toml`; an explicit flag always wins). A malformed `[query]` entry warns and falls back to the built-in default
 - `--directed` — follow edge direction instead of treating the graph as undirected
 - `--detail high` — fidelity tier: only `EXTRACTED`/`DECLARED` facts (a provenance-class filter, not a numeric threshold), dropping inferred, semantic and learned edges, regardless of usage-adjusted confidence scores
 - `--cursor N` — continuation cursor for truncated traversals; use the returned value, which advances through node and edge records
 - `--no-embed` — skip auto-merged embedding seeds even when the graph carries vectors (same switch as `ASTRIA_EMBED=off`; see [Environment variables](./env-vars))
 - `--json` — machine-readable output instead of prose: `query` reports counts, the continuation cursor, build provenance, and the answer text; `explain`/`neighbors` return the strongest 20 neighbors, each with its edge direction in `outgoing` (the native layer caps the list — `explain --json` also reports `neighborCount`, the true total); `affected` returns every hit with depth, relation, and edge provenance; `stats` returns counts and type breakdown
+
+`path` reports conservative confidence: among equal-length shortest routes it returns the one whose weakest hop is weakest, marks that hop with `*`, and ends with a summary naming it (plus the equal-route count when there was a tie). Each hop prints its evidence — `[EXTRACTED]`/`[DECLARED]` stay bare; other classes show their numeric score, e.g. `[INFERRED 0.75]`. Weaker parallel edges between the same pair are preserved as `also seen` lines instead of being dropped.
 
 `affected` reports the evidence tier of every hop. `RESOLVED` (the default case) marks a call expression extracted from source whose name bound to exactly one definition — trustworthy for impact analysis. `EXTRACTED` marks directly-verified facts (contains/imports). Hops reached through `INFERRED` edges — no source locus, or a name too common to bind — are marked with a legend line, so a blast radius never presents guesswork as verified.
 

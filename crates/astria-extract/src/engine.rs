@@ -809,6 +809,81 @@ mod tests {
     }
 
     #[test]
+    fn crate_qualified_rust_calls_resolve() {
+        // `crate::module::f()` — the other idiomatic qualified form.
+        let dir = tempfile::tempdir().unwrap();
+        let def = dir.path().join("helpers.rs");
+        fs::write(&def, "pub fn helper() -> u32 {\n    1\n}\n").unwrap();
+        let caller = dir.path().join("main.rs");
+        fs::write(
+            &caller,
+            "mod helpers;\nfn run() {\n    let _ = crate::helpers::helper();\n}\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[def, caller], dir.path(), &db).unwrap();
+        let all_edges: Vec<&ExtractedEdge> = results.iter().flat_map(|r| r.edges.iter()).collect();
+        assert!(
+            all_edges.iter().any(|e| e.relation == "calls"
+                && (e.target.ends_with("::helper") || e.target.contains("helpers::helper"))),
+            "crate-qualified call should produce a calls edge, got: {:?}",
+            all_edges.iter().map(|e| &e.target).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rust_expression_macro_calls_are_extracted() {
+        // The grammar keeps macro token trees as raw tokens, so calls
+        // written inside `println!`/`vec!` need the expression-macro
+        // recovery pass. macro_rules! bodies stay untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("m.rs");
+        fs::write(
+            &file,
+            concat!(
+                "fn main() {\n",
+                "    println!(\"{}\", helper());\n",
+                "    let v = vec![helper()];\n",
+                "    let _ = (v);\n",
+                "}\n",
+                "fn helper() -> u32 { 1 }\n",
+            ),
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(std::slice::from_ref(&file), dir.path(), &db).unwrap();
+        let calls: Vec<&ExtractedEdge> = results
+            .iter()
+            .flat_map(|r| r.edges.iter())
+            .filter(|e| e.relation == "calls" && e.target.ends_with("::helper"))
+            .collect();
+        assert_eq!(
+            calls.len(),
+            2,
+            "one edge per macro call site, got: {:?}",
+            calls
+                .iter()
+                .map(|e| (e.source.as_str(), e.target.as_str()))
+                .collect::<Vec<_>>()
+        );
+        // A non-expression macro's contents are never re-parsed.
+        let dsl = dir.path().join("d.rs");
+        fs::write(
+            &dsl,
+            "macro_rules! route { ($f:expr) => { $f } }\nfn main() {\n    route!(helper());\n}\nfn helper() -> u32 { 1 }\n",
+        )
+        .unwrap();
+        let results = extract(std::slice::from_ref(&dsl), dir.path(), &db).unwrap();
+        assert!(
+            !results
+                .iter()
+                .flat_map(|r| r.edges.iter())
+                .any(|e| e.relation == "calls" && e.target.ends_with("::helper")),
+            "macro_rules! bodies must stay untouched"
+        );
+    }
+
+    #[test]
     fn extraction_uses_cache() {
         let dir = tempfile::tempdir().unwrap();
         let py = dir.path().join("main.py");

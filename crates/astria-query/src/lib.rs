@@ -2197,6 +2197,106 @@ at the lake house');",
     }
 
     #[test]
+    fn path_reports_weakest_hop_as_overall_confidence() {
+        let db = open_db_in_memory().unwrap();
+        let key = seed(&db);
+        // a --EXTRACTED--> b --SEMANTIC--> c --INFERRED 0.7--> d:
+        // the SEMANTIC hop is weakest (label rank 0.6), so the summary must
+        // name it — not the stronger hops around it.
+        let (_, _, text) = find_shortest_path(&db, &key, "Alpha", "Delta", false, 0.0).unwrap();
+        assert!(
+            text.contains(
+                "Path confidence: [SEMANTIC] — weakest hop is BetaService --calls--> Gamma"
+            ),
+            "summary missing or wrong: {text}"
+        );
+        // The weakest hop is marked in the hop list.
+        assert!(text.contains("--calls [SEMANTIC] *-->"), "{text}");
+        // A unique route is not called a tie.
+        assert!(!text.contains("equal-length"), "{text}");
+    }
+
+    #[test]
+    fn path_tie_breaks_to_the_weakest_route_and_notes_the_tie() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('s', 'Start', 'code', 't.rs'),
+                ('a', 'StrongMid', 'code', 't.rs'),
+                ('b', 'WeakMid', 'code', 't.rs'),
+                ('e', 'End', 'code', 't.rs');
+            INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file) VALUES
+                ('s', 'a', 'calls', 'EXTRACTED', 1.0, 't.rs'),
+                ('a', 'e', 'calls', 'EXTRACTED', 1.0, 't.rs'),
+                ('s', 'b', 'calls', 'INFERRED', 0.55, 't.rs'),
+                ('b', 'e', 'calls', 'INFERRED', 0.55, 't.rs');",
+        )
+        .unwrap();
+        let key = format!(":memory:tie_{}", std::process::id());
+        let (found, hops, text) = find_shortest_path(&db, &key, "Start", "End", true, 0.0).unwrap();
+        assert!(found);
+        assert_eq!(hops, 2);
+        // The conservative route runs through WeakMid even though StrongMid
+        // was inserted (and would be found) first.
+        assert!(
+            text.contains("WeakMid"),
+            "conservative route missing: {text}"
+        );
+        assert!(
+            !text.contains("StrongMid"),
+            "stronger route won the tie: {text}"
+        );
+        assert!(
+            text.contains("most conservative of 2 equal-length routes"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn path_lists_parallel_edge_evidence_as_also_seen() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('x', 'One', 'code', 'p.rs'),
+                ('y', 'Two', 'code', 'p.rs');
+            INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file) VALUES
+                ('x', 'y', 'calls', 'EXTRACTED', NULL, 'p.rs'),
+                ('x', 'y', 'imports', 'INFERRED', 0.6, 'p.rs');",
+        )
+        .unwrap();
+        let key = format!(":memory:parallel_{}", std::process::id());
+        let (found, hops, text) = find_shortest_path(&db, &key, "One", "Two", true, 0.0).unwrap();
+        assert!(found);
+        assert_eq!(hops, 1);
+        // The strongest evidence represents the hop; the weaker parallel
+        // copy is preserved as also-seen, not dropped. A single hop is also
+        // the weakest hop, so it carries the marker.
+        assert!(text.contains("--calls [EXTRACTED] *-->"), "{text}");
+        assert!(
+            text.contains("also seen: One --imports [INFERRED 0.60]--> Two"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn parallel_edges_do_not_double_count_routes() {
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('x', 'One', 'code', 'p.rs'),
+                ('y', 'Two', 'code', 'p.rs');
+            INSERT INTO edges (source, target, relation, confidence, confidence_score, source_file) VALUES
+                ('x', 'y', 'calls', 'EXTRACTED', NULL, 'p.rs'),
+                ('x', 'y', 'imports', 'EXTRACTED', NULL, 'p.rs');",
+        )
+        .unwrap();
+        let key = format!(":memory:parallelct_{}", std::process::id());
+        let (_, _, text) = find_shortest_path(&db, &key, "One", "Two", true, 0.0).unwrap();
+        // Two parallel edges are one route with two evidences, not two routes.
+        assert!(!text.contains("equal-length"), "{text}");
+    }
+
+    #[test]
     fn explain_sorts_by_numeric_strength_not_alphabet() {
         let db = open_db_in_memory().unwrap();
         let key = seed(&db);

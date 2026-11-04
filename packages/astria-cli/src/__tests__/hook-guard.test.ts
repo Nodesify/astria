@@ -21,6 +21,7 @@ import {
   symbolIndex,
   contextAlreadyEmitted,
   markContextEmitted,
+  searchScopeOutsideRoot,
 } from '../commands/hook-guard';
 
 let passed = 0;
@@ -150,6 +151,34 @@ function testContextEmissionDedupe() {
   assert(!contextAlreadyEmitted(gdir, 'search:foo', 0), 'dedupe: zero TTL always re-emits');
 }
 
+function testSearchScopeOutsideRoot() {
+  // The guard resolves scopes against CLAUDE_PROJECT_DIR (falling back to
+  // cwd); pin it so the containment checks are deterministic.
+  const root = tmpDir('astria-guard-scope-');
+  process.env.CLAUDE_PROJECT_DIR = root;
+  const inside = path.join(root, 'src');
+  const outsideDir = tmpDir('astria-guard-external-');
+
+  // Inside scopes: no hint suppression.
+  assert(!searchScopeOutsideRoot(path.join(inside, 'a.ts'), ''), 'scope: grep path inside root');
+  assert(!searchScopeOutsideRoot(undefined, `grep foo ${path.join(inside, 'a.ts')}`), 'scope: bash path inside root');
+  assert(!searchScopeOutsideRoot(undefined, 'rg foo'), 'scope: no path is project-scoped');
+  assert(!searchScopeOutsideRoot('src/a.ts', ''), 'scope: relative bare path is not an explicit scope');
+
+  // Outside scopes: suppressed.
+  assert(searchScopeOutsideRoot(path.join(outsideDir, 'x.ts'), ''), 'scope: grep path outside root');
+  assert(searchScopeOutsideRoot(undefined, `grep foo ${path.join(outsideDir, 'x.ts')}`), 'scope: bash path outside root');
+  assert(searchScopeOutsideRoot(undefined, `rg foo ~/notes/todo.txt`), 'scope: home-relative scope is outside');
+
+  // Only path-shaped tokens count; patterns and flags never trip it.
+  assert(!searchScopeOutsideRoot(undefined, 'grep -rn "TODO stuff" .'), 'scope: trailing dot stays inside');
+  assert(!searchScopeOutsideRoot(undefined, 'rg "error/value" src'), 'scope: slash inside a pattern is not a scope');
+
+  delete process.env.CLAUDE_PROJECT_DIR;
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(outsideDir, { recursive: true, force: true });
+}
+
 function main() {
   testExtractSearchPattern();
   testMatchSymbols();
@@ -157,6 +186,7 @@ function main() {
   testDisplayAndFormat();
   testSymbolIndexBuildAndCache();
   testContextEmissionDedupe();
+  testSearchScopeOutsideRoot();
 
   console.log(`\n${passed} passed, ${failed} failed (hook-guard)`);
   if (failed > 0) process.exit(1);

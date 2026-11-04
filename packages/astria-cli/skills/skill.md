@@ -115,6 +115,21 @@ architecture, cross-module dependencies), then read those files directly
 for exact logic. Graph output includes `file:line` anchors precisely so
 you can jump straight from a node or edge to the source.
 
+### Bypass check (hub/bridge questions only)
+
+A hub question's neighbour listing (`astria explain <node>`, `astria god-nodes`)
+only shows code that already has an edge to the hub — it cannot show code that
+does the hub's job without ever calling it. When answering why a node bridges
+communities or has unusually many edges: pick one or two literal, distinctive
+things the hub does (a hard-coded constant it wraps, a specific string it
+returns, the exact computation in its body), then grep the corpus for that
+literal text in files with **no edge** to the hub in the traversed subgraph.
+Report hits separately, labelled "Bypasses" — each is a file that reimplements
+the hub instead of using it. Also check whether the hub's own community label
+names its heaviest consumer rather than the hub itself (a shared utility is
+often clustered into its biggest user's community); if so, say so plainly in
+the answer instead of letting the label stand.
+
 ### Provenance and reference nodes
 
 - Every `NODE` line in `query` output carries `src=path:line`, and every
@@ -233,6 +248,8 @@ Find shortest path between two concepts.
 astria path "AuthService" "Database"
 astria path "AuthService" "Database" --directed   # only caller -> callee direction
 ```
+
+When several equal-length routes exist, the most conservative one is reported: among all shortest paths, the route whose weakest hop is weakest, and the summary names that hop. Each hop prints its evidence (`[EXTRACTED]`, `[INFERRED 0.75]`); when parallel edges between the same pair were collapsed for display, the weaker copies' evidence is listed as `also seen`.
 
 ### `astria affected <node> [options]`
 
