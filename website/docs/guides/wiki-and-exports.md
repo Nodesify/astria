@@ -49,6 +49,8 @@ The viewer is safe to open on graphs built from untrusted repositories: node and
 
 ## GraphML, JSON and Neo4j
 
+The interactive viewer's neighbor panel retains every relationship label between a pair of nodes. If two symbols are connected through multiple relations, inspecting the neighbor shows those relations rather than replacing one with another.
+
 ```bash
 astria export --graph . --out graph.json --format json     # default
 astria export --graph . --out graph.graphml --format graphml
