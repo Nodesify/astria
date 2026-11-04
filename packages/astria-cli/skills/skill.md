@@ -144,8 +144,10 @@ the answer instead of letting the label stand.
   fields, constructor parameter properties, typed locals) resolve the same
   `RESOLVED` way; ambiguous receivers stay `INFERRED`.
 - `dispatch` edges connect an interface member to every implementing
-  class's same-named member — possible implementations for
-  dependency-injection flows, NOT proven runtime calls.
+  type's same-named member (TypeScript `implements` clauses; Go's implicit
+  method-set satisfaction) — possible implementations for
+  dependency-injection flows, NOT proven runtime calls. `inherits` edges
+  carry the class's own extends/implements clause to the resolved base.
 - `graph_stats` (and `astria stats`) disclose extraction completeness per
   file (`complete`, `partial`, `suspicious_empty`, `unsupported`,
   `skipped`): before concluding "no relationship exists", check that the

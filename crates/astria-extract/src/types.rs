@@ -1,12 +1,13 @@
 //! Type-aware call resolution for the TypeScript family: receiver bindings
 //! (constructor parameter properties, typed class fields, typed locals,
-//! `new` initializers), class/interface heritage, and interface-dispatch
-//! edges. Everything here is name/type-derived evidence — never
-//! compiler-proven — so bindings resolve only through the same unique-name
-//! rules as the rest of the resolver, and ambiguity stays unresolved.
+//! `new` initializers), class/interface heritage, inheritance edges, and
+//! interface-dispatch edges. Everything here is name/type-derived
+//! evidence — never compiler-proven — so bindings resolve only through
+//! the same unique-name rules as the rest of the resolver, and ambiguity
+//! stays unresolved.
 
 use crate::schema::{ExtractedEdge, Extraction};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use tree_sitter::{Node, Parser};
@@ -289,7 +290,7 @@ impl<'a> Walker<'a> {
 
     fn walk(&mut self, node: Node) {
         match node.kind() {
-            "class_declaration" | "class" => {
+            "class_declaration" | "abstract_class_declaration" | "class" => {
                 let label = node
                     .child_by_field_name("name")
                     .map(|n| self.text(n).to_string());
@@ -964,6 +965,61 @@ pub fn add_dispatch_edges(results: &mut [Extraction], index: &TypeIndex) -> usiz
     added
 }
 
+/// Class-heritage edges: an `extends`/`implements` clause is explicit in
+/// the source, so once the base name resolves to exactly one class-like
+/// node the class gets an `inherits` edge to it (EXTRACTED — the same
+/// unique-name rule the rest of the resolver applies; an ambiguous or
+/// unknown base stays unlinked). Dispatch connects interface members to
+/// implementers, but inheritance questions and impact analysis need the
+/// base link itself, which previously did not exist. `extends A` plus
+/// `implements A` on one class collapses to a single edge.
+pub fn add_heritage_edges(results: &mut [Extraction], index: &TypeIndex) -> usize {
+    let view = build_class_view(results);
+    let mut pending: Vec<(PathBuf, ExtractedEdge)> = Vec::new();
+    for heritage in &index.heritage {
+        let file = file_key(&heritage.file);
+        let Some(class_ids) = view
+            .decl_ids
+            .get(&(file.clone(), heritage.class_label.clone()))
+        else {
+            continue;
+        };
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (_, base) in &heritage.bases {
+            if !seen.insert(base.as_str()) {
+                continue;
+            }
+            let Some(base_id) = view.resolve_type(&file, base).first().cloned() else {
+                continue;
+            };
+            for class_id in class_ids {
+                if *class_id == base_id {
+                    continue;
+                }
+                pending.push((
+                    heritage.file.clone(),
+                    ExtractedEdge {
+                        source: class_id.clone(),
+                        target: base_id.clone(),
+                        relation: "inherits".to_string(),
+                        confidence: "EXTRACTED".to_string(),
+                        confidence_score: Some(1.0),
+                        source_file: heritage.file.clone(),
+                        source_line: None,
+                    },
+                ));
+            }
+        }
+    }
+    let added = pending.len();
+    for (file, edge) in pending {
+        if let Some(ext) = results.iter_mut().find(|e| e.file_path == file) {
+            ext.edges.push(edge);
+        }
+    }
+    added
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,6 +1035,41 @@ mod tests {
         ext.language = source_lang.to_string();
         ext.status = ExtractionStatus::Complete;
         ext
+    }
+
+    #[test]
+    fn heritage_edges_link_bases_and_dedupe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hierarchy.ts");
+        let source = "interface Runnable {\n  run(): void;\n}\nabstract class Task {}\nclass Job extends Task implements Runnable {\n  run(): void {}\n}\n";
+        let mut results = vec![extraction(&path, "TypeScript", source)];
+        let index = build_type_index(&results);
+        let added = add_heritage_edges(&mut results, &index);
+        let inherits: Vec<(&str, &str)> = results[0]
+            .edges
+            .iter()
+            .filter(|e| e.relation == "inherits")
+            .map(|e| (e.source.as_str(), e.target.as_str()))
+            .collect();
+        // `extends Task` and `implements Runnable` are two distinct bases;
+        // a base listed by both clauses would collapse to one edge.
+        assert_eq!(added, 2, "edges: {inherits:?}");
+        assert!(
+            inherits
+                .iter()
+                .any(|(s, t)| s.ends_with("::Job") && t.ends_with("::Task")),
+            "{inherits:?}"
+        );
+        assert!(
+            inherits
+                .iter()
+                .any(|(s, t)| s.ends_with("::Job") && t.ends_with("::Runnable")),
+            "{inherits:?}"
+        );
+        assert!(
+            inherits.iter().all(|(_, t)| !t.ends_with("::Job")),
+            "a class never inherits itself"
+        );
     }
 
     #[test]
