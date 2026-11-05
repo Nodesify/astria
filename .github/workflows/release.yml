@@ -174,6 +174,15 @@ jobs:
         # node_modules for the napi tooling; scripts/check-napi-version.mjs
         # guards the lockfile dependency this bypasses.
         run: cd packages/astria-cli && npm ci
+      - name: Force ort-sys build script rerun on Windows x64
+        if: matrix.platform == 'win32-x64-msvc'
+        # Must run BEFORE the build: a restored rust-cache can mark ort-sys
+        # fresh while missing the downloaded DirectML runtime its build
+        # script places in the build directory, so the collect step below
+        # finds no link-search output. Removing the build directory here
+        # makes the build re-run build.rs, which re-downloads the runtime.
+        shell: bash
+        run: rm -rf target/${{ matrix.target }}/release/build/ort-sys-*
       - name: Build native binary
         env:
           NAPI_RS_CLI_VERSION: '3.10.8'
