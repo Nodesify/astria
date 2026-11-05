@@ -178,6 +178,15 @@ jobs:
         env:
           NAPI_RS_CLI_VERSION: '3.10.8'
         run: cargo build --release --locked --target ${{ matrix.target }} -p astria-napi ${{ matrix.cargo-flags }}
+      - name: Rebuild ort-sys on Windows x64
+        if: matrix.platform == 'win32-x64-msvc'
+        # A restored rust-cache can mark ort-sys fresh while missing the
+        # downloaded DirectML runtime its build script places in the build
+        # directory, so the collect step below finds no link-search output.
+        # Removing the build directory forces build.rs to re-run and
+        # re-download the runtime deterministically.
+        shell: bash
+        run: rm -rf target/${{ matrix.target }}/release/build/ort-sys-*
       - name: Copy artifact (Linux/macOS)
         if: runner.os != 'Windows'
         # dist/ is untracked (build output) — create it before the copy
