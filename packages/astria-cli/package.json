@@ -49,7 +49,7 @@
     "tsx": "^4.23.15",
     "typescript": "^7",
     "@types/node": "^22",
-    "@napi-rs/cli": "^3.10.8"
+    "@napi-rs/cli": "^3.10.9"
   },
   "engines": {
     "node": ">=22"
