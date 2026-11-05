@@ -15,8 +15,14 @@ pub fn config() -> &'static LanguageConfig {
         compiled_in: cfg!(feature = "lang-typescript"),
         // Interfaces are structural declarations with members: extracting
         // them as class-kind nodes lets dispatch edges link interface
-        // members to implementing classes (relation `dispatch`).
-        class_types: &["class_declaration", "interface_declaration"],
+        // members to implementing classes (relation `dispatch`). Abstract
+        // classes are their own grammar kind — without it, the most common
+        // `extends` target was invisible to the graph.
+        class_types: &[
+            "class_declaration",
+            "abstract_class_declaration",
+            "interface_declaration",
+        ],
         function_types: &[
             "function_declaration",
             "generator_function_declaration",

@@ -175,6 +175,14 @@ export interface GraphFreshnessJs {
 }
 export function graphFreshness(root: string): GraphFreshnessJs;
 
+export interface QueryDefaultsJs {
+  budget: number | null;
+  depth: number | null;
+  /** Why a value was rejected, when one was; the caller falls back to the built-in defaults for that setting. */
+  warning: string | null;
+}
+export function queryDefaults(root: string): QueryDefaultsJs;
+
 export interface RepoMapJs {
   text: string;
   filesShown: number;

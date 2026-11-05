@@ -166,20 +166,29 @@ if (existsSync(entry)) {
   console.log('(dist not built - skipping entrypoint load check)');
 }
 
-// Test 5: the --budget default comes from the shared constant in
+// Test 5: budget defaults resolve through the shared constant in
 // src/defaults.ts (kept in sync with DEFAULT_QUERY_BUDGET in
 // crates/astria-mcp/src/lib.rs) — not a hardcoded literal that can drift
-// from the MCP server's default.
+// from the MCP server's default. `map` pins the commander-level default;
+// `query` deliberately leaves it unset so `[query] budget` in .astria.toml
+// can win over the built-in when no flag is passed (resolution order:
+// explicit flag > project config > DEFAULT_QUERY_BUDGET).
 function budgetDefault(commandName: string): unknown {
   const command = program.commands.find((c: Command) => c.name() === commandName);
   return command?.options.find((o) => o.long === '--budget')?.defaultValue;
 }
-for (const name of ['query', 'map']) {
-  assert(
-    budgetDefault(name) === String(DEFAULT_QUERY_BUDGET),
-    `${name} --budget default should be String(DEFAULT_QUERY_BUDGET), got ${budgetDefault(name)}`,
-  );
-}
+assert(
+  budgetDefault('map') === String(DEFAULT_QUERY_BUDGET),
+  `map --budget default should be String(DEFAULT_QUERY_BUDGET), got ${budgetDefault('map')}`,
+);
+assert(
+  budgetDefault('query') === undefined,
+  `query --budget must have no commander default (project config fills it), got ${budgetDefault('query')}`,
+);
+assert(
+  DEFAULT_QUERY_BUDGET === 2000,
+  `DEFAULT_QUERY_BUDGET should stay in sync with the MCP default, got ${DEFAULT_QUERY_BUDGET}`,
+);
 
 // Summary
 console.log(`\n${passed} passed, ${failed} failed`);

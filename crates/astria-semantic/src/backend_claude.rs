@@ -39,7 +39,7 @@ impl ClaudeBackend {
         serde_json::json!({
             "model": self.model,
             "max_tokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT,
-            "system": system_prompt(file_type),
+            "system": system_field(system_prompt(file_type)),
             "messages": [
                 {"role": "user", "content": content}
             ]
@@ -50,7 +50,7 @@ impl ClaudeBackend {
         serde_json::json!({
             "model": self.model,
             "max_tokens": enrichment::MAX_OUTPUT_TOKENS_EXTRACT,
-            "system": vision_prompt(),
+            "system": system_field(vision_prompt()),
             "messages": [
                 {"role": "user", "content": [
                     {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
@@ -112,7 +112,7 @@ impl ClaudeBackend {
         serde_json::json!({
             "model": self.model,
             "max_tokens": enrichment::MAX_OUTPUT_TOKENS_COMPLETE,
-            "system": system,
+            "system": system_field(system.to_string()),
             "messages": [
                 {"role": "user", "content": user}
             ]
@@ -180,6 +180,28 @@ impl SemanticBackend for ClaudeBackend {
 
     fn complete(&self, system: &str, user: &str) -> Result<String> {
         self.claude_complete_text(self.claude_chat_body(system, user))
+    }
+}
+
+/// Whether the system prompt should be sent in block form marked cacheable
+/// with `cache_control`. The system prompt is large and stable across a run,
+/// so caching it bills repeat calls at the cached rate. Some gateways reject
+/// the field; `ASTRIA_CLAUDE_PROMPT_CACHE=0` opts out and restores the
+/// plain-string form.
+fn prompt_cache_enabled() -> bool {
+    astria_core::env_var("CLAUDE_PROMPT_CACHE").as_deref() != Some("0")
+}
+
+/// Build the Messages-API `system` field, preferring the cacheable block form.
+fn system_field(text: String) -> serde_json::Value {
+    if prompt_cache_enabled() {
+        serde_json::json!([{
+            "type": "text",
+            "text": text,
+            "cache_control": {"type": "ephemeral"},
+        }])
+    } else {
+        serde_json::Value::String(text)
     }
 }
 

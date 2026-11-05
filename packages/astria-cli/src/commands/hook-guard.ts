@@ -8,12 +8,14 @@
 // error: a wedged guard must never break a tool call.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'fs';
-import { join, resolve, extname } from 'path';
+import { join, resolve, extname, sep } from 'path';
+import { homedir } from 'os';
+import { createHash } from 'crypto';
 import { writeTextAtomic } from '../install/atomic';
 
 interface ToolInput {
   tool_name?: string;
-  tool_input?: { command?: string; pattern?: string; file_path?: string };
+  tool_input?: { command?: string; pattern?: string; path?: string; file_path?: string };
 }
 
 export interface SymbolEntry {
@@ -322,6 +324,51 @@ function suggestable(s: string): string {
   return s.replace(/["`$\\]/g, '');
 }
 
+/// Whether a search is scoped outside the project root — such a search is
+/// not this graph's business, so it gets no project hints and no strict
+/// gating. Only recognizable explicit paths count: the Grep tool's `path`
+/// input, or a Bash token shaped like a path (`./x`, a parent-relative x,
+/// `/x`, `~x`, `X:\x`). Bare names are ignored — they are usually patterns
+/// or flags. Paths here are only ever COMPARED, never opened; containment
+/// is checked by resolved-prefix comparison.
+export function searchScopeOutsideRoot(grepPath: string | undefined, cmd: string): boolean {
+  const root = resolve(projectRootDir());
+  const outside = (p: string): boolean => {
+    try {
+      const abs = resolve(p);
+      return !(abs === root || abs.startsWith(root + sep));
+    } catch {
+      return false;
+    }
+  };
+  const expand = (t: string): string => (t.startsWith('~') ? join(homedir(), t.slice(1)) : t);
+  const looksLikePath = (t: string): boolean => /^(\.{1,2}[\\/]|[\\/]|~|[a-zA-Z]:[\\/])/.test(t);
+  if (grepPath && grepPath.trim() && looksLikePath(grepPath.trim())) {
+    return outside(expand(grepPath.trim()));
+  }
+  return cmd
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(looksLikePath)
+    .some((t) => outside(expand(t)));
+}
+
+/// Emits the orientation deny at most once per orientation window, reusing
+/// the once-per-key context state (keyed by a digest of the session id).
+function denyOncePerSession(gdir: string, reason: string): void {
+  const digest = createHash('sha256')
+    .update(process.env.CLAUDE_SESSION_ID || 'default')
+    .digest('hex')
+    .slice(0, 32);
+  const key = `strict-deny:${digest}`;
+  const ttl = contextTtlSeconds();
+  if (!contextAlreadyEmitted(gdir, key, ttl)) {
+    markContextEmitted(gdir, key, ttl);
+    emitDeny(reason);
+  }
+}
+
 /// `label (path:line)` entries for a search nudge; the list shrinks until
 /// the whole message fits the bound.
 export function formatSymbolList(entries: SymbolEntry[], root: string, limit: number): string {
@@ -365,6 +412,10 @@ export function hookGuard(mode: string, _args: string[]): void {
           ? cmd.split(/\s+/)[1] === 'grep'
           : SEARCH_COMMANDS.has(first);
       if (isGrepTool || isSearchBash) {
+        // A search scoped outside the project root (another checkout, the
+        // home directory, a vendored path) has nothing to do with this
+        // graph: no hints, no strict gating.
+        if (searchScopeOutsideRoot(isGrepTool ? ti.path : undefined, cmd)) return;
         const pattern = ((ti.pattern || '').trim() || extractSearchPattern(cmd) || '').trim();
         const index = contextEnabled && pattern ? symbolIndex(gdir) : null;
         const hits = index ? matchSymbols(index, pattern, CONTEXT_SYMBOL_LIMIT) : [];
@@ -376,19 +427,47 @@ export function hookGuard(mode: string, _args: string[]): void {
             const seed = suggestable(truncateLabel(hits[0].l));
             const needle = suggestable(pattern) || pattern;
             const list = formatSymbolList(hits, projectRootDir(), 700);
+            // Worded as facts, not imperatives: the tool-result stream
+            // must not read this as an instruction addressed to the agent.
             emitNudge(
               `GRAPH-FIRST: ${hits.length === 1 ? 'a graph symbol already matches' : `${hits.length} graph symbols already match`} ` +
                 `"${needle}": ${list}. ` +
-                `Try \`astria query --seed "${seed}" "${needle}"\` or \`astria explain "${seed}"\` ` +
-                'for structured answers with file:line provenance instead of grep.'
+                `\`astria explain "${seed}"\` returns the matches with file:line provenance; ` +
+                `\`astria query --seed "${seed}" "${needle}"\` answers a question around them.`
             );
           }
           return;
         }
+        // Strict: a single-file Grep over a file the graph indexes is the
+        // same orientation gap as an un-indexed read — deny it once per
+        // session. Files the graph does NOT index always pass through.
+        if (strict && isGrepTool && typeof ti.path === 'string' && ti.path.trim()) {
+          const target = resolve(ti.path);
+          let isFile = false;
+          try {
+            isFile = statSync(target).isFile();
+          } catch {
+            // Not a file (or gone): never gate on it.
+          }
+          if (isFile) {
+            const index2 = symbolIndex(gdir);
+            const covered = index2
+              ? symbolsInFile(index2, projectRootDir(), target).length > 0
+              : false;
+            if (covered && !orientedRecently(gdir)) {
+              denyOncePerSession(
+                gdir,
+                'ORIENT FIRST: this single-file search covers a file the knowledge graph indexes. ' +
+                  'One `astria query "<question>"` (or explain) call covers the session — ' +
+                  'after that, searches proceed without interruption for 30 minutes.'
+              );
+              return;
+            }
+          }
+        }
         emitNudge(
-          'MANDATORY: Before searching with grep, check the knowledge graph first: ' +
-            '`astria query "<question>"` returns structured answers with ' +
-            'file:line provenance in one call. The graph is already built for this repo.'
+          'GRAPH AVAILABLE: `astria query "<question>"` answers with file:line provenance ' +
+            'in one call for this repo, and the graph is already built.'
         );
       }
       return;
@@ -407,8 +486,8 @@ export function hookGuard(mode: string, _args: string[]): void {
         const graphMtime = statSync(join(gdir, 'db.sqlite')).mtimeMs;
         if (fileMtime > graphMtime) {
           emitNudge(
-            `STALE GRAPH: ${filePath} changed after the last graph build. ` +
-              'Run `astria update .` before trusting graph answers.'
+            `STALE GRAPH: ${filePath} changed after the last graph build, so graph answers predate this edit. ` +
+              '`astria update .` refreshes the graph.'
           );
           return;
         }
@@ -417,24 +496,12 @@ export function hookGuard(mode: string, _args: string[]): void {
       }
       // Strict: deny one un-indexed read per session until oriented.
       if (strict && input.tool_name === 'Read' && !orientedRecently(gdir)) {
-        // Session ids become filenames; strip anything that could carry a
-        // path separator or traversal before using one.
-        const session =
-          (process.env.CLAUDE_SESSION_ID || 'default')
-            .replace(/[^A-Za-z0-9_-]/g, '')
-            .slice(0, 64) || 'default';
-        const marker = join(gdir, 'cache', 'hook_sessions', `${session}.denied`);
-        try {
-          mkdirSync(join(gdir, 'cache', 'hook_sessions'), { recursive: true });
-          writeFileSync(marker, String(Date.now()), { flag: 'wx' });
-          emitDeny(
-            'ORIENT FIRST: this read is not yet covered by a graph query. ' +
-              'Run `astria query "<question>"` (or explain/path) once — ' +
-              'further reads then proceed without interruption for 30 minutes.'
-          );
-        } catch {
-          // Marker exists: already denied once this session — allow.
-        }
+        denyOncePerSession(
+          gdir,
+          'ORIENT FIRST: this read is not yet covered by a graph query. ' +
+            'One `astria query "<question>"` (or explain/path) call covers the session — ' +
+            'after that, reads proceed without interruption for 30 minutes.'
+        );
         return;
       }
       // Contextual guidance: name the symbols the graph knows in this file
@@ -455,7 +522,7 @@ export function hookGuard(mode: string, _args: string[]): void {
             emitNudge(
               `GRAPH CONTEXT: the knowledge graph indexes ${hits.length === 1 ? 'a symbol' : `${hits.length} symbols`} in ` +
                 `${displayPath(projectRootDir(), hits[0].f)}: ${parts.join(', ')}. ` +
-                `Start with \`astria explain "${hub}"\` for their connections instead of reading line by line.`
+                `\`astria explain "${hub}"\` maps how they connect.`
             );
           }
         }

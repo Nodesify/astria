@@ -18,7 +18,10 @@ const SKIP_DIRS = new Set([
   '.cache',
 ]);
 
-export async function watchCommand(watchPath: string, opts: { debounce: string; maxWait?: string }) {
+export async function watchCommand(
+  watchPath: string,
+  opts: { debounce: string; maxWait?: string; timeout?: string }
+) {
   const debounceMs = Number(opts.debounce || '3000');
   if (!Number.isFinite(debounceMs) || debounceMs <= 0) {
     console.error(`Error: invalid --debounce value "${opts.debounce}" (must be a positive number of milliseconds)`);
@@ -31,6 +34,19 @@ export async function watchCommand(watchPath: string, opts: { debounce: string; 
     process.exitCode = 1;
     return;
   }
+  // Each rebuild is bounded so a hung one cannot stall the watcher: the
+  // child is killed after the cap and watching continues with the next
+  // queued rebuild. `0` disables the bound. Default 600s, overridable via
+  // ASTRIA_REBUILD_TIMEOUT; an explicit --timeout wins.
+  const timeoutSec = Number(
+    opts.timeout ?? process.env.ASTRIA_REBUILD_TIMEOUT ?? '600'
+  );
+  if (!Number.isFinite(timeoutSec) || timeoutSec < 0) {
+    console.error(`Error: invalid --timeout value "${opts.timeout}" (must be 0 or a positive number of seconds)`);
+    process.exitCode = 1;
+    return;
+  }
+  const timeoutMs = timeoutSec > 0 ? timeoutSec * 1000 : 0;
   const resolved = path.resolve(watchPath);
 
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
@@ -66,12 +82,26 @@ export async function watchCommand(watchPath: string, opts: { debounce: string; 
     console.log(`\n[astria] ${pendingEvents.size} change event(s), rebuilding...`);
     pendingEvents.clear();
     let finished = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
+    const clearRebuildTimers = () => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (graceTimer) clearTimeout(graceTimer);
+      timeoutTimer = graceTimer = null;
+    };
     const complete = (code: number | null, error?: Error) => {
       if (finished) return;
       finished = true;
+      clearRebuildTimers();
       activeChild = null;
       rebuildInFlight = false;
       if (error) console.error('[astria] Rebuild could not start:', error.message);
+      else if (timedOut)
+        console.error(
+          `[astria] Rebuild exceeded ${timeoutSec}s and was terminated; the graph may be stale until the next change. ` +
+            'Raise --timeout or set ASTRIA_REBUILD_TIMEOUT if large rebuilds are expected here.'
+        );
       else if (code !== 0 && !stopped) console.error(`[astria] Rebuild exited with code ${code}`);
       if (!stopped && rebuildQueued) {
         rebuildQueued = false;
@@ -83,6 +113,16 @@ export async function watchCommand(watchPath: string, opts: { debounce: string; 
       activeChild = child;
       child.once('error', err => complete(null, err));
       child.once('exit', code => complete(code));
+      if (timeoutMs > 0) {
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          console.error(`[astria] Rebuild still running after ${timeoutSec}s, terminating it...`);
+          // This child belongs to this watcher; never terminate process categories.
+          child.kill('SIGTERM');
+          // Escalate if the process ignores SIGTERM.
+          graceTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
+        }, timeoutMs);
+      }
     } catch (err) {
       complete(null, err instanceof Error ? err : new Error(String(err)));
     }

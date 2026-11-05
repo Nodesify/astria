@@ -92,6 +92,7 @@ program
   .argument('<path>', 'Directory to watch')
   .option('--debounce <ms>', 'Debounce interval in milliseconds', '3000')
   .option('--max-wait <ms>', 'Maximum delay before indexing continuous edits', '15000')
+  .option('--timeout <s>', 'Kill a rebuild that runs longer than this many seconds (0 disables; default 600, or ASTRIA_REBUILD_TIMEOUT)')
   .action(watchCommand);
 
 program
@@ -108,8 +109,8 @@ program
   .argument('<question>', 'Search terms')
   .option('--graph <path>', 'Path to project root', '.')
   .option('--dfs', 'Use depth-first search instead of breadth-first')
-  .option('--depth <n>', 'Traversal depth', '2')
-  .option('--budget <n>', 'Token budget for output', String(DEFAULT_QUERY_BUDGET))
+  .option('--depth <n>', 'Traversal depth (default 2, or [query] depth in .astria.toml)')
+  .option('--budget <n>', `Token budget for output (default ${DEFAULT_QUERY_BUDGET}, or [query] budget in .astria.toml)`)
   .option('--directed', 'Follow edges only in their stored direction (caller -> callee)')
   .option('--detail <level>', 'Fidelity tier: "high" keeps only EXTRACTED/DECLARED facts')
   .option('--cursor <n>', 'Continuation token from a previous truncated query', '0')

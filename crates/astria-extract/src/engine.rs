@@ -380,6 +380,15 @@ fn extract_inner(
         results[file].edges[edge_index].target = target;
     }
     crate::types::add_dispatch_edges(&mut results, &type_index);
+    // Heritage edges (`inherits`) for the TS family: an explicit
+    // extends/implements clause linking to the resolved base node.
+    crate::types::add_heritage_edges(&mut results, &type_index);
+
+    // Go: interface nodes + implicit-implementer dispatch edges, and
+    // member calls on declared-receiver locals. Python: module-level
+    // singletons. Both re-parse the corpus like the TS passes above.
+    crate::langs::go_infer::run(&mut results, root);
+    crate::langs::python_infer::run(&mut results);
 
     Ok(results)
 }
@@ -806,6 +815,265 @@ mod tests {
             "qualified call should resolve to the definition id, got targets: {:?}",
             all_edges.iter().map(|e| &e.target).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn crate_qualified_rust_calls_resolve() {
+        // `crate::module::f()` — the other idiomatic qualified form.
+        let dir = tempfile::tempdir().unwrap();
+        let def = dir.path().join("helpers.rs");
+        fs::write(&def, "pub fn helper() -> u32 {\n    1\n}\n").unwrap();
+        let caller = dir.path().join("main.rs");
+        fs::write(
+            &caller,
+            "mod helpers;\nfn run() {\n    let _ = crate::helpers::helper();\n}\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[def, caller], dir.path(), &db).unwrap();
+        let all_edges: Vec<&ExtractedEdge> = results.iter().flat_map(|r| r.edges.iter()).collect();
+        assert!(
+            all_edges.iter().any(|e| e.relation == "calls"
+                && (e.target.ends_with("::helper") || e.target.contains("helpers::helper"))),
+            "crate-qualified call should produce a calls edge, got: {:?}",
+            all_edges.iter().map(|e| &e.target).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rust_expression_macro_calls_are_extracted() {
+        // The grammar keeps macro token trees as raw tokens, so calls
+        // written inside `println!`/`vec!` need the expression-macro
+        // recovery pass. macro_rules! bodies stay untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("m.rs");
+        fs::write(
+            &file,
+            concat!(
+                "fn main() {\n",
+                "    println!(\"{}\", helper());\n",
+                "    let v = vec![helper()];\n",
+                "    let _ = (v);\n",
+                "}\n",
+                "fn helper() -> u32 { 1 }\n",
+            ),
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(std::slice::from_ref(&file), dir.path(), &db).unwrap();
+        let calls: Vec<&ExtractedEdge> = results
+            .iter()
+            .flat_map(|r| r.edges.iter())
+            .filter(|e| e.relation == "calls" && e.target.ends_with("::helper"))
+            .collect();
+        assert_eq!(
+            calls.len(),
+            2,
+            "one edge per macro call site, got: {:?}",
+            calls
+                .iter()
+                .map(|e| (e.source.as_str(), e.target.as_str()))
+                .collect::<Vec<_>>()
+        );
+        // A non-expression macro's contents are never re-parsed.
+        let dsl = dir.path().join("d.rs");
+        fs::write(
+            &dsl,
+            "macro_rules! route { ($f:expr) => { $f } }\nfn main() {\n    route!(helper());\n}\nfn helper() -> u32 { 1 }\n",
+        )
+        .unwrap();
+        let results = extract(std::slice::from_ref(&dsl), dir.path(), &db).unwrap();
+        assert!(
+            !results
+                .iter()
+                .flat_map(|r| r.edges.iter())
+                .any(|e| e.relation == "calls" && e.target.ends_with("::helper")),
+            "macro_rules! bodies must stay untouched"
+        );
+    }
+
+    #[test]
+    fn js_extends_through_require_links_inheritance() {
+        // `class D extends Base` where Base arrives via a CommonJS require
+        // binding: the heritage clause names the type, so the inheritance
+        // edge resolves to the required file's class node.
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("base.js");
+        fs::write(&base, "class Base {}\nmodule.exports = { Base };\n").unwrap();
+        let derived = dir.path().join("derived.js");
+        fs::write(
+            &derived,
+            "const { Base } = require('./base');\nclass D extends Base {}\nmodule.exports = { D };\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[base, derived], dir.path(), &db).unwrap();
+        let all_edges: Vec<&ExtractedEdge> = results.iter().flat_map(|r| r.edges.iter()).collect();
+        let inherits: Vec<&ExtractedEdge> = all_edges
+            .iter()
+            .filter(|e| e.relation == "inherits")
+            .copied()
+            .collect();
+        assert_eq!(
+            inherits.len(),
+            1,
+            "exactly one D -> Base inheritance edge, got: {:?}",
+            all_edges
+                .iter()
+                .map(|e| (e.relation.as_str(), e.target.as_str()))
+                .collect::<Vec<_>>()
+        );
+        assert!(inherits[0].target.ends_with("::Base"), "{:?}", inherits[0]);
+        assert!(inherits[0].source.ends_with("::D"), "{:?}", inherits[0]);
+    }
+
+    #[test]
+    fn go_interfaces_dispatch_and_declared_receivers_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        let iface = dir.path().join("iface.go");
+        fs::write(
+            &iface,
+            "package store\n\ntype Store interface {\n\tGet(key string) string\n}\n",
+        )
+        .unwrap();
+        let mem = dir.path().join("mem.go");
+        fs::write(
+            &mem,
+            "package store\n\ntype MemStore struct{}\n\nfunc (m MemStore) Get(key string) string { return key }\n",
+        )
+        .unwrap();
+        let user = dir.path().join("use.go");
+        fs::write(
+            &user,
+            "package store\n\nfunc fetch() string {\n\tvar s MemStore\n\treturn s.Get(\"k\")\n}\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let files = [iface, mem, user];
+        let results = extract(&files, dir.path(), &db).unwrap();
+
+        // The interface itself became a class-kind node with its method.
+        let has_iface = results
+            .iter()
+            .flat_map(|r| r.nodes.iter())
+            .any(|n| n.label == "Store" && n.node_type == "class");
+        assert!(has_iface, "interface node missing");
+        let iface_method = results
+            .iter()
+            .flat_map(|r| r.nodes.iter())
+            .find(|n| n.label == "Get" && n.id.contains("Store"));
+        assert!(iface_method.is_some(), "interface method node missing");
+
+        // Implicit implementation dispatches interface method -> MemStore.Get.
+        let dispatch: Vec<&ExtractedEdge> = results
+            .iter()
+            .flat_map(|r| r.edges.iter())
+            .filter(|e| e.relation == "dispatch" && e.source.contains("Store::Get"))
+            .collect();
+        assert_eq!(
+            dispatch.len(),
+            1,
+            "one dispatch edge from the interface method, got: {:?}",
+            results
+                .iter()
+                .flat_map(|r| r.edges.iter())
+                .map(|e| (e.relation.as_str(), e.source.as_str(), e.target.as_str()))
+                .collect::<Vec<_>>()
+        );
+        assert!(dispatch[0].target.ends_with("::Get"), "{:?}", dispatch[0]);
+
+        // The declared receiver `var s MemStore` resolved s.Get to the
+        // method node (RESOLVED, no receiver:: prefix left).
+        let resolved: Vec<&ExtractedEdge> = results
+            .iter()
+            .flat_map(|r| r.edges.iter())
+            .filter(|e| e.relation == "calls" && e.source.contains("fetch"))
+            .collect();
+        assert!(
+            resolved
+                .iter()
+                .any(|e| e.target.ends_with("::Get") && e.confidence == "RESOLVED"),
+            "s.Get() should resolve to MemStore's method, got: {:?}",
+            resolved
+                .iter()
+                .map(|e| (e.target.as_str(), e.confidence.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn python_singleton_member_calls_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = dir.path().join("svc.py");
+        fs::write(
+            &svc,
+            "class Service:\n    def ping(self):\n        return 1\n",
+        )
+        .unwrap();
+        let app = dir.path().join("app.py");
+        fs::write(
+            &app,
+            "from svc import Service\ng = Service()\ndef run():\n    return g.ping()\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[svc, app], dir.path(), &db).unwrap();
+        let calls: Vec<&ExtractedEdge> = results
+            .iter()
+            .flat_map(|r| r.edges.iter())
+            .filter(|e| e.relation == "calls" && e.source.ends_with("::run"))
+            .collect();
+        assert_eq!(calls.len(), 1, "one call out of run(): {:?}", calls);
+        assert!(
+            calls[0].target.ends_with("::ping") && calls[0].target.contains("Service"),
+            "g.ping() should resolve to Service.ping, got {}",
+            calls[0].target
+        );
+        assert_eq!(calls[0].confidence, "RESOLVED");
+    }
+
+    #[test]
+    fn python_singleton_guards_stay_unresolved() {
+        // Rebinding and shadowed parameters both leave the receiver edge
+        // in its unresolved receiver:: form.
+        let dir = tempfile::tempdir().unwrap();
+        let svc = dir.path().join("svc.py");
+        fs::write(
+            &svc,
+            "class Service:\n    def ping(self):\n        return 1\n",
+        )
+        .unwrap();
+        let rebound = dir.path().join("rebound.py");
+        fs::write(
+            &rebound,
+            "from svc import Service\ng = Service()\ng = Service()\ndef run():\n    return g.ping()\n",
+        )
+        .unwrap();
+        let shadowed = dir.path().join("shadowed.py");
+        fs::write(
+            &shadowed,
+            "from svc import Service\ng = Service()\ndef run(g):\n    return g.ping()\n",
+        )
+        .unwrap();
+        let db = open_db_in_memory().unwrap();
+        let results = extract(&[svc, rebound, shadowed], dir.path(), &db).unwrap();
+        for source_suffix in ["rebound", "shadowed"] {
+            let calls: Vec<&ExtractedEdge> = results
+                .iter()
+                .flat_map(|r| r.edges.iter())
+                .filter(|e| {
+                    e.relation == "calls"
+                        && e.source.contains(source_suffix)
+                        && e.source.ends_with("::run")
+                })
+                .collect();
+            assert_eq!(calls.len(), 1, "{source_suffix}: one call edge");
+            assert!(
+                calls[0].target.starts_with("receiver::"),
+                "{source_suffix}: guarded singleton must stay unresolved, got {}",
+                calls[0].target
+            );
+        }
     }
 
     #[test]

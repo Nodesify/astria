@@ -43,6 +43,8 @@ A node also carries a `label`, a `node_type`, source location (`source_file` + `
 | `ffi_binding` | Cross-layer: a TS/JS symbol importing the napi binding → the Rust function behind it | EXTRACTED |
 | `requires_env` | MCP server command requires an env var (name only) | EXTRACTED |
 | `similar_to` | Semantic similarity between embeddings (cosine-scored) | INFERRED |
+| `inherits` | Class extends/implements a base type (AST heritage clause; TypeScript family, `extends` and `implements` alike — the clause is explicit in source and the base binds by unique name, so `class D extends Base` resolves even when `Base` arrives via a CommonJS `require`) | EXTRACTED |
+| `dispatch` | Interface member → same-named member of each implementing type: TypeScript `implements` clauses and Go's implicit (method-set superset) satisfaction, capped past 10 implementers. Possible implementations, not proven runtime calls | INFERRED |
 | `learned` | Recurring (seed, discovered) query pair promoted by usage | INFERRED |
 | `rationale_for` | A code-comment rationale linked to the code it explains | EXTRACTED |
 | `same_type_as` | Cross-repo: same-label type declarations in the global graph (name-based unification) | INFERRED |

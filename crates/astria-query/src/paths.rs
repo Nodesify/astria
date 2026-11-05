@@ -1,6 +1,20 @@
 //! Shortest-path queries over the loaded graph.
 use super::*;
 
+/// Evidence tag for path rendering: the stored numeric score rides along
+/// with the label (`[INFERRED 0.75]`); `EXTRACTED`/`DECLARED` and edges
+/// without a usable score keep the bare label.
+fn confidence_tag(edge: &EdgeData) -> String {
+    let bare = matches!(
+        edge.confidence.to_ascii_uppercase().as_str(),
+        "EXTRACTED" | "DECLARED"
+    );
+    match edge.confidence_score {
+        Some(score) if score.is_finite() && !bare => format!("[{} {:.2}]", edge.confidence, score),
+        _ => format!("[{}]", edge.confidence),
+    }
+}
+
 pub fn find_shortest_path(
     db: &Connection,
     db_path: &str,
@@ -92,7 +106,7 @@ pub fn find_shortest_path(
         .and_then(|v| v.trim().parse::<f64>().ok())
         .unwrap_or(0.0)
         .clamp(0.0, 1.0);
-    let path = match shortest_path_bfs(
+    let path = match shortest_path_conservative(
         &loaded,
         src_idx,
         tgt_idx,
@@ -104,18 +118,71 @@ pub fn find_shortest_path(
         None => return Ok((false, 0, "No path found.".to_string())),
     };
 
-    let hops = path.len();
+    let hops = path.edges.len();
     let mut text = format!("Shortest path ({} hops):\n", hops);
 
-    for edge_id in path {
+    for (i, edge_id) in path.edges.iter().enumerate() {
         let (source, target) = loaded
             .graph
-            .edge_endpoints(edge_id)
+            .edge_endpoints(*edge_id)
             .expect("traversed edge exists");
-        let edge = &loaded.graph[edge_id];
+        let edge = &loaded.graph[*edge_id];
+        let marker = if path.weakest_hop == Some(i) {
+            " *"
+        } else {
+            ""
+        };
         text.push_str(&format!(
-            "  {} --{} [{}]--> {}\n",
-            loaded.graph[source].label, edge.relation, edge.confidence, loaded.graph[target].label
+            "  {} --{} {}{}--> {}\n",
+            loaded.graph[source].label,
+            edge.relation,
+            confidence_tag(edge),
+            marker,
+            loaded.graph[target].label
+        ));
+        // Weaker parallel evidence for the same hop: preserved, not dropped.
+        for extra in &path.also_seen[i] {
+            let (xs, xt) = loaded
+                .graph
+                .edge_endpoints(*extra)
+                .expect("parallel edge exists");
+            let xedge = &loaded.graph[*extra];
+            text.push_str(&format!(
+                "    also seen: {} --{} {}--> {}\n",
+                loaded.graph[xs].label,
+                xedge.relation,
+                confidence_tag(xedge),
+                loaded.graph[xt].label
+            ));
+        }
+    }
+
+    // The route's overall confidence is its weakest hop — reported by name so
+    // the tight spot cannot hide behind stronger neighbors. When ties on
+    // length existed, the most conservative of them was chosen.
+    if let Some(pos) = path.weakest_hop {
+        let (source, target) = loaded
+            .graph
+            .edge_endpoints(path.edges[pos])
+            .expect("traversed edge exists");
+        let edge = &loaded.graph[path.edges[pos]];
+        let route_note = if path.routes > 1 {
+            let count = if path.routes_capped {
+                format!(">{}", ROUTE_CAP)
+            } else {
+                path.routes.to_string()
+            };
+            format!("; most conservative of {count} equal-length routes")
+        } else {
+            String::new()
+        };
+        text.push_str(&format!(
+            "Path confidence: {} — weakest hop is {} --{}--> {}{}\n",
+            confidence_tag(edge),
+            loaded.graph[source].label,
+            edge.relation,
+            loaded.graph[target].label,
+            route_note
         ));
     }
 

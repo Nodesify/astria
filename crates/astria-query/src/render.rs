@@ -449,48 +449,210 @@ pub(crate) fn render_page(
     })
 }
 
-pub(crate) fn shortest_path_bfs(
+/// A shortest path plus the metadata conservative rendering reports: which
+/// parallel edges backed each hop, how many equal-length routes existed, and
+/// which hop was weakest.
+pub(crate) struct ConservativePath {
+    /// The chosen route's edges in traversal order — the strongest parallel
+    /// edge represents each hop.
+    pub edges: Vec<EdgeIndex>,
+    /// Weaker parallel evidence for each hop (same order as `edges`; entries
+    /// may be empty). Kept so collapsed evidence is never silently lost.
+    pub also_seen: Vec<Vec<EdgeIndex>>,
+    /// How many equal-length shortest routes reach the target.
+    pub routes: u64,
+    /// `routes` hit the saturation cap and the true count is larger.
+    pub routes_capped: bool,
+    /// Index into `edges` of the route's weakest hop; `None` when the path
+    /// has no hops (start == end).
+    pub weakest_hop: Option<usize>,
+}
+
+/// Equal-length route counts saturate here so combinatorial graphs cannot
+/// overflow the counter or produce absurd display numbers.
+pub(crate) const ROUTE_CAP: u64 = 1_000_000;
+
+/// Tolerance for matching a predecessor's weakest-hop value during
+/// reconstruction: label ranks and stored scores are coarse, so an exact
+/// f64 comparison could miss the arc the DP just chose.
+const STRENGTH_EPSILON: f64 = 1e-9;
+
+/// Find the shortest path, breaking length ties conservatively: among all
+/// equal-length routes, the one whose weakest hop is weakest is chosen, so a
+/// reported confidence can never overstate how sure the tightest connection
+/// is. Parallel edges between the same pair collapse into one hop — the hop
+/// is as strong as its strongest evidence, and the weaker copies ride along
+/// as `also_seen` instead of being dropped.
+pub(crate) fn shortest_path_conservative(
     loaded: &LoadedGraph,
     start: NodeIndex,
     end: NodeIndex,
     directed: bool,
     min_strength: f64,
     semantic_floor: f64,
-) -> Option<Vec<EdgeIndex>> {
+) -> Option<ConservativePath> {
     if start == end {
-        return Some(Vec::new());
+        return Some(ConservativePath {
+            edges: Vec::new(),
+            also_seen: Vec::new(),
+            routes: 1,
+            routes_capped: false,
+            weakest_hop: None,
+        });
     }
-    let mut visited: HashSet<NodeIndex> = HashSet::new();
-    let mut parent: HashMap<NodeIndex, (NodeIndex, EdgeIndex)> = HashMap::new();
-    let mut queue = std::collections::VecDeque::new();
-    queue.push_back(start);
-    visited.insert(start);
 
+    // Full BFS distances from the start: the conservative selection and the
+    // equal-route count are computed over the whole shortest-path DAG, not
+    // just whichever route a parent-pointer BFS happens to find first.
+    let mut dist: HashMap<NodeIndex, u32> = HashMap::new();
+    let mut order: Vec<NodeIndex> = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    dist.insert(start, 0);
+    queue.push_back(start);
     while let Some(current) = queue.pop_front() {
-        for (neighbor, edge_id) in iter_neighbors_filtered(
+        order.push(current);
+        let d = dist[&current];
+        for (neighbor, _) in iter_neighbors_filtered(
             &loaded.graph,
             current,
             directed,
             min_strength,
             semantic_floor,
         ) {
-            if visited.contains(&neighbor) {
-                continue;
+            if let std::collections::hash_map::Entry::Vacant(entry) = dist.entry(neighbor) {
+                queue.push_back(*entry.key());
+                entry.insert(d + 1);
             }
-            parent.insert(neighbor, (current, edge_id));
-            if neighbor == end {
-                let mut path = Vec::new();
-                let mut cur = end;
-                while let Some(&(p, edge_id)) = parent.get(&cur) {
-                    path.push(edge_id);
-                    cur = p;
-                }
-                path.reverse();
-                return Some(path);
-            }
-            visited.insert(neighbor);
-            queue.push_back(neighbor);
         }
     }
-    None
+    let end_dist = *dist.get(&end)?;
+
+    // Weakest achievable hop strength over all shortest routes (per node),
+    // the count of those routes, and the parallel-edge evidence per arc —
+    // all accumulated in one BFS-layer pass.
+    let mut weakest: HashMap<NodeIndex, f64> = HashMap::new();
+    let mut routes: HashMap<NodeIndex, u64> = HashMap::new();
+    let mut routes_capped = false;
+    let mut parallel: HashMap<(usize, usize), Vec<EdgeIndex>> = HashMap::new();
+    weakest.insert(start, f64::INFINITY);
+    routes.insert(start, 1);
+    for &u in &order {
+        let du = dist[&u];
+        // Arcs beyond the target's layer can never be on a shortest route
+        // to it; skipping them keeps the parallel map bounded.
+        if du >= end_dist {
+            continue;
+        }
+        let wu = weakest[&u];
+        let ru = routes[&u];
+        // Group this node's filtered arcs by neighbor so parallel edges
+        // collapse into one hop.
+        let mut arcs: HashMap<NodeIndex, Vec<EdgeIndex>> = HashMap::new();
+        for (v, e) in
+            iter_neighbors_filtered(&loaded.graph, u, directed, min_strength, semantic_floor)
+        {
+            if dist.get(&v) != Some(&(du + 1)) {
+                continue;
+            }
+            arcs.entry(v).or_default().push(e);
+        }
+        for (v, mut edges) in arcs {
+            // Strongest edge first: it represents the hop; the rest become
+            // `also_seen` evidence at render time.
+            edges.sort_by(|a, b| {
+                loaded.graph[*b]
+                    .strength()
+                    .partial_cmp(&loaded.graph[*a].strength())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let hop_strength = loaded.graph[edges[0]].strength();
+            {
+                let rv = routes.entry(v).or_insert(0);
+                let (sum, overflowed) = rv.overflowing_add(ru);
+                if overflowed || sum > ROUTE_CAP {
+                    routes_capped = true;
+                    *rv = ROUTE_CAP;
+                } else {
+                    *rv = sum;
+                }
+            }
+            let w = wu.min(hop_strength);
+            let ew = weakest.entry(v).or_insert(f64::INFINITY);
+            if w < *ew {
+                *ew = w;
+            }
+            parallel.insert((u.index(), v.index()), edges);
+        }
+    }
+
+    // Walk back from the target, at each step picking a predecessor whose
+    // recurrence value reproduces the target's weakest-hop DP value — i.e.
+    // an arc that lies on a most-conservative equal-length route.
+    let mut edges_rev: Vec<EdgeIndex> = Vec::new();
+    let mut also_rev: Vec<Vec<EdgeIndex>> = Vec::new();
+    let mut cur = end;
+    while cur != start {
+        let d = dist[&cur];
+        let w_cur = weakest[&cur];
+        let mut chosen: Option<(NodeIndex, Vec<EdgeIndex>)> = None;
+        // Backward view of the same filtered adjacency: predecessors of
+        // `cur` are incoming edges (plus outgoing when undirected).
+        let mut predecessors = loaded
+            .graph
+            .edges_directed(cur, Direction::Incoming)
+            .filter(|e| {
+                e.weight().meets_detail(min_strength)
+                    && !below_semantic_floor(e.weight(), semantic_floor)
+            })
+            .map(|e| (e.source(), e.id()))
+            .chain(
+                loaded
+                    .graph
+                    .edges_directed(cur, Direction::Outgoing)
+                    .filter(|e| {
+                        !directed
+                            && e.weight().meets_detail(min_strength)
+                            && !below_semantic_floor(e.weight(), semantic_floor)
+                    })
+                    .map(|e| (e.target(), e.id())),
+            );
+        for (u, _) in predecessors.by_ref() {
+            if dist.get(&u) != Some(&(d - 1)) {
+                continue;
+            }
+            let Some(hop_edges) = parallel.get(&(u.index(), cur.index())) else {
+                continue;
+            };
+            let hop_strength = loaded.graph[hop_edges[0]].strength();
+            if (weakest[&u].min(hop_strength) - w_cur).abs() < STRENGTH_EPSILON {
+                chosen = Some((u, hop_edges.clone()));
+                break;
+            }
+        }
+        drop(predecessors);
+        let (prev, hop_edges) = chosen.expect("the DP guarantees a matching predecessor");
+        edges_rev.push(hop_edges[0]);
+        also_rev.push(hop_edges[1..].to_vec());
+        cur = prev;
+    }
+    edges_rev.reverse();
+    also_rev.reverse();
+
+    let mut weakest_hop = None;
+    let mut weakest_strength = f64::INFINITY;
+    for (i, edge_id) in edges_rev.iter().enumerate() {
+        let s = loaded.graph[*edge_id].strength();
+        if s < weakest_strength {
+            weakest_strength = s;
+            weakest_hop = Some(i);
+        }
+    }
+
+    Some(ConservativePath {
+        edges: edges_rev,
+        also_seen: also_rev,
+        routes: routes[&end],
+        routes_capped,
+        weakest_hop,
+    })
 }
