@@ -38,8 +38,9 @@ fn read_crate_name(cargo_toml: &Path) -> Option<String> {
 
 /// Bounded upward walk (3 levels) from `start` to find the workspace root's
 /// `[workspace.dependencies].<name>` path entry — how `{ workspace = true }`
-/// inherited deps resolve to a crate directory.
-fn find_workspace_dep_dir(dep_name: &str, start: &Path) -> Option<std::path::PathBuf> {
+/// inherited deps resolve to a crate directory. The entry's path is manifest
+/// content: it resolves only when it stays inside `root`.
+fn find_workspace_dep_dir(dep_name: &str, start: &Path, root: &Path) -> Option<std::path::PathBuf> {
     let mut dir = start.parent();
     for _ in 0..3 {
         let d = dir?;
@@ -54,7 +55,7 @@ fn find_workspace_dep_dir(dep_name: &str, start: &Path) -> Option<std::path::Pat
                     .and_then(|t| t.get("path"))
                     .and_then(|p| p.as_str())
                 {
-                    return Some(d.join(rel));
+                    return astria_core::security::confine_to_root(d, rel, root);
                 }
             }
         }
@@ -110,7 +111,10 @@ impl ManifestBuilder {
     }
 }
 
-pub fn extract_manifest(path: &Path) -> Extraction {
+/// Ingest one manifest file. `root` is the scanned tree the file was found
+/// in: paths named INSIDE the manifest (workspace members, `path`
+/// dependencies) are followed only when they stay within it.
+pub fn extract_manifest(path: &Path, root: &Path) -> Extraction {
     let mut builder = ManifestBuilder::new(path);
     let filename = path
         .file_name()
@@ -121,7 +125,7 @@ pub fn extract_manifest(path: &Path) -> Extraction {
 
     match filename.as_str() {
         "pyproject.toml" => ingest_pyproject(&text, &mut builder),
-        "cargo.toml" => ingest_cargo(path, &text, &mut builder),
+        "cargo.toml" => ingest_cargo(path, root, &text, &mut builder),
         "go.mod" => ingest_go_mod(&text, &mut builder),
         "package.json" => ingest_package_json(&text, &mut builder),
         "pom.xml" => ingest_pom(&text, &mut builder),
@@ -177,7 +181,7 @@ fn ingest_pyproject(text: &str, b: &mut ManifestBuilder) {
     }
 }
 
-fn ingest_cargo(path: &Path, text: &str, b: &mut ManifestBuilder) {
+fn ingest_cargo(path: &Path, root: &Path, text: &str, b: &mut ManifestBuilder) {
     let Ok(doc) = text.parse::<toml::Table>() else {
         return;
     };
@@ -202,10 +206,13 @@ fn ingest_cargo(path: &Path, text: &str, b: &mut ManifestBuilder) {
                     // real entry from the workspace root's
                     // [workspace.dependencies] (found by a bounded upward walk).
                     let dep_dir: Option<std::path::PathBuf> = match entry {
-                        toml::Value::Table(t) => t
-                            .get("path")
-                            .and_then(|p| p.as_str())
-                            .map(|rel| base.join(rel)),
+                        // The path is manifest content: it is followed only
+                        // when it stays inside the scanned tree.
+                        toml::Value::Table(t) => {
+                            t.get("path").and_then(|p| p.as_str()).and_then(|rel| {
+                                astria_core::security::confine_to_root(base, rel, root)
+                            })
+                        }
                         _ => None,
                     }
                     .or_else(|| {
@@ -215,7 +222,7 @@ fn ingest_cargo(path: &Path, text: &str, b: &mut ManifestBuilder) {
                             .and_then(|w| w.as_bool())
                             == Some(true);
                         if inherited {
-                            find_workspace_dep_dir(dep_name, base)
+                            find_workspace_dep_dir(dep_name, base, root)
                         } else {
                             None
                         }
@@ -256,18 +263,25 @@ fn ingest_cargo(path: &Path, text: &str, b: &mut ManifestBuilder) {
         if let Some(members) = workspace.get("members").and_then(|v| v.as_array()) {
             for member in members.iter().filter_map(|m| m.as_str()) {
                 let dir = member.trim_end_matches("/*").trim_end_matches('/');
-                let member_toml = path.parent().unwrap_or(path).join(dir).join("Cargo.toml");
-                let crate_name = std::fs::read_to_string(&member_toml)
-                    .ok()
-                    .and_then(|t| t.parse::<toml::Table>().ok())
-                    .and_then(|d| {
-                        d.get("package")
-                            .and_then(|p| p.as_table())
-                            .and_then(|p| p.get("name"))
-                            .and_then(|n| n.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| dir.replace('/', "_"));
+                // A member path is manifest content: its Cargo.toml is read
+                // only when it stays inside the scanned tree; anything else
+                // keeps the directory-derived name.
+                let crate_name = astria_core::security::confine_to_root(
+                    path.parent().unwrap_or(path),
+                    dir,
+                    root,
+                )
+                .map(|member_dir| member_dir.join("Cargo.toml"))
+                .and_then(|member_toml| std::fs::read_to_string(&member_toml).ok())
+                .and_then(|t| t.parse::<toml::Table>().ok())
+                .and_then(|d| {
+                    d.get("package")
+                        .and_then(|p| p.as_table())
+                        .and_then(|p| p.get("name"))
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| dir.replace('/', "_"));
                 let member_id = b.add_package(&crate_name, Some("workspace member"));
                 if member_id != root_id {
                     b.edges.push(ExtractedEdge {
@@ -558,7 +572,7 @@ mod tests {
             "[project]\nname = \"my-app\"\ndependencies = [\"httpx>=0.27\", \"rich\"]\n",
         )
         .unwrap();
-        let ext = extract_manifest(&p);
+        let ext = extract_manifest(&p, dir.path());
         assert_eq!(ext.language, "Manifest");
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_my_app"));
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_httpx"));
@@ -577,7 +591,7 @@ mod tests {
             r#"{"name": "@scope/cli", "dependencies": {"commander": "^12.0.0"}}"#,
         )
         .unwrap();
-        let ext = extract_manifest(&p);
+        let ext = extract_manifest(&p, dir.path());
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_scope_cli"));
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_commander"));
         assert_eq!(
@@ -598,7 +612,7 @@ mod tests {
             "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/foo/bar v1.0.0\n\tgithub.com/indirect/dep v0.1.0 // indirect\n)\n",
         )
         .unwrap();
-        let ext = extract_manifest(&p);
+        let ext = extract_manifest(&p, dir.path());
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_example_com_app"));
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_github_com_foo_bar"));
         assert!(!ext.nodes.iter().any(|n| n.id.contains("indirect")));
@@ -623,7 +637,7 @@ mod tests {
         // cli member has no Cargo.toml — falls back to dir-derived name
         std::fs::create_dir_all(dir.path().join("crates/cli")).unwrap();
 
-        let ext = extract_manifest(&ws);
+        let ext = extract_manifest(&ws, dir.path());
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_astria_core"));
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_crates_cli"));
         assert!(ext
@@ -641,7 +655,7 @@ mod tests {
             "<project><artifactId>my-app</artifactId><dependencies><dependency><groupId>org.x</groupId><artifactId>junit</artifactId></dependency></dependencies></project>",
         )
         .unwrap();
-        let ext = extract_manifest(&p);
+        let ext = extract_manifest(&p, dir.path());
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_my_app"));
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_junit"));
     }
@@ -666,7 +680,7 @@ mod tests {
             r#"{"mcpServers":{"fs":{"command":"npx","args":["-y","@modelcontextprotocol/server-fs"],"env":{"FS_TOKEN":"super-secret-value","HOME":"/x"}}}}"#,
         )
         .unwrap();
-        let ext = extract_manifest(&p);
+        let ext = extract_manifest(&p, dir.path());
         assert!(ext.nodes.iter().any(|n| n.node_type == "mcp_config"));
         assert!(ext.nodes.iter().any(|n| n.label == "mcp:fs"));
         assert!(ext.nodes.iter().any(|n| n.label == "npx"));
@@ -717,7 +731,7 @@ mod tests {
         )
         .unwrap();
 
-        let ext = extract_manifest(&cli);
+        let ext = extract_manifest(&cli, dir.path());
         assert!(
             ext.edges.iter().any(|e| e.relation == "crate_depends_on"
                 && e.source == "pkg_astria_cli"
@@ -751,10 +765,77 @@ mod tests {
         )
         .unwrap();
 
-        let ext = extract_manifest(&cli);
+        let ext = extract_manifest(&cli, dir.path());
         assert!(ext
             .edges
             .iter()
             .any(|e| e.relation == "crate_depends_on" && e.target == "pkg_astria_core"));
+    }
+
+    #[test]
+    fn manifest_paths_cannot_leave_the_scanned_tree() {
+        // `members` and `path` dependencies are read from the manifest, not
+        // discovered by the scanner: a value that climbs out of the scanned
+        // tree names a file astria has no business opening.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        std::fs::create_dir_all(root.join("crates/cli")).unwrap();
+        std::fs::create_dir_all(root.join("crates/core")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/core\", \"../outside\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("crates/core/Cargo.toml"),
+            "[package]\nname = \"in-root\"\n",
+        )
+        .unwrap();
+        let outside = dir.path().join("outside/Cargo.toml");
+        std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        std::fs::write(&outside, "[package]\nname = \"sibling-crate\"\n").unwrap();
+        std::fs::write(
+            root.join("crates/cli/Cargo.toml"),
+            "[package]\nname = \"cli\"\n\n[dependencies]\nsibling = { path = \"../../../outside\" }\n",
+        )
+        .unwrap();
+
+        let workspace = extract_manifest(&root.join("Cargo.toml"), &root);
+        assert!(
+            !workspace.nodes.iter().any(|n| n.id == "pkg_sibling_crate"),
+            "a member outside the scanned tree was read: {:?}",
+            workspace.nodes
+        );
+        let cli = extract_manifest(&root.join("crates/cli/Cargo.toml"), &root);
+        assert!(
+            !cli.edges
+                .iter()
+                .any(|e| e.relation == "crate_depends_on" && e.target == "pkg_sibling_crate"),
+            "a path dependency outside the scanned tree was read: {:?}",
+            cli.edges
+        );
+    }
+
+    #[test]
+    fn absolute_manifest_paths_keep_the_directory_derived_name() {
+        // Nothing here exists and nothing is looked up: an absolute or rooted
+        // spelling is refused before the operating system sees it, and the
+        // member still gets its node, named after the directory.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"//host/share/crate\", \"/absolute/crate\", \"C:\\\\elsewhere\\\\crate\"]\n",
+        )
+        .unwrap();
+
+        let ext = extract_manifest(&root.join("Cargo.toml"), &root);
+        let members = ext
+            .nodes
+            .iter()
+            .filter(|n| n.docstring.as_deref() == Some("workspace member"))
+            .count();
+        assert_eq!(members, 3, "nodes: {:?}", ext.nodes);
     }
 }

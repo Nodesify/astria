@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 
 /// Redact recognizable credentials without treating ordinary hashes or identifiers as secrets.
@@ -78,6 +78,58 @@ pub fn validate_path(root: &Path, file_path: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Resolve a relative path read from repository CONTENT — a workspace member
+/// list, a `path = "..."` dependency, a package `main` field — against
+/// `base`, returning it only when it stays inside `root`.
+///
+/// Purely lexical: nothing here lets the operating system see the path
+/// before it has been checked. A repository is untrusted input, and on
+/// Windows an attacker-chosen UNC spelling (`\\host\share\x`) makes the OS
+/// authenticate to that host, leaking an NTLM response with no code run.
+/// Absolute, rooted, drive, UNC and verbatim spellings are refused outright,
+/// and `..` may not climb past `root`.
+pub fn confine_to_root(base: &Path, relative: &str, root: &Path) -> Option<PathBuf> {
+    if relative.trim().is_empty() {
+        return None;
+    }
+    // Both separators are separators on every platform, so a backslash
+    // spelling cannot slip through a Unix host or CI run.
+    let normalized = relative.replace('\\', "/");
+    let mut stack: Vec<std::ffi::OsString> = base
+        .components()
+        .map(|component| component.as_os_str().to_os_string())
+        .collect();
+    // `..` may consume real components, never the prefix or root they hang
+    // from.
+    let anchor = base
+        .components()
+        .take_while(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+        .count();
+    for component in Path::new(&normalized).components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => return None,
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if stack.len() <= anchor {
+                    return None;
+                }
+                stack.pop();
+            }
+            Component::Normal(part) => stack.push(part.to_os_string()),
+        }
+    }
+    let joined: PathBuf = stack.into_iter().collect();
+    // A leading `.` is spelling, not structure: `./repo/x` and `repo/x`
+    // name the same place.
+    fn without_cur_dir(path: &Path) -> PathBuf {
+        path.components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .collect()
+    }
+    let inside = without_cur_dir(&joined).starts_with(without_cur_dir(root));
+    inside.then_some(joined)
 }
 
 /// Check if a file is within acceptable size limits for processing.
@@ -395,6 +447,62 @@ mod tests {
         assert!(
             !looks_minified(5_000, 4096, 1),
             "small files are never flagged"
+        );
+    }
+
+    #[test]
+    fn confined_paths_resolve_inside_the_root() {
+        let root = Path::new("/repo");
+        let base = Path::new("/repo/crates/cli");
+        let confined = |relative: &str| confine_to_root(base, relative, root);
+        assert_eq!(
+            confined("../core").as_deref(),
+            Some(Path::new("/repo/crates/core"))
+        );
+        assert_eq!(
+            confined("./src/lib.rs").as_deref(),
+            Some(Path::new("/repo/crates/cli/src/lib.rs"))
+        );
+        // Climbing up to the root itself is still inside it; one more is not.
+        assert_eq!(confined("../..").as_deref(), Some(Path::new("/repo")));
+        assert_eq!(confined("../../.."), None);
+        assert_eq!(confined(""), None);
+        assert_eq!(confined("   "), None);
+    }
+
+    #[test]
+    fn absolute_and_unc_spellings_are_refused_before_any_lookup() {
+        let root = Path::new("/repo");
+        let base = Path::new("/repo/ws");
+        for spelling in [
+            "\\\\host\\share\\crate",
+            "//host/share/crate",
+            "\\\\?\\C:\\repo\\crate",
+            "C:\\elsewhere\\crate",
+            "/elsewhere/crate",
+        ] {
+            assert_eq!(
+                confine_to_root(base, spelling, root),
+                None,
+                "{spelling:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn root_relative_spellings_compare_by_components() {
+        let root = Path::new(".");
+        assert_eq!(
+            confine_to_root(Path::new("./crates/cli"), "../core", root).as_deref(),
+            Some(Path::new("./crates/core"))
+        );
+        assert_eq!(
+            confine_to_root(Path::new("crates/cli"), "../..", root).as_deref(),
+            Some(Path::new(""))
+        );
+        assert_eq!(
+            confine_to_root(Path::new("crates/cli"), "../../..", root),
+            None
         );
     }
 }
