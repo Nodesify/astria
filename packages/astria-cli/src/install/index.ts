@@ -23,6 +23,29 @@ function sectionMessage(result: SectionResult, added: string, updated: string, u
   return result === 'added' ? added : result === 'updated' ? updated : unchanged;
 }
 
+/** Files Claude Code reads as project instructions. */
+const CLAUDE_INSTRUCTION_FILES = ['CLAUDE.md', path.join('.claude', 'CLAUDE.md')];
+/** Where its fallback, AGENTS.md, may sit. */
+const AGENTS_INSTRUCTION_FILES = ['AGENTS.md', path.join('.claude', 'AGENTS.md')];
+
+/**
+ * The file the Claude platform writes its project section to.
+ *
+ * Claude Code reads a project's AGENTS.md only while no CLAUDE.md exists in
+ * the project or any directory above it. Creating a CLAUDE.md beside a
+ * tracked AGENTS.md therefore hides that file — and the project's own
+ * instructions with it — from Claude Code. So the section joins whichever
+ * instructions file Claude Code already reads: an existing CLAUDE.md, else
+ * the existing AGENTS.md, and a new CLAUDE.md only when neither exists.
+ */
+export function claudeInstructionsFile(projectDir: string): string {
+  for (const name of [...CLAUDE_INSTRUCTION_FILES, ...AGENTS_INSTRUCTION_FILES]) {
+    const file = path.join(projectDir, name);
+    if (fs.existsSync(file) && fs.statSync(file).isFile()) return file;
+  }
+  return path.join(projectDir, 'CLAUDE.md');
+}
+
 const MCP_LABELS: Record<McpFlavor, { name: string; file: string }> = {
   zcode: { name: 'ZCode MCP server', file: '.zcode/config.json' },
   claude: { name: 'Claude MCP server', file: '.mcp.json' },
@@ -230,16 +253,17 @@ function installPlatformRaw(platform: string, projectDir: string): string[] {
 
   messages.push(...copySkillFile(platform, cfg, projectDir));
 
-  const projectMd = path.join(projectDir, 'CLAUDE.md');
   if (cfg.claudeMd || cfg.agentsMd || cfg.geminiMd || cfg.copilotMd) {
     if (cfg.claudeMd) {
-      const result = injectSection(projectMd, PROJECT_MD_SECTION);
+      const target = claudeInstructionsFile(projectDir);
+      const file = path.basename(target);
+      const result = injectSection(target, PROJECT_MD_SECTION);
       messages.push(
         sectionMessage(
           result,
-          'Project CLAUDE.md: astria section added',
-          'Project CLAUDE.md: astria section updated',
-          'Project CLAUDE.md: astria section unchanged'
+          `Project ${file}: astria section added`,
+          `Project ${file}: astria section updated`,
+          `Project ${file}: astria section unchanged`
         )
       );
     }
@@ -391,10 +415,28 @@ function uninstallPlatformRaw(platform: string, projectDir: string, remaining: s
   }
 
   if (cfg.claudeMd) {
-    messages.push(removeSection(path.join(projectDir, 'CLAUDE.md')) ? 'Project CLAUDE.md: astria section removed' : 'Project CLAUDE.md: absent or customized');
+    // The section may sit in any file Claude Code reads (see
+    // claudeInstructionsFile), so each one is tried.
+    let removed = false;
+    for (const name of CLAUDE_INSTRUCTION_FILES) {
+      removed = removeSection(path.join(projectDir, name)) || removed;
+    }
+    messages.push(removed ? 'Project CLAUDE.md: astria section removed' : 'Project CLAUDE.md: absent or customized');
   }
-  if (cfg.agentsMd && !remaining.some(p => PLATFORMS[p]?.agentsMd)) {
-    messages.push(removeSection(path.join(projectDir, 'AGENTS.md')) ? 'Project AGENTS.md: astria section removed' : 'Project AGENTS.md: absent or customized');
+  // AGENTS.md is shared by every platform that writes it — and by the Claude
+  // platform when it had no CLAUDE.md to use — so its section goes only once
+  // none of those platforms remains.
+  if (
+    (cfg.agentsMd || cfg.claudeMd) &&
+    !remaining.some((p) => PLATFORMS[p]?.agentsMd || p === 'claude')
+  ) {
+    let removed = false;
+    for (const name of AGENTS_INSTRUCTION_FILES) {
+      removed = removeSection(path.join(projectDir, name)) || removed;
+    }
+    if (cfg.agentsMd || removed) {
+      messages.push(removed ? 'Project AGENTS.md: astria section removed' : 'Project AGENTS.md: absent or customized');
+    }
   }
   if (cfg.geminiMd) {
     messages.push(removeSection(path.join(projectDir, 'GEMINI.md')) ? 'Project GEMINI.md: astria section removed' : 'Project GEMINI.md: absent or customized');

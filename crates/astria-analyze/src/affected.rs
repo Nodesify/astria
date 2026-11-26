@@ -212,9 +212,9 @@ pub fn affected(
     // source_file)]. Built once so the BFS is O(V + E) instead of rescanning
     // every edge per frontier node.
     let mut incoming: HashMap<String, Vec<(String, String, String, String)>> = HashMap::new();
-    // Members of the seed (seed --contains/method--> member), for the
-    // one-hop seed expansion below.
-    let mut seed_members: Vec<String> = Vec::new();
+    // Membership edges (parent --contains/method--> member), for the seed
+    // expansion below.
+    let mut members_of: HashMap<String, Vec<String>> = HashMap::new();
     {
         let mut stmt =
             db.prepare("SELECT source, target, relation, confidence, source_file FROM edges")?;
@@ -228,8 +228,8 @@ pub fn affected(
             ))
         })?;
         for (src, tgt, rel, prov, via) in rows.flatten() {
-            if src == seed && (rel == "contains" || rel == "method") {
-                seed_members.push(tgt.clone());
+            if rel == "contains" || rel == "method" {
+                members_of.entry(src.clone()).or_default().push(tgt.clone());
             }
             incoming.entry(tgt).or_default().push((src, rel, prov, via));
         }
@@ -240,10 +240,9 @@ pub fn affected(
         .map(|n| n.label.clone())
         .unwrap_or_else(|| seed.clone());
 
-    // Seed set: the node itself, its members (one contains/method hop, so
-    // callers of a class's methods are found), and its bare-name alias —
-    // call edges land on bare stub ids ("load_graph_db"), while definitions
-    // have qualified ids ("src_pipeline::load_graph_db").
+    // Seed set: the node itself, every member nested under it, and its
+    // bare-name alias — call edges land on bare stub ids ("load_graph_db"),
+    // while definitions have qualified ids ("src_pipeline::load_graph_db").
     let mut visited: HashSet<String> = HashSet::new();
     visited.insert(seed.clone());
     let mut frontier: VecDeque<(String, u32)> = VecDeque::new();
@@ -256,9 +255,17 @@ pub fn affected(
         }
     }
 
-    for tgt in seed_members {
-        if visited.insert(tgt.clone()) {
-            frontier.push_back((tgt, 0));
+    // Members are seeded transitively: a file holds a class, the class
+    // holds its methods, and callers bind to the method — so a class's
+    // members are found from a file seed too, not just the file's own.
+    let mut member_queue: VecDeque<String> = VecDeque::new();
+    member_queue.push_back(seed.clone());
+    while let Some(parent) = member_queue.pop_front() {
+        for member in members_of.get(&parent).into_iter().flatten() {
+            if visited.insert(member.clone()) {
+                member_queue.push_back(member.clone());
+                frontier.push_back((member.clone(), 0));
+            }
         }
     }
 
@@ -382,6 +389,35 @@ mod tests {
         assert!(d1
             .iter()
             .any(|h| h.id == "handler" && h.relation == "calls"));
+    }
+
+    #[test]
+    fn file_seed_reaches_callers_of_nested_members() {
+        // A file contains a class, the class contains a method: the caller
+        // binding to that method sits two membership hops from the file
+        // seed, so a one-hop expansion never reached it.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "
+            INSERT INTO nodes (id, label, file_type, source_file) VALUES
+              ('svc_rs', 'svc.rs', 'file', 'src/svc.rs'),
+              ('svc_rs::Service', 'Service', 'class', 'src/svc.rs'),
+              ('svc_rs::Service::run', 'run()', 'function', 'src/svc.rs'),
+              ('caller', 'handle', 'function', 'src/handler.rs');
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+              ('svc_rs', 'svc_rs::Service', 'contains', 'EXTRACTED', 'src/svc.rs'),
+              ('svc_rs::Service', 'svc_rs::Service::run', 'method', 'EXTRACTED', 'src/svc.rs'),
+              ('caller', 'svc_rs::Service::run', 'calls', 'EXTRACTED', 'src/handler.rs');
+            ",
+        )
+        .unwrap();
+
+        let result = affected(&db, "svc_rs", 1, None).unwrap();
+        assert!(
+            result.hits.iter().any(|h| h.id == "caller" && h.depth == 1),
+            "a caller of a nested member was missed: {:?}",
+            result.hits
+        );
     }
 
     #[test]

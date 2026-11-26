@@ -135,8 +135,8 @@ struct Vault {
     communities: Vec<(i64, String, Option<f64>)>,
     /// node id -> unique note stem
     note_stems: HashMap<String, String>,
-    /// community label -> note stem
-    community_stems: HashMap<String, String>,
+    /// community id -> note stem
+    community_stems: HashMap<i64, String>,
 }
 
 impl Vault {
@@ -220,7 +220,9 @@ impl Vault {
 
         let mut community_stems = HashMap::new();
         let mut used_c: HashSet<String> = HashSet::new();
-        for (_, label, _) in &communities {
+        // Keyed by community id, not label: two communities may share one,
+        // and the later stem would then replace the earlier.
+        for (id, label, _) in &communities {
             let base = note_name(label);
             let stem = if used_c.insert(base.clone()) {
                 base
@@ -230,7 +232,7 @@ impl Vault {
                     .find(|c| used_c.insert(c.clone()))
                     .expect("numeric suffixes cannot collide forever")
             };
-            community_stems.insert(label.clone(), stem);
+            community_stems.insert(*id, stem);
         }
 
         Ok(Vault {
@@ -533,7 +535,7 @@ pub fn export_obsidian(db: &Connection, out_dir: &Path) -> Result<usize> {
         let member_ids = members.get(cid).cloned().unwrap_or_default();
         let stem = vault
             .community_stems
-            .get(label)
+            .get(cid)
             .cloned()
             .unwrap_or_else(|| note_name(label));
         std::fs::write(
@@ -608,6 +610,32 @@ mod tests {
         assert_eq!(cards, 3);
         let edges = parsed["edges"].as_array().unwrap();
         assert_eq!(edges.len(), 3);
+    }
+
+    #[test]
+    fn same_labelled_communities_get_their_own_notes() {
+        // Two communities share a label. Keyed by label, one stem replaces
+        // the other and both notes are written to the same file.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "
+            INSERT INTO nodes (id, label, file_type, source_file, community) VALUES
+              ('a', 'Alpha()', 'code', 'src/a.rs', 1),
+              ('b', 'Beta()', 'code', 'src/b.rs', 2);
+            INSERT INTO communities (id, label, cohesion, size) VALUES
+              (1, 'Core', 0.8, 1),
+              (2, 'Core', 0.5, 1);
+            ",
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("vault");
+        export_obsidian(&db, &out).unwrap();
+
+        let first = std::fs::read_to_string(out.join("_COMMUNITY_Core.md")).unwrap();
+        let second = std::fs::read_to_string(out.join("_COMMUNITY_Core-2.md")).unwrap();
+        assert!(first.contains("[[Alpha()|Alpha()]]"), "{first}");
+        assert!(second.contains("[[Beta()|Beta()]]"), "{second}");
     }
 
     #[test]

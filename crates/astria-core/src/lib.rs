@@ -36,7 +36,10 @@ pub mod writer_lock;
 /// v17: retained-text redaction, language coverage, and exact declaration identity.
 /// v18: Rust expression-macro call recovery, CommonMark markdown rules,
 /// TypeScript abstract classes as class-kind nodes.
-pub const EXTRACTION_HASH_VERSION: &str = "v18";
+/// v19: a call to a function's own parameter is no longer bound to a
+/// same-named definition (Python, JavaScript family); Maven manifests are
+/// parsed structurally (namespaces, dependency scope, property placeholders).
+pub const EXTRACTION_HASH_VERSION: &str = "v19";
 
 /// Reads `ASTRIA_<name>`. Empty values count as unset. There is no legacy
 /// spelling fallback: pre-1.0 configurations rebuild with current names.

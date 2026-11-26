@@ -954,6 +954,56 @@ function testCopilotInstructions() {
   }
 }
 
+// ---- Claude instructions file choice ----
+
+function testClaudeInstructionsFile() {
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-home-'));
+  const prevUserProfile = process.env.USERPROFILE;
+  const prevHome = process.env.HOME;
+  process.env.USERPROFILE = fakeHome;
+  process.env.HOME = fakeHome;
+  const { uninstallPlatform } = require('../install') as typeof import('../install');
+  try {
+    // A project ships a tracked AGENTS.md and has no CLAUDE.md. Claude Code
+    // reads AGENTS.md only while no CLAUDE.md exists, so creating one beside
+    // it would hide the project's own instructions from Claude Code.
+    const tracked = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-proj-'));
+    fs.writeFileSync(path.join(tracked, 'AGENTS.md'), '# My Project\n\nHouse rules.\n', 'utf-8');
+
+    installPlatform('claude', tracked);
+    assert(!fs.existsSync(path.join(tracked, 'CLAUDE.md')), 'Claude: no CLAUDE.md created beside a tracked AGENTS.md');
+    const agents = fs.readFileSync(path.join(tracked, 'AGENTS.md'), 'utf-8');
+    assert(agents.startsWith('# My Project'), 'Claude: tracked AGENTS.md content kept');
+    assert(agents.includes('House rules.'), 'Claude: tracked AGENTS.md rules kept');
+    assert(agents.includes('## astria'), 'Claude: section added to the tracked AGENTS.md');
+
+    // Uninstall is symmetric: the section leaves AGENTS.md and the tracked
+    // file survives intact.
+    uninstallPlatform('claude', tracked);
+    const after = fs.readFileSync(path.join(tracked, 'AGENTS.md'), 'utf-8');
+    assert(!after.includes('## astria'), 'Claude: uninstall removes the section from AGENTS.md');
+    assert(after.includes('House rules.'), 'Claude: uninstall keeps the tracked AGENTS.md');
+
+    // An existing CLAUDE.md wins: Claude Code already reads that one.
+    const withClaude = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-proj-'));
+    fs.writeFileSync(path.join(withClaude, 'CLAUDE.md'), '# Notes\n', 'utf-8');
+    fs.writeFileSync(path.join(withClaude, 'AGENTS.md'), '# My Project\n', 'utf-8');
+    installPlatform('claude', withClaude);
+    assert(fs.readFileSync(path.join(withClaude, 'CLAUDE.md'), 'utf-8').includes('## astria'), 'Claude: existing CLAUDE.md receives the section');
+    assert(!fs.readFileSync(path.join(withClaude, 'AGENTS.md'), 'utf-8').includes('## astria'), 'Claude: AGENTS.md left alone when CLAUDE.md exists');
+
+    // With neither file present, CLAUDE.md is created as before.
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'astria-proj-'));
+    installPlatform('claude', fresh);
+    assert(fs.readFileSync(path.join(fresh, 'CLAUDE.md'), 'utf-8').includes('## astria'), 'Claude: CLAUDE.md created when nothing exists');
+    assert(!fs.existsSync(path.join(fresh, 'AGENTS.md')), 'Claude: no AGENTS.md created');
+  } finally {
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+  }
+}
+
 // ---- File-stem skill layouts (cline / roo) ----
 
 function testFileStemSkillLayouts() {
@@ -1158,6 +1208,7 @@ testMarkdownInject();
 testLegacyMigration();
 testProjectScopeIsolation();
 testCopilotInstructions();
+testClaudeInstructionsFile();
 testAuditFixes();
 
 console.log(`\n${passed} passed, ${failed} failed`);

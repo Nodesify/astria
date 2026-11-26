@@ -9,7 +9,6 @@ use std::path::Path;
 
 use astria_core::ids::normalize_id;
 use astria_core::MANIFEST_FILENAMES;
-use regex::Regex;
 
 use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};
 
@@ -534,28 +533,277 @@ fn ingest_package_json(text: &str, b: &mut ManifestBuilder) {
     }
 }
 
-static POM_ARTIFACT_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r"<artifactId>\s*([^<]+?)\s*</artifactId>").expect("static regex")
-});
-static POM_DEPS_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r"(?s)<dependencies>(.*?)</dependencies>").expect("static regex")
-});
+/// The parts of a `pom.xml` the graph keeps: the project's own artifact and
+/// the artifacts its dependencies name.
+struct Pom {
+    artifact: String,
+    dependencies: Vec<String>,
+}
+
+/// A text run that is the direct content of an element the project owns.
+#[derive(Clone, Copy)]
+enum PomText {
+    /// `<groupId>`/`<artifactId>`/`<version>` of the project itself.
+    Project(&'static str),
+    /// The same under `<parent>`: inherited coordinates, not its identity.
+    Parent(&'static str),
+    /// One entry under `<properties>`, keyed by the element's own name.
+    Property,
+    /// The `<artifactId>` of one of the project's `<dependency>` elements.
+    DependencyArtifact,
+}
+
+/// Parse `pom.xml` as XML rather than by pattern, so namespaces (default or
+/// prefixed, in either quote style) and element scope fall out of the
+/// structure:
+///
+/// - Only the root element's own namespace is Maven's. A tag in a foreign
+///   namespace is ignored however it is spelled, and so is an unprefixed tag
+///   under a foreign default namespace.
+/// - `<parent>` supplies coordinates a project inherits, never its own name.
+/// - Only the project's own `<dependencies>` (and those of its profiles) are
+///   dependencies: `<dependencyManagement>` pins versions, a plugin's
+///   dependencies belong to the build tool, and an `<exclusion>` names what
+///   is left out.
+/// - `${...}` placeholders resolve from `<properties>` and then the
+///   project's coordinates; an unknown placeholder is kept as written.
+///
+/// Malformed input keeps whatever parsed up to the error.
+fn parse_pom(text: &str) -> Pom {
+    let mut pom = Pom {
+        artifact: String::new(),
+        dependencies: Vec::new(),
+    };
+    let mut parent_artifact = String::new();
+    let mut properties: Vec<(String, String)> = Vec::new();
+    let mut coordinates: Vec<(String, String)> = Vec::new();
+
+    let mut reader = quick_xml::Reader::from_str(text);
+    reader.config_mut().trim_text(true);
+    // Open elements, innermost last. An element outside the root's
+    // namespace is `None`, so nothing below it can pass for Maven's.
+    let mut path: Vec<Option<String>> = Vec::new();
+    // Namespace bindings in scope: (prefix, URI), an empty prefix being the
+    // default namespace.
+    let mut bindings: Vec<(String, String)> = Vec::new();
+    // How many bindings each open element declared, popped when it closes.
+    let mut declared: Vec<usize> = Vec::new();
+    // `Err` until the root element has been seen.
+    let mut root_namespace: Result<Option<String>, ()> = Err(());
+    // The element the next text run belongs to, and — for a property — the
+    // element's own name, which is the property's key.
+    let mut capture: Option<PomText> = None;
+    let mut property_name: Option<String> = None;
+
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Start(event)) => {
+                // Declarations on an element apply to the element itself.
+                let declared_here = bind_namespaces(&event, &mut bindings);
+                let (prefix, local) = element_name(&event);
+                let namespace = lookup_namespace(prefix.as_deref(), &bindings);
+                if root_namespace.is_err() {
+                    root_namespace = Ok(namespace.clone());
+                }
+                let ours = matches!(&root_namespace, Ok(root) if *root == namespace);
+                // The open elements are exactly `ancestors`, which makes the
+                // current element a direct child of that path.
+                let within = |ancestors: &[&str]| {
+                    path.len() == ancestors.len()
+                        && path
+                            .iter()
+                            .zip(ancestors)
+                            .all(|(open, name)| open.as_deref() == Some(*name))
+                };
+                capture = None;
+                if ours {
+                    let coordinate = match local.as_str() {
+                        "groupId" => Some("groupId"),
+                        "artifactId" => Some("artifactId"),
+                        "version" => Some("version"),
+                        _ => None,
+                    };
+                    if within(&["project"]) {
+                        capture = coordinate.map(PomText::Project);
+                    } else if within(&["project", "parent"]) {
+                        capture = coordinate.map(PomText::Parent);
+                    } else if within(&["project", "properties"]) {
+                        capture = Some(PomText::Property);
+                        property_name = Some(local.clone());
+                    } else if local == "artifactId"
+                        && (within(&["project", "dependencies", "dependency"])
+                            || within(&[
+                                "project",
+                                "profiles",
+                                "profile",
+                                "dependencies",
+                                "dependency",
+                            ]))
+                    {
+                        capture = Some(PomText::DependencyArtifact);
+                    }
+                }
+                path.push(ours.then(|| local.clone()));
+                declared.push(declared_here);
+            }
+            Ok(quick_xml::events::Event::Empty(event)) => {
+                let declared_here = bind_namespaces(&event, &mut bindings);
+                bindings.truncate(bindings.len().saturating_sub(declared_here));
+            }
+            Ok(quick_xml::events::Event::End(_)) => {
+                capture = None;
+                if path.pop().is_some() {
+                    let count = declared.pop().unwrap_or(0);
+                    bindings.truncate(bindings.len().saturating_sub(count));
+                }
+            }
+            Ok(quick_xml::events::Event::Text(t)) => {
+                let Some(kind) = capture.take() else {
+                    continue;
+                };
+                let Ok(decoded) = t.decode() else {
+                    continue;
+                };
+                let Ok(value) = quick_xml::escape::unescape(&decoded) else {
+                    continue;
+                };
+                let value = value.trim().to_string();
+                if value.is_empty() {
+                    continue;
+                }
+                match kind {
+                    PomText::Project(field) => {
+                        if field == "artifactId" {
+                            pom.artifact = value.clone();
+                        }
+                        coordinates.push((format!("project.{field}"), value));
+                    }
+                    PomText::Parent(field) => {
+                        if field == "artifactId" {
+                            parent_artifact = value.clone();
+                        }
+                        coordinates.push((format!("project.parent.{field}"), value));
+                    }
+                    PomText::Property => {
+                        if let Some(name) = property_name.take() {
+                            properties.push((name, value));
+                        }
+                    }
+                    PomText::DependencyArtifact => pom.dependencies.push(value),
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+
+    let placeholder = |value: &str| resolve_pom_placeholder(value, &properties, &coordinates);
+    pom.artifact = placeholder(&pom.artifact);
+    // A project without its own `<artifactId>` is known by what it inherits.
+    if pom.artifact.is_empty() {
+        pom.artifact = placeholder(&parent_artifact);
+    }
+    pom.dependencies
+        .iter_mut()
+        .for_each(|dependency| *dependency = placeholder(dependency));
+    pom.dependencies.retain(|dependency| !dependency.is_empty());
+    pom
+}
+
+/// Record the namespace declarations on an element and return how many were
+/// added to `bindings`.
+fn bind_namespaces(
+    event: &quick_xml::events::BytesStart<'_>,
+    bindings: &mut Vec<(String, String)>,
+) -> usize {
+    let mut declared = 0;
+    for attr in event.attributes().flatten() {
+        let is_default = attr.key.prefix().is_none() && attr.key.local_name().as_ref() == b"xmlns";
+        let is_prefixed = attr
+            .key
+            .prefix()
+            .is_some_and(|prefix| prefix.as_ref() == b"xmlns");
+        if !(is_default || is_prefixed) {
+            continue;
+        }
+        let Ok(uri) = attr.normalized_value(quick_xml::XmlVersion::Explicit1_0) else {
+            continue;
+        };
+        let prefix = if is_default {
+            String::new()
+        } else {
+            String::from_utf8_lossy(attr.key.local_name().as_ref()).into_owned()
+        };
+        bindings.push((prefix, uri.into_owned()));
+        declared += 1;
+    }
+    declared
+}
+
+/// The prefix and local name of an element's name.
+fn element_name(event: &quick_xml::events::BytesStart<'_>) -> (Option<String>, String) {
+    let name = event.name();
+    (
+        name.prefix()
+            .map(|prefix| String::from_utf8_lossy(prefix.as_ref()).into_owned()),
+        String::from_utf8_lossy(name.local_name().as_ref()).into_owned(),
+    )
+}
+
+/// The URI a prefix is bound to; no prefix takes the default namespace in
+/// scope. `None` means no namespace at all — an unbound prefix is malformed
+/// and lands here too, which only makes its element foreign.
+fn lookup_namespace(prefix: Option<&str>, bindings: &[(String, String)]) -> Option<String> {
+    bindings
+        .iter()
+        .rev()
+        .find(|(bound, _)| bound.as_str() == prefix.unwrap_or(""))
+        .map(|(_, uri)| uri.clone())
+}
+
+/// Replace each `${name}` with the property of that name, from
+/// `<properties>` first and then the project's coordinates. One pass, no
+/// recursion: a placeholder is either known or kept as written.
+fn resolve_pom_placeholder(
+    value: &str,
+    properties: &[(String, String)],
+    coordinates: &[(String, String)],
+) -> String {
+    if !value.contains("${") {
+        return value.to_string();
+    }
+    let mut resolved = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find("${") {
+        resolved.push_str(&rest[..start]);
+        let Some(length) = rest[start..].find('}').map(|end| end + 1) else {
+            break;
+        };
+        let name = &rest[start + 2..start + length - 1];
+        let replacement = properties
+            .iter()
+            .chain(coordinates)
+            .find(|(known, _)| known == name)
+            .map(|(_, value)| value.as_str())
+            .unwrap_or(&rest[start..start + length]);
+        resolved.push_str(replacement);
+        rest = &rest[start + length..];
+    }
+    resolved.push_str(rest);
+    resolved
+}
 
 fn ingest_pom(text: &str, b: &mut ManifestBuilder) {
-    let self_name = POM_ARTIFACT_RE
-        .captures(text)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "unknown-maven-artifact".into());
-    let self_id = b.add_package(&self_name, Some("this artifact (pom.xml)"));
-
-    for dep_block in POM_DEPS_RE.captures_iter(text) {
-        let block = dep_block.get(1).map(|m| m.as_str()).unwrap_or("");
-        for cap in POM_ARTIFACT_RE.captures_iter(block) {
-            if let Some(m) = cap.get(1) {
-                b.add_dependency(&self_id, m.as_str());
-            }
-        }
+    let pom = parse_pom(text);
+    let self_name = if pom.artifact.is_empty() {
+        "unknown-maven-artifact"
+    } else {
+        pom.artifact.as_str()
+    };
+    let self_id = b.add_package(self_name, Some("this artifact (pom.xml)"));
+    for dependency in &pom.dependencies {
+        b.add_dependency(&self_id, dependency);
     }
 }
 
@@ -658,6 +906,136 @@ mod tests {
         let ext = extract_manifest(&p, dir.path());
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_my_app"));
         assert!(ext.nodes.iter().any(|n| n.id == "pkg_junit"));
+    }
+
+    #[test]
+    fn pom_namespaces_and_scopes_are_honored() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("pom.xml");
+        std::fs::write(
+            &p,
+            r#"<m:project xmlns:m="http://maven.apache.org/POM/4.0.0" xmlns:x="http://foreign.example/">
+  <m:parent><m:groupId>org.parent</m:groupId><m:artifactId>parent-app</m:artifactId></m:parent>
+  <m:artifactId>my-app</m:artifactId>
+  <m:dependencyManagement><m:dependencies><m:dependency>
+    <m:artifactId>managed-lib</m:artifactId>
+  </m:dependency></m:dependencies></m:dependencyManagement>
+  <m:build><m:plugins><m:plugin><m:artifactId>plugin-a</m:artifactId>
+    <m:dependencies><m:dependency><m:artifactId>plugin-dep</m:artifactId></m:dependency></m:dependencies>
+  </m:plugin></m:plugins></m:build>
+  <m:dependencies>
+    <m:dependency><m:groupId>org.x</m:groupId><m:artifactId>junit</m:artifactId>
+      <m:exclusions><m:exclusion><m:artifactId>excluded-lib</m:artifactId></m:exclusion></m:exclusions>
+    </m:dependency>
+    <x:dependency><x:artifactId>foreign-lib</x:artifactId></x:dependency>
+  </m:dependencies>
+  <m:profiles><m:profile><m:dependencies><m:dependency>
+    <m:artifactId>profile-lib</m:artifactId>
+  </m:dependency></m:dependencies></m:profile></m:profiles>
+</m:project>"#,
+        )
+        .unwrap();
+        let ext = extract_manifest(&p, dir.path());
+        let is_package = |name: &str| ext.nodes.iter().any(|n| n.id == pkg_id(name));
+        let is_dependency = |name: &str| {
+            ext.edges
+                .iter()
+                .any(|e| e.relation == "depends_on" && e.target == pkg_id(name))
+        };
+        // The project's own identity, not its parent's.
+        assert!(is_package("my-app"), "nodes: {:?}", ext.nodes);
+        assert!(!is_package("parent-app"), "nodes: {:?}", ext.nodes);
+        for dep in ["junit", "profile-lib"] {
+            assert!(
+                is_dependency(dep),
+                "missing dependency {dep}: {:?}",
+                ext.edges
+            );
+        }
+        // Managed versions, build plugins, exclusions and foreign-namespace
+        // tags are not dependencies of the project, however they are spelled.
+        for not_dep in [
+            "managed-lib",
+            "plugin-a",
+            "plugin-dep",
+            "excluded-lib",
+            "foreign-lib",
+        ] {
+            assert!(
+                !is_dependency(not_dep),
+                "{not_dep} is not a project dependency: {:?}",
+                ext.edges
+            );
+        }
+    }
+
+    #[test]
+    fn pom_properties_resolve_placeholders() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("pom.xml");
+        // Single-quoted and spaced `xmlns`, and a comment that spells a tag.
+        std::fs::write(
+            &p,
+            r#"<project xmlns = 'http://maven.apache.org/POM/4.0.0'>
+  <!-- <artifactId>ghost</artifactId> -->
+  <artifactId>my-app</artifactId>
+  <properties><dep.name>commons-lang3</dep.name></properties>
+  <dependencies><dependency><artifactId>${dep.name}</artifactId></dependency></dependencies>
+</project>"#,
+        )
+        .unwrap();
+        let ext = extract_manifest(&p, dir.path());
+        assert!(
+            ext.nodes.iter().any(|n| n.id == pkg_id("my-app")),
+            "nodes: {:?}",
+            ext.nodes
+        );
+        assert!(
+            !ext.nodes.iter().any(|n| n.id == pkg_id("ghost")),
+            "nodes: {:?}",
+            ext.nodes
+        );
+        assert!(
+            ext.edges
+                .iter()
+                .any(|e| e.relation == "depends_on" && e.target == pkg_id("commons-lang3")),
+            "edges: {:?}",
+            ext.edges
+        );
+    }
+
+    #[test]
+    fn pom_without_namespace_ignores_prefixed_lookalikes() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("pom.xml");
+        std::fs::write(
+            &p,
+            r#"<project>
+  <artifactId>plain-app</artifactId>
+  <dependencies>
+    <dependency><artifactId>real-dep</artifactId></dependency>
+    <ext:dependency xmlns:ext="http://other.example/"><ext:artifactId>other-dep</ext:artifactId></ext:dependency>
+  </dependencies>
+</project>"#,
+        )
+        .unwrap();
+        let ext = extract_manifest(&p, dir.path());
+        assert!(
+            ext.nodes.iter().any(|n| n.id == pkg_id("plain-app")),
+            "nodes: {:?}",
+            ext.nodes
+        );
+        assert!(ext
+            .edges
+            .iter()
+            .any(|e| e.relation == "depends_on" && e.target == pkg_id("real-dep")));
+        assert!(
+            !ext.edges
+                .iter()
+                .any(|e| e.relation == "depends_on" && e.target == pkg_id("other-dep")),
+            "edges: {:?}",
+            ext.edges
+        );
     }
 
     #[test]
