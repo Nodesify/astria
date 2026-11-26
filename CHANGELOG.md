@@ -4,6 +4,38 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+- Security: confine paths read from manifests to the scanned tree. Cargo
+  workspace members, path dependencies and JavaScript workspace entries are
+  followed only when they stay inside the scan root; absolute, rooted and
+  UNC spellings are refused before the operating system sees them. On
+  Windows an attacker-chosen UNC path made indexing authenticate to that
+  host.
+- `astria install --platform claude` writes its project section to the
+  instructions file Claude Code already reads — an existing `CLAUDE.md`,
+  else the existing `AGENTS.md` — instead of always creating a `CLAUDE.md`,
+  which hid a tracked `AGENTS.md` from Claude Code.
+- Stop binding a call to a function's own parameter — Python (including
+  lambda parameters) and the JavaScript family — to an unrelated same-named
+  definition: the parameter is a runtime callback and its target is unknown.
+- `astria affected <file>` seeds members nested at any depth, so callers of
+  a method inside a class are no longer missed from a file seed.
+- Parse `pom.xml` structurally: default and prefixed namespaces are
+  understood and foreign-namespace tags ignored; the project's own
+  `<artifactId>` is used rather than its parent's; only the project's
+  dependencies count, not `dependencyManagement`, plugin dependencies or
+  exclusions; `${...}` placeholders resolve from `<properties>`.
+- Wiki and Obsidian exports key god-node articles and community notes by
+  id, so same-labelled nodes no longer overwrite each other's articles and
+  every link follows the node it names.
+- Image nodes count toward the doc-seed quota and rank like documents on
+  code-majority graphs.
+- Treat `ASTRIA_COST_*_PER_MTOK` values that are not finite non-negative
+  numbers as unset, with a warning, instead of producing a null estimate.
+- Extraction hash bumped to v19 — first build after upgrading re-extracts
+  cached files once.
+
 ## [1.6.0] — 2026-11-05
 
 - Report path confidence honestly: among equal-length shortest routes the most

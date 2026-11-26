@@ -69,7 +69,7 @@ Every `run`/`update` writes `.astria/cost.json` with the run's measured token sp
 
 | Variable | Purpose |
 |---|---|
-| `ASTRIA_COST_INPUT_PER_MTOK` | USD per 1M input tokens; both rates must be set for an estimate to appear |
+| `ASTRIA_COST_INPUT_PER_MTOK` | USD per 1M input tokens; both rates must be set for an estimate to appear. A rate that is not a finite non-negative number counts as unset and warns |
 | `ASTRIA_COST_OUTPUT_PER_MTOK` | USD per 1M output tokens |
 
 ## MCP HTTP serving

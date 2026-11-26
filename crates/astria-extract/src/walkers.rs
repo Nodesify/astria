@@ -184,6 +184,10 @@ pub(crate) struct ExtractionState<'a> {
     pub closure_counts: HashMap<String, usize>,
     /// Lexical function/class nesting, independent of receiver class context.
     pub lexical_scopes: Vec<String>,
+    /// Names bound by the parameters of each function whose body is being
+    /// walked, innermost last. A bare call to one of them is a call through
+    /// a runtime value and is never bound to a definition of that name.
+    pub local_bindings: Vec<HashSet<String>>,
 }
 
 fn is_javascript(cfg: &LanguageConfig) -> bool {
@@ -874,7 +878,10 @@ pub(crate) fn walk_structural<'a>(state: &mut ExtractionState<'a>, node: &Node<'
 
                 // Pass 2 inline: walk function body for call expressions
                 if let Some(body) = find_body(node, state.cfg) {
+                    let bindings = parameter_bindings(state, node);
+                    state.local_bindings.push(bindings);
                     walk_calls(state, &func_id, &body);
+                    state.local_bindings.pop();
                 }
                 state.lexical_scopes.push(func_id);
                 let mut cursor = node.walk();
@@ -1128,8 +1135,10 @@ pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, b
         };
         if let Some(name) = callee_name {
             // Skip language builtins: they resolve to bare-name stubs that
-            // merge corpus-wide and pollute god-node rankings.
-            if !is_language_builtin(&name, state.cfg.name) {
+            // merge corpus-wide and pollute god-node rankings. Skip a call
+            // to a name the enclosing scope binds as a parameter, too: its
+            // target is a runtime value, never a same-named definition.
+            if !is_language_builtin(&name, state.cfg.name) && !binds_parameter(state, &name) {
                 let callee_id = call_target(state, caller_id, &name);
                 state.edges.push(ExtractedEdge {
                     source: caller_id.to_string(),
@@ -1155,7 +1164,143 @@ pub(crate) fn walk_calls<'a>(state: &mut ExtractionState<'a>, caller_id: &str, b
         {
             continue;
         }
+        // A closure attributed to the enclosing function still binds its own
+        // parameters inside its body.
+        let bindings = inline_closure_bindings(state, &child);
+        if let Some(bindings) = &bindings {
+            state.local_bindings.push(bindings.clone());
+        }
         walk_calls(state, caller_id, &child);
+        if bindings.is_some() {
+            state.local_bindings.pop();
+        }
+    }
+}
+
+/// Whether a function whose body is being walked binds `name` as a parameter.
+fn binds_parameter(state: &ExtractionState<'_>, name: &str) -> bool {
+    state
+        .local_bindings
+        .iter()
+        .any(|bindings| bindings.contains(name))
+}
+
+/// Names a function's own signature binds: its parameters. A bare call to
+/// one of them inside the body is a call through a runtime value — a
+/// callback the caller passed in — so its target is unknown, and binding it
+/// to an unrelated same-named definition elsewhere would fabricate an edge.
+///
+/// Read per language family, where the grammar is known to put the bound
+/// name. Other languages bind nothing here yet, which only leaves their
+/// calls exactly as they were.
+pub(crate) fn parameter_bindings(
+    state: &ExtractionState<'_>,
+    function: &Node<'_>,
+) -> HashSet<String> {
+    let mut names = HashSet::new();
+    // Python's lambda makes the field optional.
+    let Some(list) = function.child_by_field_name("parameters") else {
+        return names;
+    };
+    let mut cursor = list.walk();
+    match state.cfg.name {
+        "Python" => {
+            for parameter in list.children(&mut cursor) {
+                python_parameter_names(parameter, state.source, &mut names);
+            }
+        }
+        _ if is_javascript(state.cfg) => {
+            // A lone arrow parameter (`x => ...`) is the identifier itself.
+            if list.kind() == "formal_parameters" {
+                for parameter in list.children(&mut cursor) {
+                    javascript_parameter_names(parameter, state.source, &mut names);
+                }
+            } else {
+                javascript_parameter_names(list, state.source, &mut names);
+            }
+        }
+        _ => {}
+    }
+    names
+}
+
+/// A closure whose calls belong to the enclosing function as far as this
+/// walker is concerned.
+fn inline_closure_bindings(
+    state: &ExtractionState<'_>,
+    node: &Node<'_>,
+) -> Option<HashSet<String>> {
+    // A Python lambda is not a function type: its calls attribute to the
+    // enclosing function.
+    (state.cfg.name == "Python" && node.kind() == "lambda").then(|| parameter_bindings(state, node))
+}
+
+/// Python: an untyped parameter is the identifier itself; the others lead
+/// with the name, ahead of any annotation or default value, which are not
+/// bindings. A function's list and a lambda's share these node kinds.
+fn python_parameter_names(node: Node<'_>, source: &[u8], names: &mut HashSet<String>) {
+    match node.kind() {
+        "identifier" => {
+            names.insert(node_text(&node, source).to_string());
+        }
+        "typed_parameter" | "typed_default_parameter" | "default_parameter" => {
+            if let Some(name) = node
+                .child_by_field_name("name")
+                .or_else(|| node.named_child(0))
+            {
+                python_parameter_names(name, source, names);
+            }
+        }
+        // `*args`, `**kwargs`, `(a, b)` and a parenthesised splat wrap names.
+        "tuple_pattern"
+        | "list_splat_pattern"
+        | "dictionary_splat_pattern"
+        | "parenthesized_list_splat_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                python_parameter_names(child, source, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// JavaScript family: a parameter carries its binding in `pattern`.
+fn javascript_parameter_names(parameter: Node<'_>, source: &[u8], names: &mut HashSet<String>) {
+    javascript_pattern_names(
+        parameter
+            .child_by_field_name("pattern")
+            .unwrap_or(parameter),
+        source,
+        names,
+    );
+}
+
+fn javascript_pattern_names(pattern: Node<'_>, source: &[u8], names: &mut HashSet<String>) {
+    let mut bind = |child: Node<'_>| javascript_pattern_names(child, source, names);
+    match pattern.kind() {
+        "identifier" | "shorthand_property_identifier_pattern" => {
+            names.insert(node_text(&pattern, source).to_string());
+        }
+        // `{ a, b: c }`: only the value side binds.
+        "pair_pattern" => {
+            if let Some(value) = pattern.child_by_field_name("value") {
+                bind(value);
+            }
+        }
+        // `x = 1`: the left side binds; the default is an expression.
+        "assignment_pattern" => {
+            if let Some(left) = pattern.child_by_field_name("left") {
+                bind(left);
+            }
+        }
+        "object_pattern" | "array_pattern" | "rest_pattern" => {
+            let mut cursor = pattern.walk();
+            for child in pattern.named_children(&mut cursor) {
+                bind(child);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1429,6 +1574,7 @@ pub fn extract_source(
         string_refs_seen: HashSet::new(),
         closure_counts: HashMap::new(),
         lexical_scopes: Vec::new(),
+        local_bindings: Vec::new(),
     };
 
     // Add file node. Rust module docs (`//!` block at the top) describe the
@@ -1602,5 +1748,124 @@ mod status_tests {
         )
         .unwrap();
         assert_eq!(extraction.status, ExtractionStatus::SuspiciousEmpty);
+    }
+}
+
+/// A bare call to a name the enclosing function binds — a parameter — is a
+/// call through a runtime value. Its target is unknown, and binding it to an
+/// unrelated same-named definition elsewhere fabricates an edge.
+#[cfg(test)]
+mod parameter_binding_tests {
+    use super::*;
+
+    /// Extract `files` as one corpus and return the extraction named `pick`.
+    fn extract(dir: &Path, files: &[(&str, &str)], pick: &str) -> Extraction {
+        let paths: Vec<PathBuf> = files
+            .iter()
+            .map(|(name, source)| {
+                let file = dir.join(name);
+                std::fs::write(&file, source).unwrap();
+                file
+            })
+            .collect();
+        let db = astria_core::db::open_db_in_memory().unwrap();
+        let results = crate::extract(&paths, dir, &db).unwrap();
+        let picked = dir.join(pick);
+        results.into_iter().find(|e| e.file_path == picked).unwrap()
+    }
+
+    fn call_targets(extraction: &Extraction) -> Vec<String> {
+        extraction
+            .edges
+            .iter()
+            .filter(|edge| edge.relation == "calls")
+            .map(|edge| edge.target.clone())
+            .collect()
+    }
+
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn python_parameter_call_is_not_bound_to_a_same_named_definition() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = extract(
+            dir.path(),
+            &[
+                (
+                    "lib.py",
+                    "class Service:\n    pass\n\n\ndef notify():\n    pass\n\n\ndef prepare():\n    pass\n",
+                ),
+                (
+                    "app.py",
+                    "def run(notify, handler: Callable = None, *args, **kwargs):\n    prepare()\n    notify()\n    handler(notify)\n\n\ndef make(client: Service):\n    return Service()\n",
+                ),
+            ],
+            "app.py",
+        );
+        let calls = call_targets(&app);
+        // A genuine call still resolves...
+        assert!(
+            calls.iter().any(|t| t.ends_with("::prepare")),
+            "calls: {calls:?}"
+        );
+        // ...but a parameter is a runtime callback with an unknown target,
+        // whatever else in the corpus shares its name.
+        assert!(
+            !calls.iter().any(|t| t.ends_with("::notify")),
+            "a parameter was bound to an unrelated definition: {calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|t| t.ends_with("handler")),
+            "a parameter was bound to an unrelated definition: {calls:?}"
+        );
+        // An annotation names a type, not a binding: a call to it stands.
+        assert!(
+            calls.iter().any(|t| t.ends_with("::Service")),
+            "calls: {calls:?}"
+        );
+    }
+
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn python_lambda_parameter_call_is_not_bound_to_a_same_named_definition() {
+        // A lambda's calls belong to the enclosing function, but its own
+        // parameters bind inside its body.
+        let dir = tempfile::tempdir().unwrap();
+        let app = extract(
+            dir.path(),
+            &[
+                ("lib.py", "def save():\n    pass\n"),
+                (
+                    "app.py",
+                    "def handle(event):\n    write = lambda save: save(event)\n    return write\n",
+                ),
+            ],
+            "app.py",
+        );
+        let calls = call_targets(&app);
+        assert!(
+            !calls.iter().any(|t| t.ends_with("::save")),
+            "a lambda parameter was bound to an unrelated definition: {calls:?}"
+        );
+    }
+
+    #[cfg(feature = "lang-javascript")]
+    #[test]
+    fn javascript_parameter_call_is_not_bound_to_a_same_named_definition() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = extract(
+            dir.path(),
+            &[(
+                "app.js",
+                "function format(value) {\n  return value;\n}\n\nfunction render(format) {\n  return format(\"x\");\n}\n\nconst run = (notify) => notify();\n\nfunction handle({ notify }) {\n  notify();\n}\n",
+            )],
+            "app.js",
+        );
+        let calls = call_targets(&app);
+        assert!(
+            calls
+                .iter()
+                .all(|t| !t.ends_with("::format") && !t.ends_with("notify")),
+            "a parameter was bound to an unrelated definition: {calls:?}"
+        );
     }
 }

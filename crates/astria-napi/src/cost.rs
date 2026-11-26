@@ -68,11 +68,32 @@ fn fetch_cumulative(db: &Connection) -> Result<(i64, i64, i64, i64)> {
 /// Optional USD-per-million-token prices; both must be set for an estimate
 /// to appear (a half-priced estimate would be a lie).
 fn pricing() -> Option<(f64, f64)> {
-    let input =
-        astria_core::env_var("COST_INPUT_PER_MTOK").and_then(|v| v.trim().parse::<f64>().ok())?;
-    let output =
-        astria_core::env_var("COST_OUTPUT_PER_MTOK").and_then(|v| v.trim().parse::<f64>().ok())?;
-    Some((input, output))
+    Some((
+        price(
+            "COST_INPUT_PER_MTOK",
+            astria_core::env_var("COST_INPUT_PER_MTOK"),
+        )?,
+        price(
+            "COST_OUTPUT_PER_MTOK",
+            astria_core::env_var("COST_OUTPUT_PER_MTOK"),
+        )?,
+    ))
+}
+
+/// A supplied price must be a finite non-negative number: `NaN`, `inf` and a
+/// negative all parse as floats and would poison every estimate, so they
+/// count as unset — with a warning, since the operator did supply something.
+fn price(name: &str, raw: Option<String>) -> Option<f64> {
+    let raw = raw?;
+    match raw.trim().parse::<f64>() {
+        Ok(value) if value.is_finite() && value >= 0.0 => Some(value),
+        _ => {
+            eprintln!(
+                "warning: ASTRIA_{name}={raw:?} is not a finite non-negative number; no cost estimate"
+            );
+            None
+        }
+    }
 }
 
 fn dollars(tokens: i64, per_mtok: f64) -> f64 {
@@ -194,6 +215,26 @@ mod tests {
         // cumulative: 150 in + 30 out → 0.00045 + 0.00045
         let cum = report["estimated_cost_usd"]["cumulative"].as_f64().unwrap();
         assert!((cum - 0.0009).abs() < 1e-9, "got {cum}");
+    }
+
+    #[test]
+    fn prices_that_are_not_finite_non_negative_numbers_are_ignored() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db = seeded_db();
+        for bad in ["NaN", "inf", "-inf", "-1.5"] {
+            std::env::set_var("ASTRIA_COST_INPUT_PER_MTOK", bad);
+            std::env::set_var("ASTRIA_COST_OUTPUT_PER_MTOK", "15.0");
+            let out = write_cost_report(dir.path(), &db, 1).unwrap();
+            let report: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(out).unwrap()).unwrap();
+            assert!(
+                report.get("estimated_cost_usd").is_none(),
+                "{bad} must not produce an estimate: {report}"
+            );
+        }
+        std::env::remove_var("ASTRIA_COST_INPUT_PER_MTOK");
+        std::env::remove_var("ASTRIA_COST_OUTPUT_PER_MTOK");
     }
 
     #[test]

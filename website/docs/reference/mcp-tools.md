@@ -88,7 +88,7 @@ Shortest path between two nodes, with the relation of each hop.
 
 ### `affected`
 
-Blast radius: everything impacted by changing a node — reverse reachability over the impact relations (`calls`, `references`, `imports`, `imports_from`, `uses`, `depends_on`, `requires`, and `inherits` where a graph carries it). The `relation` argument accepts only these values.
+Blast radius: everything impacted by changing a node — reverse reachability over the impact relations (`calls`, `references`, `imports`, `imports_from`, `uses`, `depends_on`, `requires`, and `inherits` where a graph carries it). The `relation` argument accepts only these values. A file or class seed expands to every member nested under it, so callers of a method inside a class are reported too.
 
 Every hop reports the evidence tier of the edge it was reached through: `RESOLVED` (a call expression extracted from source, name bound to exactly one definition — trustworthy), `EXTRACTED` (directly verified), or `INFERRED` (no source locus, or a name too common to bind — marked with a legend line; treat as weaker evidence when deciding what a change touches).
 
