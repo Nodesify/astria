@@ -87,7 +87,7 @@ fn extract_inner(
                 results.push(cached);
                 continue;
             }
-            let extraction = crate::manifest::extract_manifest(file_path);
+            let extraction = crate::manifest::extract_manifest(file_path, root);
             save_cache(db, file_path, &hash, &extraction);
             results.push(extraction);
             continue;

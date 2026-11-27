@@ -39,7 +39,9 @@ pub fn export_html_with_mode(
     out_path: &Path,
     mode: HtmlExportMode,
 ) -> astria_core::Result<()> {
-    let node_count: usize = db.query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get(0))?;
+    // SQLite counts are signed 64-bit integers; COUNT(*) is never negative.
+    let node_count: usize =
+        db.query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get::<_, i64>(0))? as usize;
     if mode == HtmlExportMode::Standard && node_count > MAX_NODES_FOR_VIZ {
         return Err(astria_core::AstriaError::Graph(format!(
             "graph has {node_count} nodes, exceeding the standard HTML visualization limit of {MAX_NODES_FOR_VIZ}; rerun with --mode large"

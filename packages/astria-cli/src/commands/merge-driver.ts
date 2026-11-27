@@ -38,7 +38,10 @@ function loadJson(path: string, label: string): Json {
 /// Unchanged-on-both-sides, changed-on-one-side, and agree-on-both cases
 /// collapse; genuine divergence keeps ours (git's own convention).
 function mergeFields(base: Json | undefined, ours: Json, theirs: Json): Json {
-  const out: Json = {};
+  // No prototype: a field named `__proto__` in a graph file must stay data.
+  // On an ordinary object, assigning that name replaces the record's
+  // prototype instead, silently dropping the field from the merged output.
+  const out: Json = Object.create(null);
   const keys = new Set([...Object.keys(ours), ...Object.keys(theirs)]);
   for (const key of keys) {
     const o = ours[key];

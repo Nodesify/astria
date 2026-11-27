@@ -47,6 +47,8 @@ use crate::naming::{file_stem, make_node_id, make_target_id};
 #[allow(unused_imports)]
 use crate::schema::{ExtractedEdge, ExtractedNode, Extraction};
 #[allow(unused_imports)]
+use crate::walkers::parameter_bindings;
+#[allow(unused_imports)]
 use crate::walkers::ExtractionState;
 #[allow(unused_imports)]
 use crate::walkers::{
@@ -238,7 +240,10 @@ pub(crate) fn walk_javascript_function<'a>(state: &mut ExtractionState<'a>, node
         source_line: Some(node.start_position().row as u32 + 1),
     });
     if let Some(body) = find_body(node, state.cfg) {
+        let bindings = parameter_bindings(state, node);
+        state.local_bindings.push(bindings);
         walk_calls(state, &func_id, &body);
+        state.local_bindings.pop();
     }
     state.lexical_scopes.push(func_id);
     let mut cursor = node.walk();

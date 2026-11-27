@@ -561,10 +561,7 @@ fn query_graph_loaded(
         let doc_seed_quota = if docs_majority { seed_limit } else { 2 };
         let mut doc_seeds = seed_nodes
             .iter()
-            .filter(|&&idx| {
-                is_doc_type(&loaded.graph[idx].file_type)
-                    || is_semantic_type(&loaded.graph[idx].file_type)
-            })
+            .filter(|&&idx| is_doc_seed_type(&loaded.graph[idx].file_type))
             .count();
         for &(_, idx) in scored.iter() {
             if seed_nodes.len() == seed_limit {
@@ -578,9 +575,7 @@ fn query_graph_loaded(
             {
                 continue;
             }
-            if is_doc_type(&loaded.graph[idx].file_type)
-                || is_semantic_type(&loaded.graph[idx].file_type)
-            {
+            if is_doc_seed_type(&loaded.graph[idx].file_type) {
                 if doc_seeds >= doc_seed_quota && !wants_docs(&terms) {
                     continue;
                 }
@@ -969,6 +964,50 @@ mod tests {
         assert!(
             doc_lines <= 2,
             "doc seed quota exceeded: {doc_lines} doc nodes shown"
+        );
+        assert!(
+            text.contains("validation()"),
+            "code symbol must remain present"
+        );
+    }
+
+    #[test]
+    fn image_seeds_do_not_displace_code() {
+        // Image nodes carry captions, and caption terms match a question as
+        // readily as a document's: the doc-seed quota counts them too.
+        let db = open_db_in_memory().unwrap();
+        let mut inserts = String::from(
+            "INSERT INTO nodes (id, label, file_type, source_file) VALUES
+                ('sym', 'validation()', 'code', 'src/v.rs')",
+        );
+        for i in 0..8 {
+            inserts.push_str(&format!(
+                ", ('img{i}', 'validation diagram {i}', 'image', 'assets/d{i}.png')"
+            ));
+        }
+        inserts.push(';');
+        db.execute_batch(&inserts).unwrap();
+
+        let (text, _, _, _) = query_graph(
+            &db,
+            "image-cap-test",
+            "validation",
+            "bfs",
+            2,
+            4000,
+            false,
+            0.0,
+            0,
+            false,
+        )
+        .unwrap();
+        let image_lines = text
+            .lines()
+            .filter(|l| l.starts_with("NODE ") && l.contains("assets/"))
+            .count();
+        assert!(
+            image_lines <= 2,
+            "image seed quota exceeded: {image_lines} image nodes shown"
         );
         assert!(
             text.contains("validation()"),
@@ -2194,6 +2233,22 @@ at the lake house');",
             find_shortest_path(&db, &key, "Delta", "Alpha", false, 0.0).unwrap();
         assert!(found_und);
         assert_eq!(hops_und, 3);
+    }
+
+    #[test]
+    fn path_refuses_an_endpoint_whose_words_match_nothing() {
+        let db = open_db_in_memory().unwrap();
+        let key = seed(&db);
+        // Neither word exists in the graph: a route to whatever ranked first
+        // would be built from nothing but loosely-overlapping tokens.
+        let (found, hops, message) =
+            find_shortest_path(&db, &key, "quuxblorf navigator", "Alpha", false, 0.0).unwrap();
+        assert!(!found);
+        assert_eq!(hops, 0);
+        assert!(
+            message.starts_with("No matching node for 'quuxblorf navigator'."),
+            "{message}"
+        );
     }
 
     #[test]

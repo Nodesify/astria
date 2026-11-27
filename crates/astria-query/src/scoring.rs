@@ -385,6 +385,14 @@ pub(crate) fn is_semantic_type(file_type: &str) -> bool {
     matches!(file_type, "concept" | "entity" | "pattern" | "module")
 }
 
+/// Node types the doc-seed quota treats as prose: documents, the summaries
+/// derived from them, and images. An image node carries a caption, and
+/// caption terms match a question as readily as a document's — it must not
+/// out-seed real code on a code-majority graph.
+pub(crate) fn is_doc_seed_type(file_type: &str) -> bool {
+    is_doc_type(file_type) || is_semantic_type(file_type) || file_type == "image"
+}
+
 /// Share of prose-like nodes: documents plus semantic-derived summaries. On
 /// an LLM-enriched docs-only corpus the concept/code nodes the extractor adds
 /// would otherwise push the document share under `DOCS_MAJORITY_PROSE_SHARE`
@@ -811,7 +819,10 @@ pub(crate) fn score_nodes(loaded: &LoadedGraph, terms: &[String]) -> ScoredNodes
         // equal term evidence: without the prior, prose-heavy doc nodes and
         // std-call stubs crowd code symbols out of the seed set.
         let is_chunk = node.file_type == "chunk";
-        let is_doc = is_chunk || is_doc_type(&node.file_type);
+        let is_doc = is_chunk
+            || is_doc_type(&node.file_type)
+            // An image ranks like the document its caption belongs to.
+            || node.file_type == "image";
         let symbol_parts = &label_components[i];
         let is_test = node.file_type == "test"
             || is_testish_path(&node.source_file)

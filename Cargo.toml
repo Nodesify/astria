@@ -43,7 +43,7 @@ astria-pdf = { path = "crates/astria-pdf" }
 astria-office = { path = "crates/astria-office" }
 astria-gws = { path = "crates/astria-gws" }
 astria-embed = { path = "crates/astria-embed" }
-rusqlite = { version = "0.34", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 petgraph = "0.7"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
@@ -102,4 +102,6 @@ base64 = "0.22"
 jieba-rs = "0.7"
 
 [workspace.package]
-rust-version = "1.88"
+# rusqlite 0.41+ (the first line bundling SQLite 3.54, RUSTSEC-2026-0459)
+# requires 1.89.
+rust-version = "1.89"

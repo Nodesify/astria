@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 
 /// Redact recognizable credentials without treating ordinary hashes or identifiers as secrets.
@@ -80,6 +80,65 @@ pub fn validate_path(root: &Path, file_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Resolve a relative path read from repository CONTENT — a workspace member
+/// list, a `path = "..."` dependency, a package `main` field — against
+/// `base`, returning it only when it stays inside `root`.
+///
+/// Purely lexical: nothing here lets the operating system see the path
+/// before it has been checked. A repository is untrusted input, and on
+/// Windows an attacker-chosen UNC spelling (`\\host\share\x`) makes the OS
+/// authenticate to that host, leaking an NTLM response with no code run.
+/// Absolute, rooted, drive, UNC and verbatim spellings are refused outright,
+/// and `..` may not climb past `root`.
+pub fn confine_to_root(base: &Path, relative: &str, root: &Path) -> Option<PathBuf> {
+    if relative.trim().is_empty() {
+        return None;
+    }
+    // Both separators are separators on every platform, so a backslash
+    // spelling cannot slip through a Unix host or CI run. A drive letter is
+    // judged the same way: Unix has no prefix to recognise, so `C:\x` and
+    // the drive-relative `C:x` are refused here rather than taken for a
+    // directory named `C:`.
+    let normalized = relative.replace('\\', "/");
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return None;
+    }
+    let mut stack: Vec<std::ffi::OsString> = base
+        .components()
+        .map(|component| component.as_os_str().to_os_string())
+        .collect();
+    // `..` may consume real components, never the prefix or root they hang
+    // from.
+    let anchor = base
+        .components()
+        .take_while(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+        .count();
+    for component in Path::new(&normalized).components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => return None,
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if stack.len() <= anchor {
+                    return None;
+                }
+                stack.pop();
+            }
+            Component::Normal(part) => stack.push(part.to_os_string()),
+        }
+    }
+    let joined: PathBuf = stack.into_iter().collect();
+    // A leading `.` is spelling, not structure: `./repo/x` and `repo/x`
+    // name the same place.
+    fn without_cur_dir(path: &Path) -> PathBuf {
+        path.components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .collect()
+    }
+    let inside = without_cur_dir(&joined).starts_with(without_cur_dir(root));
+    inside.then_some(joined)
+}
+
 /// Check if a file is within acceptable size limits for processing.
 pub fn check_file_size(path: &Path, size_bytes: u64) -> bool {
     if size_bytes > MAX_BINARY_FILE_SIZE {
@@ -93,10 +152,8 @@ pub fn check_file_size(path: &Path, size_bytes: u64) -> bool {
         "sql",
     ];
     let ext_lower = ext.to_lowercase();
-    if text_extensions.contains(&ext_lower.as_str()) && size_bytes > MAX_TEXT_FILE_SIZE {
-        return false;
-    }
-    true
+    // Text files have the tighter of the two limits.
+    !(text_extensions.contains(&ext_lower.as_str()) && size_bytes > MAX_TEXT_FILE_SIZE)
 }
 
 /// Sanitize a node label: strip control chars and cap length.
@@ -124,8 +181,15 @@ pub fn sanitize_docstring(doc: &str) -> String {
 const ALLOWED_HIDDEN_DIRS: &[&str] = &[".github", ".gitlab", ".circleci", ".config", ".husky"];
 
 /// File extensions that should never enter the graph (keys, certificates,
-/// keystores).
-const SENSITIVE_EXTENSIONS: &[&str] = &["pem", "key", "p12", "pfx", "jks", "keystore", "kdbx"];
+/// keystores). `env` covers environment files without the leading dot
+/// (`config/production.env`); the dot-prefixed forms are matched by name
+/// below. `tfstate`/`tfvars` are infrastructure state and variables, which
+/// hold secrets in plain text. `p8`/`pk8` are PKCS#8 private keys, `gpg`/
+/// `pgp` key rings, `keytab` a Kerberos key tab.
+const SENSITIVE_EXTENSIONS: &[&str] = &[
+    "pem", "key", "p12", "pfx", "jks", "keystore", "kdbx", "ppk", "p8", "pk8", "gpg", "pgp",
+    "keytab", "env", "tfstate", "tfvars",
+];
 
 /// Config/data extensions for which secret-looking *names* are blocked.
 /// Source-code files are exempt so `password-validator.ts` still graphs.
@@ -145,8 +209,18 @@ const CONFIG_EXTENSIONS: &[&str] = &[
 const SENSITIVE_EXACT_NAMES: &[&str] = &[
     ".npmrc",
     ".netrc",
+    "_netrc",
     ".htpasswd",
+    ".htdigest",
     ".git-credentials",
+    ".gitconfig",
+    ".yarnrc.yml",
+    ".pypirc",
+    ".dockercfg",
+    ".vault-token",
+    ".pgpass",
+    ".my.cnf",
+    ".ldaprc",
     "id_rsa",
     "id_dsa",
     "id_ed25519",
@@ -354,6 +428,28 @@ mod tests {
         assert!(is_sensitive_path(".git/config"));
         // Hidden tool dirs not allowlisted are skipped too
         assert!(is_sensitive_path(".zcode/settings.json"));
+        // An environment file is one with or without the leading dot.
+        assert!(is_sensitive_path("config/production.env"));
+        // Tool credentials with fixed names, and other private-key formats.
+        assert!(is_sensitive_path("_netrc"));
+        assert!(is_sensitive_path(".yarnrc.yml"));
+        assert!(is_sensitive_path(".pypirc"));
+        assert!(is_sensitive_path(".dockercfg"));
+        assert!(is_sensitive_path(".htdigest"));
+        assert!(is_sensitive_path(".vault-token"));
+        assert!(is_sensitive_path("deploy/server.ppk"));
+        // Infrastructure state and variables carry secrets in plain text.
+        assert!(is_sensitive_path("infra/terraform.tfstate"));
+        assert!(is_sensitive_path("infra/prod.tfvars"));
+        // Other private-key containers, and database password files.
+        assert!(is_sensitive_path("signing/platform.pk8"));
+        assert!(is_sensitive_path("keys/AuthKey_ABCD1234.p8"));
+        assert!(is_sensitive_path("keys/private.pgp"));
+        assert!(is_sensitive_path("gnupg/secring.gpg"));
+        assert!(is_sensitive_path("krb5/service.keytab"));
+        assert!(is_sensitive_path(".pgpass"));
+        assert!(is_sensitive_path(".my.cnf"));
+        assert!(is_sensitive_path(".ldaprc"));
     }
 
     #[test]
@@ -365,6 +461,14 @@ mod tests {
         // source code is exempt from secret-looking-name rules
         assert!(!is_sensitive_path("src/password_validator.ts"));
         assert!(!is_sensitive_path("src/SecretService.java"));
+        // Source that merely mentions environments is not an environment file.
+        assert!(!is_sensitive_path("src/env.d.ts"));
+        assert!(!is_sensitive_path("src/environment.ts"));
+        assert!(!is_sensitive_path("infra/main.tf"));
+        // A key is a file type, not a word in a source file's name.
+        assert!(!is_sensitive_path("src/api_keys.rs"));
+        assert!(!is_sensitive_path("src/KeybindManager.ts"));
+        assert!(!is_sensitive_path("src/pgp_utils.py"));
     }
 
     #[test]
@@ -395,6 +499,64 @@ mod tests {
         assert!(
             !looks_minified(5_000, 4096, 1),
             "small files are never flagged"
+        );
+    }
+
+    #[test]
+    fn confined_paths_resolve_inside_the_root() {
+        let root = Path::new("/repo");
+        let base = Path::new("/repo/crates/cli");
+        let confined = |relative: &str| confine_to_root(base, relative, root);
+        assert_eq!(
+            confined("../core").as_deref(),
+            Some(Path::new("/repo/crates/core"))
+        );
+        assert_eq!(
+            confined("./src/lib.rs").as_deref(),
+            Some(Path::new("/repo/crates/cli/src/lib.rs"))
+        );
+        // Climbing up to the root itself is still inside it; one more is not.
+        assert_eq!(confined("../..").as_deref(), Some(Path::new("/repo")));
+        assert_eq!(confined("../../.."), None);
+        assert_eq!(confined(""), None);
+        assert_eq!(confined("   "), None);
+    }
+
+    #[test]
+    fn absolute_and_unc_spellings_are_refused_before_any_lookup() {
+        let root = Path::new("/repo");
+        let base = Path::new("/repo/ws");
+        for spelling in [
+            "\\\\host\\share\\crate",
+            "//host/share/crate",
+            "\\\\?\\C:\\repo\\crate",
+            "C:\\elsewhere\\crate",
+            // Drive-relative, and so absolute on whichever platform reads it.
+            "D:relative\\crate",
+            "/elsewhere/crate",
+        ] {
+            assert_eq!(
+                confine_to_root(base, spelling, root),
+                None,
+                "{spelling:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn root_relative_spellings_compare_by_components() {
+        let root = Path::new(".");
+        assert_eq!(
+            confine_to_root(Path::new("./crates/cli"), "../core", root).as_deref(),
+            Some(Path::new("./crates/core"))
+        );
+        assert_eq!(
+            confine_to_root(Path::new("crates/cli"), "../..", root).as_deref(),
+            Some(Path::new(""))
+        );
+        assert_eq!(
+            confine_to_root(Path::new("crates/cli"), "../../..", root),
+            None
         );
     }
 }

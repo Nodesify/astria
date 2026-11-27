@@ -160,9 +160,9 @@ struct Wiki {
     communities: Vec<(i64, String, Option<f64>)>,
     god_nodes: Vec<NodeAnalysis>,
     surprising: Vec<SurprisingEdge>,
-    /// community label -> article stem under communities/
-    community_stems: HashMap<String, String>,
-    /// god node label -> article stem under nodes/
+    /// community id -> article stem under communities/
+    community_stems: HashMap<i64, String>,
+    /// node id -> article stem under nodes/
     node_stems: HashMap<String, String>,
     /// repo root for root-relative source paths
     root: Option<std::path::PathBuf>,
@@ -232,20 +232,22 @@ impl Wiki {
 
         let analysis = analyze(db)?;
 
-        // Article stems must not collide within each directory.
+        // Article stems must not collide within each directory. They are
+        // keyed by id, never by label: two nodes (or communities) may share
+        // a label, and the second article would then overwrite the first
+        // while every link to the label led to one of them.
         let mut community_stems = HashMap::new();
         let mut used_community: HashSet<String> = HashSet::new();
-        for (_, label, _) in &communities {
+        for (id, label, _) in &communities {
             let stem = unique_slug(slug(label), &mut used_community);
-            community_stems.insert(label.clone(), stem);
+            community_stems.insert(*id, stem);
         }
         let mut node_stems = HashMap::new();
         let mut used_nodes: HashSet<String> = HashSet::new();
         for node in &analysis.god_nodes {
-            if !node_stems.contains_key(&node.label) {
-                let stem = unique_slug(slug(&node.label), &mut used_nodes);
-                node_stems.insert(node.label.clone(), stem);
-            }
+            node_stems
+                .entry(node.id.clone())
+                .or_insert_with(|| unique_slug(slug(&node.label), &mut used_nodes));
         }
 
         Ok(Wiki {
@@ -277,16 +279,22 @@ impl Wiki {
     /// to plain text when the community has no article (unknown id).
     fn community_link(&self, id: i64, prefix: &str) -> String {
         let label = self.community_label(id);
-        match self.community_stems.get(&label) {
+        match self.community_stems.get(&id) {
             Some(stem) => md_link(&label, &format!("{prefix}communities/{stem}.md")),
             None => link_text(&label),
         }
     }
 
     /// Link to a node article when one exists (god nodes only), else the
-    /// bare label in backticks.
-    fn node_link(&self, label: &str, prefix: &str) -> String {
-        match self.node_stems.get(label) {
+    /// bare label in backticks. The link follows the node's id; its label is
+    /// only the text.
+    fn node_link(&self, id: &str, prefix: &str) -> String {
+        let label = self
+            .nodes
+            .get(id)
+            .map(|node| node.label.as_str())
+            .unwrap_or(id);
+        match self.node_stems.get(id) {
             Some(stem) => md_link(label, &format!("{prefix}nodes/{stem}.md")),
             None => format!("`{}`", label.replace('`', "'")),
         }
@@ -527,18 +535,13 @@ fn god_node_article(wiki: &Wiki, node: &NodeAnalysis) -> String {
             lines.push(format!("### {rel}"));
             lines.push(String::new());
             for (neighbor, conf) in targets.iter().take(MAX_NEIGHBORS_PER_RELATION) {
-                let label = wiki
-                    .nodes
-                    .get(*neighbor)
-                    .map(|n| n.label.clone())
-                    .unwrap_or_else(|| neighbor.to_string());
                 let conf_tag = if conf.0.is_empty() {
                     String::new()
                 } else {
                     let score = conf.1.map(|s| format!(":{s:.2}")).unwrap_or_default();
                     format!(" `{}{score}`", conf.0)
                 };
-                lines.push(format!("- {}{conf_tag}", wiki.node_link(&label, "../")));
+                lines.push(format!("- {}{conf_tag}", wiki.node_link(neighbor, "../")));
             }
             let remaining = targets.len().saturating_sub(MAX_NEIGHBORS_PER_RELATION);
             if remaining > 0 {
@@ -606,7 +609,7 @@ fn index_md(
         for node in &wiki.god_nodes {
             lines.push(format!(
                 "- {} — {} connections",
-                wiki.node_link(&node.label, ""),
+                wiki.node_link(&node.id, ""),
                 node.degree
             ));
         }
@@ -634,8 +637,8 @@ fn index_md(
         lines.push("(cross-community edges ranked by novelty)".into());
         lines.push(String::new());
         for edge in wiki.surprising.iter().take(MAX_SURPRISING_INDEX) {
-            let src = wiki.node_link(&edge.source_label, "");
-            let tgt = wiki.node_link(&edge.target_label, "");
+            let src = wiki.node_link(&edge.source, "");
+            let tgt = wiki.node_link(&edge.target, "");
             lines.push(format!("- {src} --{}--> {tgt}", edge.relation));
         }
         lines.push(String::new());
@@ -684,7 +687,7 @@ pub fn export_wiki(
         let member_ids = members.remove(cid).unwrap_or_default();
         let stem = wiki
             .community_stems
-            .get(label)
+            .get(cid)
             .cloned()
             .unwrap_or_else(|| slug(label));
         let article = community_article(&wiki, label, *cohesion, &member_ids, max_key_nodes);
@@ -693,7 +696,7 @@ pub fn export_wiki(
     }
 
     for node in &wiki.god_nodes {
-        let stem = match wiki.node_stems.get(&node.label) {
+        let stem = match wiki.node_stems.get(&node.id) {
             Some(stem) => stem.clone(),
             None => continue,
         };
@@ -789,6 +792,51 @@ mod tests {
         assert_eq!(uses_block.matches("- [Beta()]").count(), 1);
         assert!(uses_block.contains("`EXTRACTED`"));
         assert!(!uses_block.contains("`INFERRED`"));
+    }
+
+    #[test]
+    fn same_labelled_god_nodes_get_their_own_articles() {
+        // Two symbols share a label but live in different files. An article,
+        // and every link to it, must follow the node rather than the label.
+        let db = open_db_in_memory().unwrap();
+        db.execute_batch(
+            "
+            INSERT INTO nodes (id, label, file_type, source_file, community, signature) VALUES
+              ('x::run', 'run()', 'code', 'src/x.rs', 1, 'fn run_x()'),
+              ('y::run', 'run()', 'code', 'src/y.rs', 1, 'fn run_y()'),
+              ('x::a', 'a()', 'code', 'src/x.rs', 1, NULL),
+              ('y::c', 'c()', 'code', 'src/y.rs', 1, NULL);
+            INSERT INTO edges (source, target, relation, confidence, source_file) VALUES
+              ('x::a', 'x::run', 'calls', 'EXTRACTED', 'src/x.rs'),
+              ('y::c', 'y::run', 'calls', 'EXTRACTED', 'src/y.rs');
+            INSERT INTO communities (id, label, cohesion, size) VALUES (1, 'Core', 0.75, 4);
+            ",
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("wiki");
+        export_wiki(&db, &out, 25, None).unwrap();
+
+        // Which article holds which node is told by the node's own signature.
+        let article = |stem: &str| std::fs::read_to_string(out.join("nodes").join(stem)).ok();
+        let (x_stem, y_stem) = if article("run().md").is_some_and(|t| t.contains("fn run_x()")) {
+            ("run().md", "run()-2.md")
+        } else {
+            ("run()-2.md", "run().md")
+        };
+        assert!(
+            article(x_stem).is_some_and(|t| t.contains("fn run_x()")),
+            "the first run() node has no article of its own"
+        );
+        assert!(
+            article(y_stem).is_some_and(|t| t.contains("fn run_y()")),
+            "the second run() node has no article of its own"
+        );
+        // A neighbour's link follows the node, not the shared label.
+        let a = article("a().md").unwrap();
+        assert!(a.contains(&format!("(../nodes/{x_stem})")), "{a}");
+        let c = article("c().md").unwrap();
+        assert!(c.contains(&format!("(../nodes/{y_stem})")), "{c}");
     }
 
     #[test]
