@@ -1,3 +1,22 @@
-# cargo-audit configuration. No advisory exceptions are required.
+# cargo-audit configuration. `cargo audit` reads this file, and CI runs it
+# through rustsec/audit-check.
+#
+# Entries here are REVIEWED exceptions, each with the reason it is safe to
+# carry and what would make it unsafe. Revisit on every dependency bump.
+
 [advisories]
-ignore = []
+ignore = [
+    # cookie 0.18.2 (RUSTSEC-2026-0594 — private cookie nonces can repeat in
+    # processes that fork): in the lockfile only as ureq's optional
+    # cookie-store feature, which astria never enables (ureq is used with
+    # default features), so it is not linked into any binary. The flaw also
+    # needs fork(), which astria never calls. No patched release exists yet;
+    # revisit when cookie ships a fix or anything enables ureq/cookie-store.
+    "RUSTSEC-2026-0594",
+    # quinn-udp 0.5.15 (RUSTSEC-2026-0538 — receive loop can spin after a
+    # truncated datagram): in the lockfile only along fastembed -> hf-hub ->
+    # reqwest -> quinn, an optional HTTP/3 path astria never enables, so it
+    # is not linked into any binary. No patched release exists yet; revisit
+    # when quinn-udp ships a fix or anything enables reqwest/http3.
+    "RUSTSEC-2026-0538",
+]

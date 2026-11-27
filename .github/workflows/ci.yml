@@ -81,6 +81,8 @@ jobs:
     # JS-side dependency audit: cargo has rustsec/audit-check, the CLI's npm
     # dependencies get the equivalent here. Works off package-lock.json, no
     # install needed. Dev-only advisories below high don't fail the build.
+    # The docs site is audited separately: it is not a workspace member, so
+    # the root lockfile does not cover it.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -89,6 +91,9 @@ jobs:
         with:
           node-version: '22'
       - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+      - name: Audit docs-site dependencies
+        working-directory: website
         run: npm audit --audit-level=high
 
   deny:

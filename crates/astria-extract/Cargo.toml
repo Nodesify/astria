@@ -3,7 +3,7 @@ name = "astria-extract"
 version = "1.0.0"
 edition = "2021"
 license = "MIT"
-# MSRV floor comes from the dependency tree (ort/napi-sys/time require 1.88)
+# MSRV floor comes from the dependency tree (rusqlite since 0.41 requires 1.89)
 rust-version.workspace = true
 # workspace-internal: distributed via npm (@nodesify/astria), not crates.io
 publish = false
