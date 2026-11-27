@@ -424,6 +424,58 @@ fn wait_bounded(
     }
 }
 
+/// Read a child's pipe on its own thread while the child runs, and hand
+/// back what it wrote once it has exited. A pipe holds only a few KiB, so a
+/// child whose output runs past that blocks on the full pipe and never
+/// exits: waiting first and reading afterwards deadlocks until the deadline
+/// kills it. Reading stops at `limit` bytes and the pipe closes with the
+/// reader, so a child that keeps writing fails instead of hanging.
+fn read_bounded<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+    limit: u64,
+) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+    pipe.map(|pipe| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let mut limited = pipe.take(limit);
+            let _ = limited.read_to_end(&mut bytes);
+            bytes
+        })
+    })
+}
+
+/// As `read_bounded`, but drains everything and keeps only the last `keep`
+/// bytes: a child that talks past that is neither blocked nor cut short.
+fn read_tail<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+    keep: usize,
+) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+    pipe.map(|pipe| {
+        std::thread::spawn(move || {
+            let mut kept = Vec::with_capacity(keep);
+            let mut chunk = [0u8; 8192];
+            let mut pipe = std::io::BufReader::new(pipe);
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        kept.extend_from_slice(&chunk[..n]);
+                        if kept.len() > keep {
+                            let excess = kept.len() - keep;
+                            kept.drain(..excess);
+                        }
+                    }
+                }
+            }
+            kept
+        })
+    })
+}
+
+/// How much of the downloader's stderr is kept for an error message. It is
+/// read under `--quiet`, so this is a ceiling, not an expectation.
+const MAX_STDERR_BYTES: usize = 64 * 1024;
+
 /// Resolve where the media WOULD download from (`yt-dlp -J --simulate`, one
 /// metadata request, no bytes moved) and hand every post-redirect,
 /// post-format-selection media URL to the caller's vetting policy. The
@@ -451,17 +503,17 @@ fn resolve_and_vet_media_urls(
     let mut child = command
         .spawn()
         .map_err(|e| TranscribeError::Failed(format!("yt-dlp spawn failed: {e}")))?;
-    let mut stdout_pipe = child.stdout.take();
+    // Drain while the child runs (see `read_bounded`): a single video's
+    // metadata runs to hundreds of KiB, far past what a pipe holds.
+    let reader = read_bounded(child.stdout.take(), MAX_INFO_JSON_BYTES as u64);
     let status = wait_bounded(
         &mut child,
         std::time::Instant::now() + RESOLVE_TIMEOUT,
         "yt-dlp media resolution",
     )?;
-    let mut stdout_bytes = Vec::new();
-    if let Some(pipe) = stdout_pipe.as_mut() {
-        let mut limited = std::io::Read::take(pipe, MAX_INFO_JSON_BYTES as u64);
-        let _ = std::io::Read::read_to_end(&mut limited, &mut stdout_bytes);
-    }
+    let stdout_bytes = reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
     if !status.success() {
         return Err(TranscribeError::Failed(format!(
             "yt-dlp could not resolve the media URL: exit {}",
@@ -551,8 +603,9 @@ pub fn download_media_to(
     command.current_dir(out_dir);
     // Bounds applied to every run: never expand one URL into a playlist,
     // never move more than MAX_MEDIA_BYTES, never wait on a dead socket.
-    // --quiet --no-progress keep stderr to error-sized output so it can be
-    // piped without risking a full pipe blocking the child.
+    // --quiet --no-progress keep stderr to error-sized output; `read_tail`
+    // drains it while the child runs, so even a flood of errors cannot
+    // block it on a full pipe.
     command.args([
         "--no-playlist",
         "--quiet",
@@ -582,16 +635,15 @@ pub fn download_media_to(
     let mut child = command
         .spawn()
         .map_err(|e| TranscribeError::Failed(format!("yt-dlp spawn failed: {e}")))?;
-    let mut stderr_pipe = child.stderr.take();
+    let reader = read_tail(child.stderr.take(), MAX_STDERR_BYTES);
     let status = wait_bounded(
         &mut child,
         std::time::Instant::now() + MEDIA_DOWNLOAD_TIMEOUT,
         "yt-dlp download",
     )?;
-    let mut stderr_bytes = Vec::new();
-    if let Some(pipe) = stderr_pipe.as_mut() {
-        let _ = pipe.read_to_end(&mut stderr_bytes);
-    }
+    let stderr_bytes = reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
     if !status.success() {
         return Err(TranscribeError::Failed(format!(
             "yt-dlp failed: {}",
@@ -656,6 +708,59 @@ mod tests {
             Err(TranscribeError::Failed(_)) => {}
             Ok(_) => {}
         }
+    }
+
+    /// A stand-in for yt-dlp that answers with hundreds of KB of metadata:
+    /// one vetted media URL and an array padded with blank lines. That is
+    /// well past what a pipe holds, like real metadata — a single YouTube
+    /// video's `-J` dump runs to hundreds of KiB.
+    fn fake_ytdlp(dir: &Path) -> PathBuf {
+        #[cfg(windows)]
+        let path = {
+            let path = dir.join("yt-dlp.bat");
+            fs::write(
+                &path,
+                "@echo off\r\n\
+                 echo {\"url\":\"https://example.com/a.mp3\",\"padding\":[\r\n\
+                 for /L %%i in (1,1,7000) do @echo.&echo.&echo.&echo.&echo.\r\n\
+                 echo ]}\r\n",
+            )
+            .unwrap();
+            path
+        };
+        #[cfg(unix)]
+        let path = {
+            let path = dir.join("yt-dlp");
+            fs::write(
+                &path,
+                "#!/bin/sh\n\
+                 printf '%s' '{\"url\":\"https://example.com/a.mp3\",\"padding\":['\n\
+                 yes \"\" | head -n 200000\n\
+                 printf '%s' ']}'\n",
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        path
+    }
+
+    #[test]
+    fn media_resolution_reads_metadata_larger_than_a_pipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = fake_ytdlp(dir.path());
+        let started = std::time::Instant::now();
+        let vetted = resolve_and_vet_media_urls(&fake, "https://example.com/watch?v=1", &|_| None)
+            .expect("metadata larger than a pipe must still be resolved");
+        assert_eq!(vetted, vec!["https://example.com/a.mp3".to_string()]);
+        // Far under the resolution deadline: the point is not to wait on a
+        // child that is blocked on a full pipe.
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "took {:?}",
+            started.elapsed()
+        );
     }
     use super::*;
     use std::fs;
