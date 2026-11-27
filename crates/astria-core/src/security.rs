@@ -152,10 +152,8 @@ pub fn check_file_size(path: &Path, size_bytes: u64) -> bool {
         "sql",
     ];
     let ext_lower = ext.to_lowercase();
-    if text_extensions.contains(&ext_lower.as_str()) && size_bytes > MAX_TEXT_FILE_SIZE {
-        return false;
-    }
-    true
+    // Text files have the tighter of the two limits.
+    !(text_extensions.contains(&ext_lower.as_str()) && size_bytes > MAX_TEXT_FILE_SIZE)
 }
 
 /// Sanitize a node label: strip control chars and cap length.
