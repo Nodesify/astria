@@ -43,6 +43,26 @@ const byEdge = (e: any) => `${e.source}|${e.target}|${e.relation}`;
   );
 }
 
+// ---- 1b. A field named `__proto__` stays data ----
+{
+  // JSON.parse keeps `__proto__` as an ordinary own property, so a graph
+  // file can carry one. Assigning it onto an ordinary object would replace
+  // the merged record's prototype and drop the field from the output.
+  const ours = JSON.parse('{"id":"a","label":"x","__proto__":{"injected":true}}');
+  const theirs = JSON.parse('{"id":"a","label":"y","__proto__":{"injected":true}}');
+  const merged = threeWayUnion([], [ours], [theirs], byId);
+  const node = merged[0] as any;
+  assert(
+    Object.getPrototypeOf(node) === null,
+    'a `__proto__` field must not become the prototype of the merged record',
+  );
+  assert(
+    Object.prototype.hasOwnProperty.call(node, '__proto__'),
+    '`__proto__` is kept as data on the merged record',
+  );
+  assert(node.label === 'x', 'other fields still resolve 3-way (ours wins a conflict with no base)');
+}
+
 // ---- 2. A side's deletion is respected ----
 {
   const merged = threeWayUnion(
