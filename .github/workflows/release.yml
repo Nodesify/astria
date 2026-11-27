@@ -181,8 +181,10 @@ jobs:
         # script places in the build directory, so the collect step below
         # finds no link-search output. Removing the build directory here
         # makes the build re-run build.rs, which re-downloads the runtime.
+        # Both of Cargo's layouts are removed: `ort-sys-<hash>` up to 1.99,
+        # `ort-sys/<hash>` from 1.100 on.
         shell: bash
-        run: rm -rf target/${{ matrix.target }}/release/build/ort-sys-*
+        run: rm -rf target/${{ matrix.target }}/release/build/ort-sys-* target/${{ matrix.target }}/release/build/ort-sys
       - name: Build native binary
         env:
           NAPI_RS_CLI_VERSION: '3.10.8'

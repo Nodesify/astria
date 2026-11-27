@@ -4,8 +4,20 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 const [buildDirectory, destination] = process.argv.slice(2);
 if (!buildDirectory || !destination) throw new Error('Pass Cargo build directory and runtime destination.');
-const outputs = readdirSync(buildDirectory).filter(n => n.startsWith('ort-sys-'))
-  .map(n => path.join(buildDirectory, n, 'output')).filter(existsSync)
+// A build script's stdout is where its `cargo:rustc-link-*` lines are recorded.
+// Cargo keeps it in `build/<crate>-<hash>/output` up to 1.99, and in
+// `build/<crate>/<hash>/run/stdout` from 1.100 on; read whichever is there.
+const outputs = readdirSync(buildDirectory, { withFileTypes: true })
+  .filter(entry => entry.isDirectory() && (entry.name.startsWith('ort-sys-') || entry.name === 'ort-sys'))
+  .flatMap(entry => {
+    const dir = path.join(buildDirectory, entry.name);
+    return entry.name === 'ort-sys'
+      ? readdirSync(dir, { withFileTypes: true })
+          .filter(hash => hash.isDirectory())
+          .map(hash => path.join(dir, hash.name, 'run', 'stdout'))
+      : [path.join(dir, 'output')];
+  })
+  .filter(existsSync)
   .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
 let runtime;
 for (const output of outputs) {
@@ -17,7 +29,9 @@ for (const output of outputs) {
   }
   if (runtime) break;
 }
-if (!runtime) throw new Error('The Windows embedding build requires DirectML.dll, but its Cargo link-search directories contain no runtime.');
+if (!runtime) {
+  throw new Error(`The Windows embedding build requires DirectML.dll, but its Cargo link-search directories contain no runtime (${outputs.length} ort-sys build record${outputs.length === 1 ? '' : 's'} checked under ${buildDirectory}).`);
+}
 mkdirSync(destination, { recursive: true });
 const target = path.join(destination, 'DirectML.dll');
 const digest = file => createHash('sha256').update(readFileSync(file)).digest('hex');
