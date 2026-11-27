@@ -6,7 +6,7 @@ Thanks for helping improve astria! This document covers setup, testing, and the 
 
 Prerequisites:
 
-- **Rust** 1.88+ (enforced via `rust-version` in the workspace) — `rustup` recommended
+- **Rust** 1.89+ (enforced via `rust-version` in the workspace) — `rustup` recommended
 - **Node.js** 22+ (matches the badge, engines floor, and CI matrix) and npm
 
 ```bash

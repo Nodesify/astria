@@ -219,7 +219,13 @@ fn load_workspace_entries(root: &Path) -> HashMap<String, PathBuf> {
                 let Some(pointed) = member_value.get(field).and_then(|m| m.as_str()) else {
                     continue;
                 };
-                let candidate = entry.path().join(normalize_separators(pointed));
+                // `pointed` is manifest content: a value that leaves the
+                // scanned tree is never stat'ed.
+                let Some(candidate) =
+                    astria_core::security::confine_to_root(&entry.path(), pointed, root)
+                else {
+                    continue;
+                };
                 // Authored TypeScript source only: a `main` pointing at
                 // dist/build output is compilation, not source; JS-only
                 // entries keep the pre-existing bare-name resolution.
@@ -270,8 +276,9 @@ fn strip_prefix_path(root: &Path, prefix: &str) -> Option<PathBuf> {
     if trimmed.is_empty() {
         return Some(root.to_path_buf());
     }
-    let joined = root.join(normalize_separators(trimmed));
-    Some(joined)
+    // The glob is package.json content, not something the scanner found:
+    // it is read only when it stays inside the scanned tree.
+    astria_core::security::confine_to_root(root, trimmed, root)
 }
 
 /// Load the project import context for a scanned root. Missing or partial
@@ -372,6 +379,48 @@ mod tests {
         assert!(
             !ctx.workspace_entries.contains_key("built"),
             "dist-only entries must not map"
+        );
+    }
+
+    #[test]
+    fn workspace_paths_cannot_leave_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        // Workspace globs and entry fields are package.json content: a glob
+        // that climbs out of the tree, or a `main` that points out of it,
+        // names files astria has no business opening.
+        write(
+            &root.join("package.json"),
+            r#"{"workspaces": ["packages/*", "../*"]}"#,
+        );
+        write(
+            &root.join("packages/ok/package.json"),
+            r#"{"name": "@acme/ok", "main": "./src/index.ts"}"#,
+        );
+        write(
+            &root.join("packages/ok/src/index.ts"),
+            "export const x = 1;\n",
+        );
+        write(
+            &root.join("packages/escape/package.json"),
+            r#"{"name": "@acme/escape", "main": "../../../sibling/index.ts"}"#,
+        );
+        let sibling = dir.path().join("sibling");
+        write(
+            &sibling.join("package.json"),
+            r#"{"name": "@acme/sibling", "main": "./index.ts"}"#,
+        );
+        write(&sibling.join("index.ts"), "export const y = 2;\n");
+
+        let ctx = load_import_context(&root);
+        assert!(ctx.workspace_entries.contains_key("@acme/ok"));
+        assert!(
+            !ctx.workspace_entries.contains_key("@acme/sibling"),
+            "a workspace glob was followed outside the scanned tree"
+        );
+        assert!(
+            !ctx.workspace_entries.contains_key("@acme/escape"),
+            "a package entry field was followed outside the scanned tree"
         );
     }
 

@@ -100,7 +100,8 @@ pub(super) fn stored_cluster(
             Ok((
                 r.get::<_, u32>(0)?,
                 r.get::<_, String>(1)?,
-                r.get::<_, usize>(2)?,
+                // SQLite has no unsigned integer; a size is never negative.
+                r.get::<_, i64>(2)?.max(0) as usize,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
