@@ -4,7 +4,7 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## [Unreleased]
+## [1.7.0] — 2026-11-27
 
 - Security: file discovery never follows a symbolic link. A repository that
   ships one chose which file on the host was read: its target was ingested
@@ -715,3 +715,5 @@ See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 [0.4.0]: https://github.com/Nodesify/astria/compare/v0.3.0...v0.4.0
 
 [1.5.0]: https://github.com/Nodesify/astria/compare/v1.4.0...v1.5.0
+
+[1.7.0]: https://github.com/Nodesify/astria/compare/v1.6.0...v1.7.0
