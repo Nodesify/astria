@@ -81,6 +81,8 @@ Discovery and parser selection share the language registry, including supported 
 
 Resolution uses lexical scope, supported import paths and project metadata, and available receiver-type evidence. Exact TypeScript aliases and supported workspace entries point to authored source. Local bindings stay within their function or block; instance-field inference requires unambiguous assignments. Conflicts and unknown receivers remain unresolved. Kotlin aliases, C# delegates, Dart typedefs, and Swift macros have dedicated declaration handling. See [language support](../reference/language-support) for the limits of registration.
 
+Discovery never reads a symbolic link, whether it points at a file or stands in for a directory, so a repository that ships one cannot name a file outside the scanned tree. Files that carry secrets are left out before anything is parsed: `.env` in any spelling, private keys and keystores, Terraform state, and credential files with fixed names such as `.netrc`, `.gitconfig` and `.pypirc`. The rule is applied on every update, so a file renamed to such a name leaves the graph.
+
 Credential-shaped source text is redacted before retention and semantic requests. Redaction recognizes patterns; it does not make arbitrary confidential repository content safe to send to a provider. Semantic enrichment is explicitly selected, optional work with separate coverage and spend diagnostics.
 
 ### Evidence is part of the answer

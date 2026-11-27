@@ -78,7 +78,7 @@ cd packages/astria-cli && npm ci && npm run build
 
 See [Contributing](CONTRIBUTING.md#development-setup) for macOS and Windows native artifact paths.
 
-Requires Rust 1.88+ (declared as `rust-version` in the workspace) and Node.js >= 22.
+Requires Rust 1.89+ (declared as `rust-version` in the workspace) and Node.js >= 22.
 
 ## License
 

@@ -15,7 +15,7 @@
 
 # syntax=docker/dockerfile:1
 
-ARG RUST_VERSION=1.88
+ARG RUST_VERSION=1.89
 ARG NODE_MAJOR=22
 
 FROM rust:${RUST_VERSION}-slim-bookworm AS builder

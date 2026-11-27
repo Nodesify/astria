@@ -6,12 +6,44 @@ this file is the per-version summary.
 
 ## [Unreleased]
 
+- Security: file discovery never follows a symbolic link. A repository that
+  ships one chose which file on the host was read: its target was ingested
+  under an innocent name, which the sensitive-path check cannot see through.
+  A link to a directory is not descended into either — that half had rested
+  on a walker default and is now pinned by a test.
+- Security: the sensitive-path denylist also covers environment files without
+  a leading dot (`config/production.env`), Terraform state and variables
+  (`.tfstate`, `.tfvars`), more private-key containers (`.ppk`, `.p8`,
+  `.pk8`, `.pgp`, `.gpg`, `.keytab`), and credential files with fixed names:
+  `_netrc`, `.htdigest`, `.gitconfig`, `.yarnrc.yml`, `.pypirc`,
+  `.dockercfg`, `.vault-token`, `.pgpass`, `.my.cnf`, `.ldaprc`.
+- Security: the merge driver keeps a field named `__proto__` in a committed
+  `.astria/graph.json` as data. It became the merged record's prototype,
+  which dropped the field from the merged graph.
+- Security: `rusqlite` 0.34 → 0.43 bundles a SQLite with the fix for
+  RUSTSEC-2026-0459 (CVE-2026-119375); `url` 2.5.9 and `zip` 9.4.1 fix
+  RUSTSEC-2026-0592 and RUSTSEC-2026-0548. `cargo audit` reports nothing.
+  Two advisories on code astria never links are recorded as reviewed
+  exceptions in `.cargo/audit.toml`, each with its reason and the condition
+  to revisit it; the stale root `audit.toml` is removed.
+- The minimum supported Rust version is 1.89, up from 1.88: `rusqlite` 0.41
+  and later require it.
+- Media URL ingestion no longer hangs for two minutes on every real video.
+  The yt-dlp metadata pass read its output only after the child had exited,
+  and the child blocks on a full pipe once the metadata outgrows the pipe
+  (a single YouTube video's dump is about 650 KiB); the run then failed at
+  the deadline. Output is drained while the child runs, and the download's
+  error output is drained the same way.
+- Docs site: build dependencies are pinned past the npm advisories reported
+  against them (44 findings, 18 critical, down to 2 moderate in `minimatch`,
+  which has no fixed release yet), the site declares Node 22 or later, and
+  CI audits its lockfile the way it audits the CLI's.
 - Security: confine paths read from manifests to the scanned tree. Cargo
   workspace members, path dependencies and JavaScript workspace entries are
-  followed only when they stay inside the scan root; absolute, rooted and
-  UNC spellings are refused before the operating system sees them. On
-  Windows an attacker-chosen UNC path made indexing authenticate to that
-  host.
+  followed only when they stay inside the scan root; absolute, rooted,
+  drive-relative and UNC spellings are refused before the operating system
+  sees them. On Windows an attacker-chosen UNC path made indexing
+  authenticate to that host.
 - `astria install --platform claude` writes its project section to the
   instructions file Claude Code already reads — an existing `CLAUDE.md`,
   else the existing `AGENTS.md` — instead of always creating a `CLAUDE.md`,
