@@ -129,6 +129,14 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
             astria_core::AstriaError::Graph(format!("file discovery failed: {error}"))
         })?;
         let path = entry.path();
+        // Never follow a symlink. A repository chooses the target of a link
+        // it ships, so reading through it would ingest a file from outside
+        // the scanned tree — a host credential, for instance — under an
+        // innocent name that the sensitive-path check cannot see through.
+        // The same file reached by its real path is still scanned.
+        if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+            continue;
+        }
         if !path.is_file() {
             continue;
         }
@@ -221,7 +229,8 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
         }
     }
 
-    // Find removed files
+    // Find removed files. SQLite has no unsigned integer: the stored size is
+    // a signed 64-bit value (see `update_manifest`).
     let mut removed_files = Vec::new();
     let mut stmt = db.prepare(
         "SELECT file_path, content_hash, file_type, language, size_bytes FROM file_manifest",
@@ -233,7 +242,7 @@ pub fn detect(root: &Path, db: &Connection) -> astria_core::Result<DetectResult>
                 row.get(1)?,
                 row.get(2)?,
                 row.get(3)?,
-                row.get(4)?,
+                row.get::<_, i64>(4)?.max(0) as u64,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -345,7 +354,9 @@ pub fn update_manifest(
                 entry.file_type.as_str(),
                 entry.language,
                 now,
-                entry.size_bytes,
+                // SQLite has no unsigned integer; a size never approaches the
+                // signed range, so the widest value stands in if one ever did.
+                i64::try_from(entry.size_bytes).unwrap_or(i64::MAX),
             ],
         )?;
     }
@@ -524,6 +535,42 @@ mod tests {
             .new
             .iter()
             .any(|f| f.path.to_string_lossy().contains("skip.py")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detect_does_not_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("host.py"), "def host_secret(): pass\n").unwrap();
+        let host_dir = outside.path().join("hostdir");
+        fs::create_dir(&host_dir).unwrap();
+        fs::write(host_dir.join("token.py"), "TOKEN = 'x'\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("real.py"), "def real(): pass\n").unwrap();
+        // A repository chooses the target of a link it ships: read through it
+        // and a file from the host is ingested under an innocent name.
+        symlink(outside.path().join("host.py"), dir.path().join("notes.py")).unwrap();
+        symlink(&host_dir, dir.path().join("vendor")).unwrap();
+
+        let db = open_db_in_memory().unwrap();
+        let result = detect(dir.path(), &db).unwrap();
+
+        let found = |name: &str| {
+            result
+                .new
+                .iter()
+                .any(|f| f.path.to_string_lossy().contains(name))
+        };
+        assert!(found("real.py"));
+        assert!(
+            !found("notes.py"),
+            "a symlink was followed into a file outside the scanned tree"
+        );
+        assert!(
+            !found("token.py"),
+            "a symlinked directory outside the scanned tree was descended into"
+        );
     }
 
     #[test]

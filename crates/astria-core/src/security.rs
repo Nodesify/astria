@@ -95,8 +95,15 @@ pub fn confine_to_root(base: &Path, relative: &str, root: &Path) -> Option<PathB
         return None;
     }
     // Both separators are separators on every platform, so a backslash
-    // spelling cannot slip through a Unix host or CI run.
+    // spelling cannot slip through a Unix host or CI run. A drive letter is
+    // judged the same way: Unix has no prefix to recognise, so `C:\x` and
+    // the drive-relative `C:x` are refused here rather than taken for a
+    // directory named `C:`.
     let normalized = relative.replace('\\', "/");
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return None;
+    }
     let mut stack: Vec<std::ffi::OsString> = base
         .components()
         .map(|component| component.as_os_str().to_os_string())
@@ -176,8 +183,15 @@ pub fn sanitize_docstring(doc: &str) -> String {
 const ALLOWED_HIDDEN_DIRS: &[&str] = &[".github", ".gitlab", ".circleci", ".config", ".husky"];
 
 /// File extensions that should never enter the graph (keys, certificates,
-/// keystores).
-const SENSITIVE_EXTENSIONS: &[&str] = &["pem", "key", "p12", "pfx", "jks", "keystore", "kdbx"];
+/// keystores). `env` covers environment files without the leading dot
+/// (`config/production.env`); the dot-prefixed forms are matched by name
+/// below. `tfstate`/`tfvars` are infrastructure state and variables, which
+/// hold secrets in plain text. `p8`/`pk8` are PKCS#8 private keys, `gpg`/
+/// `pgp` key rings, `keytab` a Kerberos key tab.
+const SENSITIVE_EXTENSIONS: &[&str] = &[
+    "pem", "key", "p12", "pfx", "jks", "keystore", "kdbx", "ppk", "p8", "pk8", "gpg", "pgp",
+    "keytab", "env", "tfstate", "tfvars",
+];
 
 /// Config/data extensions for which secret-looking *names* are blocked.
 /// Source-code files are exempt so `password-validator.ts` still graphs.
@@ -197,8 +211,18 @@ const CONFIG_EXTENSIONS: &[&str] = &[
 const SENSITIVE_EXACT_NAMES: &[&str] = &[
     ".npmrc",
     ".netrc",
+    "_netrc",
     ".htpasswd",
+    ".htdigest",
     ".git-credentials",
+    ".gitconfig",
+    ".yarnrc.yml",
+    ".pypirc",
+    ".dockercfg",
+    ".vault-token",
+    ".pgpass",
+    ".my.cnf",
+    ".ldaprc",
     "id_rsa",
     "id_dsa",
     "id_ed25519",
@@ -406,6 +430,28 @@ mod tests {
         assert!(is_sensitive_path(".git/config"));
         // Hidden tool dirs not allowlisted are skipped too
         assert!(is_sensitive_path(".zcode/settings.json"));
+        // An environment file is one with or without the leading dot.
+        assert!(is_sensitive_path("config/production.env"));
+        // Tool credentials with fixed names, and other private-key formats.
+        assert!(is_sensitive_path("_netrc"));
+        assert!(is_sensitive_path(".yarnrc.yml"));
+        assert!(is_sensitive_path(".pypirc"));
+        assert!(is_sensitive_path(".dockercfg"));
+        assert!(is_sensitive_path(".htdigest"));
+        assert!(is_sensitive_path(".vault-token"));
+        assert!(is_sensitive_path("deploy/server.ppk"));
+        // Infrastructure state and variables carry secrets in plain text.
+        assert!(is_sensitive_path("infra/terraform.tfstate"));
+        assert!(is_sensitive_path("infra/prod.tfvars"));
+        // Other private-key containers, and database password files.
+        assert!(is_sensitive_path("signing/platform.pk8"));
+        assert!(is_sensitive_path("keys/AuthKey_ABCD1234.p8"));
+        assert!(is_sensitive_path("keys/private.pgp"));
+        assert!(is_sensitive_path("gnupg/secring.gpg"));
+        assert!(is_sensitive_path("krb5/service.keytab"));
+        assert!(is_sensitive_path(".pgpass"));
+        assert!(is_sensitive_path(".my.cnf"));
+        assert!(is_sensitive_path(".ldaprc"));
     }
 
     #[test]
@@ -417,6 +463,14 @@ mod tests {
         // source code is exempt from secret-looking-name rules
         assert!(!is_sensitive_path("src/password_validator.ts"));
         assert!(!is_sensitive_path("src/SecretService.java"));
+        // Source that merely mentions environments is not an environment file.
+        assert!(!is_sensitive_path("src/env.d.ts"));
+        assert!(!is_sensitive_path("src/environment.ts"));
+        assert!(!is_sensitive_path("infra/main.tf"));
+        // A key is a file type, not a word in a source file's name.
+        assert!(!is_sensitive_path("src/api_keys.rs"));
+        assert!(!is_sensitive_path("src/KeybindManager.ts"));
+        assert!(!is_sensitive_path("src/pgp_utils.py"));
     }
 
     #[test]
@@ -479,6 +533,8 @@ mod tests {
             "//host/share/crate",
             "\\\\?\\C:\\repo\\crate",
             "C:\\elsewhere\\crate",
+            // Drive-relative, and so absolute on whichever platform reads it.
+            "D:relative\\crate",
             "/elsewhere/crate",
         ] {
             assert_eq!(
