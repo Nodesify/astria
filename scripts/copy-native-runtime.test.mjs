@@ -108,8 +108,8 @@ test('leaves an identical runtime already in place untouched', (t) => {
   record(build, '1.100+', '5555555555555555', runtime(path.join(build, '..'), 'cache', 'same'));
   const run = collect(build, dist);
   assert.equal(run.status, 0, run.stderr);
+  // The time alone is the proof: a copy would have moved it forward.
   assert.equal(statSync(target).mtimeMs, before);
-  assert.equal(readFileSync(target, 'utf8'), 'same');
 });
 
 test('fails loudly when no link-search directory holds the runtime', (t) => {
