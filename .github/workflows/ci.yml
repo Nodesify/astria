@@ -67,6 +67,11 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Check @napi-rs/cli version drift
         run: node scripts/check-napi-version.mjs
+      - name: Test release helper scripts
+        # The DirectML collector only runs in the release build, where a
+        # failure costs a 30-minute matrix; its reading of Cargo's build
+        # records is exercised here instead, on every OS in the matrix.
+        run: node --test "scripts/*.test.mjs"
       - uses: dtolnay/rust-toolchain@stable # branch ref on purpose: tracks latest stable Rust; not SHA-pinned so updates keep flowing
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
