@@ -1023,7 +1023,7 @@ pub fn add_heritage_edges(results: &mut [Extraction], index: &TypeIndex) -> usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{ExtractedEdge, ExtractedNode, ExtractionStatus};
+    use crate::schema::{ExtractedEdge, ExtractionStatus};
 
     fn extraction(file: &std::path::Path, source_lang: &str, text: &str) -> Extraction {
         std::fs::write(file, text).unwrap();
@@ -1077,7 +1077,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("svc.ts");
         let source = "class Store {\n  save(): void {}\n}\nclass App {\n  store: Store;\n  run(): void {\n    this.store.save();\n  }\n}\n";
-        let mut results = vec![extraction(&path, "TypeScript", source)];
+        let results = vec![extraction(&path, "TypeScript", source)];
         let index = build_type_index(&results);
         // Walker produced a receiver:: edge for this.store.save().
         assert!(

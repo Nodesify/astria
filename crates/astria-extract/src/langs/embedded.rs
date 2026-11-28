@@ -264,7 +264,7 @@ mod tests {
         let file = dir.path().join("x.html");
         fs::write(&file, "<p>hi</p>").unwrap();
         let db = open_db_in_memory().unwrap();
-        let results = engine::extract(&[file.clone()], dir.path(), &db).unwrap();
+        let results = engine::extract(std::slice::from_ref(&file), dir.path(), &db).unwrap();
         // .html is a document, not an embedded component - it must not reach
         // this extractor (routed by extension before the language fallthrough).
         assert!(!results.iter().any(|r| r.language == "Vue"));

@@ -84,7 +84,7 @@ mod tests {
         let mut wire = Vec::new();
         for _ in 0..chunks_needed {
             wire.extend_from_slice(&(CHUNK_SIZE as u16).to_be_bytes());
-            wire.extend(std::iter::repeat(0xABu8).take(CHUNK_SIZE));
+            wire.extend(std::iter::repeat_n(0xABu8, CHUNK_SIZE));
         }
         let mut cursor = std::io::Cursor::new(wire);
         let err = read_message(&mut cursor).expect_err("oversized message must error");

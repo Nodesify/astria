@@ -49,7 +49,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --locked -- -D warnings
+        # --all-targets: test code is linted too. Without it, 21 lints had
+        # accumulated in test modules without anyone seeing them.
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   cli-test:
     runs-on: ${{ matrix.os }}
