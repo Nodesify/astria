@@ -42,11 +42,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build (no-default-features, as the release leg does, inside Alpine)
+        # The release leg's hand-off is repeated here, not just its build:
+        # the container runs as root, and it is the runner's user who then
+        # writes into target/. A probe that stopped at the build passed while
+        # the release failed on that mkdir.
+        env:
+          CARGO_TARGET_DIR: target/alpine-x86_64-unknown-linux-musl
         run: |
-          docker run --rm -v "$PWD:/work" -w /work -e RUSTFLAGS rust:1-alpine sh -ec '
+          docker run --rm -v "$PWD:/work" -w /work -e RUSTFLAGS -e CARGO_TARGET_DIR rust:1-alpine sh -ec '
             apk add --no-cache musl-dev gcc binutils >/dev/null
             cargo build --release --locked --target x86_64-unknown-linux-musl -p astria-napi --no-default-features
+            chown -R "$(stat -c %u:%g .)" target
           '
+          mkdir -p target/x86_64-unknown-linux-musl/release
+          so="$CARGO_TARGET_DIR/x86_64-unknown-linux-musl/release/libastria_napi.so"
+          # The expected-failure leg builds no library to hand over.
+          if [ -f "$so" ]; then
+            mv "$so" target/x86_64-unknown-linux-musl/release/libastria_napi.so
+          fi
       - name: Report artifact
         run: |
           echo "RUSTFLAGS='${{ matrix.rustflags }}'"
