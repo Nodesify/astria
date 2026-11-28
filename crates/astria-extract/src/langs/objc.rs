@@ -36,7 +36,6 @@ pub fn config() -> &'static LanguageConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::engine;
     use std::fs;
 

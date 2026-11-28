@@ -36,7 +36,11 @@ pub fn config() -> &'static LanguageConfig {
     &CONFIG
 }
 
+// The walker functions at the end of this file are placed after the tests on
+// purpose: they belong beside the language's config and `walkers.rs` calls
+// them, so the test module is not the last item here.
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use crate::engine::extract;
     use crate::naming::make_target_id;

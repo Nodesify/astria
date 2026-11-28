@@ -499,7 +499,7 @@ mod tests {
             r#"{"mcpServers":{"x":{"env":{"TOKEN":"hunter2"}}}}"#,
         )
         .unwrap();
-        let results = extract_semantic_for_files(&[config.clone()], &NoopBackend);
+        let results = extract_semantic_for_files(std::slice::from_ref(&config), &NoopBackend);
         let (path, result) = &results[0];
         assert_eq!(path, &config);
         let err = result.as_ref().unwrap_err().to_string();

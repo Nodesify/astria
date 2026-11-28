@@ -609,6 +609,25 @@ pub(crate) fn order_by_scores(scores: &[f64]) -> Vec<usize> {
     order
 }
 
+/// Redact values structurally so credentials cannot invalidate JSON escaping.
+fn redact_json_text(mut value: Value) -> Value {
+    match &mut value {
+        Value::String(text) => *text = astria_core::security::redact_secrets(text),
+        Value::Array(items) => {
+            for item in items {
+                *item = redact_json_text(item.take());
+            }
+        }
+        Value::Object(fields) => {
+            for item in fields.values_mut() {
+                *item = redact_json_text(item.take());
+            }
+        }
+        _ => {}
+    }
+    value
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -964,23 +983,4 @@ mod tests {
             perm.iter().map(|&i| &questions[i]).collect::<Vec<_>>()
         );
     }
-}
-
-/// Redact values structurally so credentials cannot invalidate JSON escaping.
-fn redact_json_text(mut value: Value) -> Value {
-    match &mut value {
-        Value::String(text) => *text = astria_core::security::redact_secrets(text),
-        Value::Array(items) => {
-            for item in items {
-                *item = redact_json_text(item.take());
-            }
-        }
-        Value::Object(fields) => {
-            for item in fields.values_mut() {
-                *item = redact_json_text(item.take());
-            }
-        }
-        _ => {}
-    }
-    value
 }

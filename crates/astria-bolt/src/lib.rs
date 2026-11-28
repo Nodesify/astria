@@ -469,8 +469,10 @@ mod tests {
                 .concat()
             );
             assert!(handshake[4..]
-                .chunks_exact(4)
-                .any(|v| v == server_version.to_be_bytes()));
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|v| *v == server_version.to_be_bytes()));
             sock.write_all(&server_version.to_be_bytes()).unwrap();
 
             // HELLO -> SUCCESS.
