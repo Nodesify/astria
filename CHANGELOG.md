@@ -4,7 +4,7 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
-## [Unreleased]
+## [1.7.1] — 2026-11-28
 
 - Fixed: `@nodesify/astria-linux-x64-musl` failed to load on Alpine Linux and
   other musl systems, since 1.6.0. The release built it on an Ubuntu host,
@@ -760,4 +760,4 @@ See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 
 [1.7.0]: https://github.com/Nodesify/astria/compare/v1.6.0...v1.7.0
 
-[unreleased]: https://github.com/Nodesify/astria/compare/v1.7.0...HEAD
+[1.7.1]: https://github.com/Nodesify/astria/compare/v1.7.0...v1.7.1
