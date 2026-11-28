@@ -115,9 +115,12 @@ Optional decision layer over the selected backend (`--judge jev` / `ASTRIA_LLM_J
 
 `run`/`update` transcribe video and audio files (`mp4`, `mov`, `webm`, `mkv`, `avi`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, `opus`, `aac`, `wma`) through the external [`whisper-cli` binary (whisper.cpp)](https://github.com/ggml-org/whisper.cpp); video files also need [`ffmpeg`](https://ffmpeg.org) on PATH to demux the audio track, audio-only repositories transcribe without it. Transcripts enter the graph as document nodes like any markdown file. Without the binaries or a model the files are skipped with a one-line notice — the pipeline never fails because of media. See [CLI reference](./cli#building-the-graph).
 
+Each `ffmpeg` and `whisper-cli` run has a deadline, so a file that stalls a decoder cannot hold the build open. A run that passes it is killed and the file is skipped with a notice. The demux gets 10 minutes. Transcription gets half an hour plus time for the audio — several times slower than real time — because a long recording with a large model legitimately runs for hours on a CPU; the bound is for a tool that has stopped making progress.
+
 | Variable | Purpose |
 |---|---|
 | `ASTRIA_WHISPER_MODEL` | Path to a whisper.cpp ggml `.bin` model file. Unset, astria uses the first `*.bin` in `<project>/.astria/models/`, then in `~/.astria/models/` |
+| `ASTRIA_TRANSCRIBE_TIMEOUT` | Seconds one `ffmpeg` or `whisper-cli` run may take before it is killed, for both tools (default: the deadlines described above; `0` removes the bound). Unrecognized values warn and the defaults apply |
 
 ## Google Workspace
 

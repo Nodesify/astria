@@ -4,6 +4,27 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [Unreleased]
+
+- Fixed: `@nodesify/astria-linux-x64-musl` failed to load on Alpine Linux and
+  other musl systems, since 1.6.0. The release built it on an Ubuntu host,
+  where the flag that lets rustc 99 and later emit a shared library also
+  switched linking to the host's glibc. The build now runs inside an Alpine
+  container, the binary's dependencies are checked for glibc before it is
+  packed, and the release's install check loads it on musl like on every
+  other platform instead of skipping that step.
+- Security: `ffmpeg` and `whisper-cli` run under a deadline, as `yt-dlp`
+  already did. A media file that stalls a decoder could hold a build open
+  for good. The demux gets ten minutes; transcription gets half an hour plus
+  time proportional to the audio, several times slower than real time, so a
+  long recording with a large model is not cut off. A run that passes its
+  deadline is killed and the file is skipped with a notice.
+  `ASTRIA_TRANSCRIBE_TIMEOUT` overrides both.
+- Security: the directory the transcription tools write into is created
+  fresh for each attempt, readable by its owner only, and removed afterwards.
+  It was world-readable, and a directory of that name that already existed
+  would have been written into.
+
 ## [1.7.0] — 2026-11-27
 
 - Security: file discovery never follows a symbolic link. A repository that
@@ -717,3 +738,5 @@ See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 [1.5.0]: https://github.com/Nodesify/astria/compare/v1.4.0...v1.5.0
 
 [1.7.0]: https://github.com/Nodesify/astria/compare/v1.6.0...v1.7.0
+
+[unreleased]: https://github.com/Nodesify/astria/compare/v1.7.0...HEAD

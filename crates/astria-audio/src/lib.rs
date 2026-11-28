@@ -9,10 +9,10 @@
 // Output shape mirrors astria-pdf: transcript text is wrapped as markdown
 // (`# <filename>` + paragraphs) so the document extractor can consume it.
 
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 use astria_core::env_var;
 
@@ -23,6 +23,13 @@ const MAX_MEDIA_BYTES: usize = 200 * 1024 * 1024;
 /// Wall-clock deadline for one yt-dlp run; a wedged download is killed
 /// rather than waited on forever.
 const MEDIA_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Wall-clock deadline for one ffmpeg demux. Decoding the audio track of the
+/// largest file that reaches it takes a small fraction of this; the bound is
+/// for a tool that has stopped making progress.
+const DEMUX_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Transcription allowance every file gets before its size counts (see
+/// `transcription_allowance`).
+const TRANSCRIBE_FLOOR: Duration = Duration::from_secs(30 * 60);
 
 /// Why a media file could not be transcribed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,13 +236,19 @@ fn demux(ffmpeg: &Path, input: &Path, scratch: &Path) -> Result<PathBuf, Transcr
         .arg("-acodec")
         .arg("pcm_s16le")
         .arg(&wav)
-        .output()
-        .map_err(|e| TranscribeError::Failed(format!("failed to run ffmpeg: {e}")))?;
+        .stdout(Stdio::null())
+        .stderr(create_log(&scratch.join("ffmpeg.log"))?)
+        .spawn()
+        .map_err(|e| TranscribeError::Failed(format!("failed to run ffmpeg: {e}")))?
+        .bounded_output(
+            &scratch.join("ffmpeg.log"),
+            tool_limit(DEMUX_TIMEOUT),
+            "ffmpeg",
+        )?;
     if !output.status.success() {
         return Err(TranscribeError::Failed(format!(
             "ffmpeg demux failed ({}): {}",
-            output.status,
-            stderr_tail(&output.stderr)
+            output.status, output.stderr
         )));
     }
     if !wav.is_file() {
@@ -262,13 +275,22 @@ fn run_whisper(
         .arg("-otxt")
         .arg("-of")
         .arg(&out_base)
-        .output()
-        .map_err(|e| TranscribeError::Failed(format!("failed to run whisper-cli: {e}")))?;
+        .stdout(Stdio::null())
+        .stderr(create_log(&scratch.join("whisper.log"))?)
+        .spawn()
+        .map_err(|e| TranscribeError::Failed(format!("failed to run whisper-cli: {e}")))?
+        .bounded_output(
+            &scratch.join("whisper.log"),
+            tool_limit(transcription_allowance(
+                std::fs::metadata(wav).map(|m| m.len()).unwrap_or(0),
+                is_wave(wav),
+            )),
+            "whisper-cli",
+        )?;
     if !output.status.success() {
         return Err(TranscribeError::Failed(format!(
             "whisper-cli failed ({}): {}",
-            output.status,
-            stderr_tail(&output.stderr)
+            output.status, output.stderr
         )));
     }
     let txt = scratch.join("transcript.txt");
@@ -278,6 +300,139 @@ fn run_whisper(
             txt.display()
         ))
     })
+}
+
+/// What a finished tool run left behind: how it exited, and the last of what
+/// it wrote to standard error — the shape of `Command::output`.
+struct ToolOutput {
+    status: ExitStatus,
+    stderr: String,
+}
+
+/// `Command::output` under a deadline, for a tool started with its standard
+/// error going to `log`. A tool still running when the limit passes is
+/// killed and reported, so a hostile media file cannot hold the build open.
+trait BoundedOutput {
+    fn bounded_output(
+        self,
+        log: &Path,
+        limit: Option<Duration>,
+        what: &str,
+    ) -> Result<ToolOutput, TranscribeError>;
+}
+
+impl BoundedOutput for std::process::Child {
+    fn bounded_output(
+        mut self,
+        log: &Path,
+        limit: Option<Duration>,
+        what: &str,
+    ) -> Result<ToolOutput, TranscribeError> {
+        let status = match limit {
+            Some(limit) => wait_bounded(&mut self, Instant::now() + limit, what)?,
+            None => self
+                .wait()
+                .map_err(|e| TranscribeError::Failed(format!("{what} wait failed: {e}")))?,
+        };
+        let stderr = stderr_tail(&file_tail(log, MAX_STDERR_BYTES));
+        Ok(ToolOutput { status, stderr })
+    }
+}
+
+/// Truncated, writable handle for a tool's error output. A file, not a
+/// pipe: a pipe has to be read for as long as anything holds its write end,
+/// a grandchild that outlives the tool included, and reading it would wait
+/// on one.
+fn create_log(log: &Path) -> Result<Stdio, TranscribeError> {
+    let file = std::fs::File::create(log)
+        .map_err(|e| TranscribeError::Failed(format!("cannot create {}: {e}", log.display())))?;
+    Ok(file.into())
+}
+
+/// Last `keep` bytes of a file, or nothing when it cannot be read.
+fn file_tail(path: &Path, keep: usize) -> Vec<u8> {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let start = file
+        .metadata()
+        .map(|m| m.len())
+        .unwrap_or(0)
+        .saturating_sub(keep as u64);
+    let mut bytes = Vec::new();
+    if file.seek(std::io::SeekFrom::Start(start)).is_ok() {
+        let _ = file.take(keep as u64).read_to_end(&mut bytes);
+    }
+    bytes
+}
+
+/// Wall-clock allowance for one whisper-cli run over `bytes` of input.
+/// Transcription cannot be told from a hang by watching it, so the allowance
+/// follows the work: `TRANSCRIBE_FLOOR`, then minutes per MB — three for the
+/// uncompressed audio ffmpeg writes (a MB is 33 seconds, so five times
+/// slower than real time) and twenty for compressed audio the tool decodes
+/// itself, where a MB holds minutes. A CPU with a large model stays far
+/// inside both; the bound is for a tool that has stopped making progress.
+fn transcription_allowance(bytes: u64, pcm: bool) -> Duration {
+    const MINUTES_PER_PCM_MB: f64 = 3.0;
+    const MINUTES_PER_COMPRESSED_MB: f64 = 20.0;
+    let megabytes = bytes as f64 / (1024.0 * 1024.0);
+    let minutes_per_mb = if pcm {
+        MINUTES_PER_PCM_MB
+    } else {
+        MINUTES_PER_COMPRESSED_MB
+    };
+    TRANSCRIBE_FLOOR + Duration::from_secs((megabytes * minutes_per_mb * 60.0) as u64)
+}
+
+/// Whether `path` is a RIFF/WAVE file: uncompressed, so its size says how
+/// much audio it holds.
+fn is_wave(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav"))
+}
+
+// Test seam for `tool_limit`: a limit forced regardless of the variable and
+// the default, consumed by the next call on the thread. Nothing outside the
+// tests sets it.
+#[cfg(test)]
+thread_local! {
+    static FORCED_TOOL_LIMIT: std::cell::Cell<Option<Option<Duration>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The limit for one tool run: `ASTRIA_TRANSCRIBE_TIMEOUT` where it holds a
+/// number of seconds (`0` for none), else `default`.
+fn tool_limit(default: Duration) -> Option<Duration> {
+    #[cfg(test)]
+    if let Some(limit) = FORCED_TOOL_LIMIT.with(std::cell::Cell::take) {
+        return limit;
+    }
+    parse_limit(env_var("TRANSCRIBE_TIMEOUT").as_deref(), default)
+}
+
+/// A year at most: the limits become instants, and not every platform can
+/// represent one arbitrarily far ahead.
+const MAX_TOOL_LIMIT: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
+/// `tool_limit` with the variable's value passed in, so the parsing is
+/// testable without process state. Unrecognized values warn and fall back to
+/// the default.
+fn parse_limit(raw: Option<&str>, default: Duration) -> Option<Duration> {
+    let Some(raw) = raw else {
+        return Some(default);
+    };
+    match raw.trim().parse::<u64>() {
+        Ok(0) => None,
+        Ok(seconds) => Some(Duration::from_secs(seconds).min(MAX_TOOL_LIMIT)),
+        Err(_) => {
+            eprintln!(
+                "warning: ASTRIA_TRANSCRIBE_TIMEOUT is not a number of seconds, the default \
+                 deadlines apply: {raw:?}"
+            );
+            Some(default)
+        }
+    }
 }
 
 /// Shape a raw transcript into the markdown form the document extractors
@@ -303,7 +458,10 @@ pub fn transcript_markdown(filename: &str, text: &str) -> String {
 }
 
 /// Per-file scratch directory under the system temp dir, unique per process
-/// and call; external tools write their outputs here.
+/// and call; external tools write their outputs here. It is created new and
+/// private: it holds the audio and the transcript of a file until the
+/// attempt ends, and a directory that already exists is not ours to write
+/// into.
 fn scratch_dir(input: &Path) -> Result<PathBuf, TranscribeError> {
     let stem = input
         .file_stem()
@@ -322,9 +480,23 @@ fn scratch_dir(input: &Path) -> Result<PathBuf, TranscribeError> {
         "astria-transcribe-{}-{nanos}-{safe}",
         std::process::id()
     ));
-    std::fs::create_dir_all(&dir)
+    std::fs::create_dir(&dir)
         .map_err(|e| TranscribeError::Failed(format!("cannot create scratch dir: {e}")))?;
+    #[cfg(unix)]
+    if let Err(e) = make_private(&dir) {
+        let _ = std::fs::remove_dir(&dir);
+        return Err(TranscribeError::Failed(format!(
+            "cannot create scratch dir: {e}"
+        )));
+    }
     Ok(dir)
+}
+
+/// Owner-only permissions on a directory that was just created.
+#[cfg(unix)]
+fn make_private(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
 /// Removes the scratch dir when the transcription attempt ends.
@@ -472,8 +644,8 @@ fn read_tail<R: std::io::Read + Send + 'static>(
     })
 }
 
-/// How much of the downloader's stderr is kept for an error message. It is
-/// read under `--quiet`, so this is a ceiling, not an expectation.
+/// How much of a tool's stderr is kept for an error message: the tail of
+/// what it wrote, and never more than this.
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 
 /// Resolve where the media WOULD download from (`yt-dlp -J --simulate`, one
@@ -929,6 +1101,209 @@ mod tests {
         assert!(tail.len() < 300);
 
         assert_eq!(stderr_tail(b"short"), "short");
+    }
+
+    /// A stand-in for a tool that has stopped making progress: it does
+    /// nothing for a long time, the shape of a decoder wedged on a crafted
+    /// file.
+    fn stalled_tool(dir: &Path, name: &str) -> PathBuf {
+        #[cfg(windows)]
+        let path = {
+            let path = dir.join(format!("{name}.bat"));
+            fs::write(&path, "@echo off\r\nping -n 30 127.0.0.1 > nul\r\n").unwrap();
+            path
+        };
+        #[cfg(unix)]
+        let path = {
+            let path = dir.join(name);
+            fs::write(&path, "#!/bin/sh\nsleep 30\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        path
+    }
+
+    /// A stand-in for whisper-cli that writes the transcript where it was
+    /// told to (`-of`, the seventh argument) and exits successfully.
+    fn transcribing_whisper(dir: &Path) -> PathBuf {
+        #[cfg(windows)]
+        let path = {
+            let path = dir.join("whisper-cli.bat");
+            fs::write(
+                &path,
+                "@echo off\r\necho a transcript> \"%7.txt\"\r\nexit /b 0\r\n",
+            )
+            .unwrap();
+            path
+        };
+        #[cfg(unix)]
+        let path = {
+            let path = dir.join("whisper-cli");
+            fs::write(&path, "#!/bin/sh\nprintf 'a transcript\\n' > \"$7.txt\"\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        path
+    }
+
+    /// A stand-in for whisper-cli that fails and says why on standard error.
+    fn failing_whisper(dir: &Path) -> PathBuf {
+        #[cfg(windows)]
+        let path = {
+            let path = dir.join("whisper-cli.bat");
+            fs::write(
+                &path,
+                "@echo off\r\necho boom: bad audio 1>&2\r\nexit /b 3\r\n",
+            )
+            .unwrap();
+            path
+        };
+        #[cfg(unix)]
+        let path = {
+            let path = dir.join("whisper-cli");
+            fs::write(&path, "#!/bin/sh\necho 'boom: bad audio' >&2\nexit 3\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        path
+    }
+
+    /// The next tool run on this thread gets `limit`, whatever the defaults
+    /// and the variable say.
+    fn force_tool_limit(limit: Duration) {
+        FORCED_TOOL_LIMIT.with(|forced| forced.set(Some(Some(limit))));
+    }
+
+    fn scratch_under(dir: &Path) -> PathBuf {
+        let scratch = dir.join("scratch");
+        fs::create_dir(&scratch).unwrap();
+        scratch
+    }
+
+    #[test]
+    fn demux_kills_a_stalled_ffmpeg_at_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("clip.mp4");
+        let scratch = scratch_under(dir.path());
+        force_tool_limit(Duration::from_secs(1));
+        let started = Instant::now();
+        let error = demux(&stalled_tool(dir.path(), "ffmpeg"), &input, &scratch).unwrap_err();
+        assert_eq!(
+            error,
+            TranscribeError::Failed("ffmpeg exceeded its deadline".into())
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the tool was not killed promptly: {:?}",
+            started.elapsed()
+        );
+        assert!(!scratch.join("audio.wav").exists());
+    }
+
+    #[test]
+    fn whisper_kills_a_stalled_run_at_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = scratch_under(dir.path());
+        force_tool_limit(Duration::from_secs(1));
+        let error = run_whisper(
+            &stalled_tool(dir.path(), "whisper-cli"),
+            &dir.path().join("model.bin"),
+            &dir.path().join("audio.wav"),
+            &scratch,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            TranscribeError::Failed("whisper-cli exceeded its deadline".into())
+        );
+        assert!(!scratch.join("transcript.txt").exists());
+    }
+
+    #[test]
+    fn whisper_transcript_is_read_back_and_failures_keep_the_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("model.bin");
+        let wav = dir.path().join("audio.wav");
+        fs::write(&wav, b"RIFF").unwrap();
+
+        let text = run_whisper(
+            &transcribing_whisper(dir.path()),
+            &model,
+            &wav,
+            &scratch_under(dir.path()),
+        )
+        .unwrap();
+        assert_eq!(text.trim(), "a transcript");
+
+        let failed = dir.path().join("failed");
+        fs::create_dir(&failed).unwrap();
+        let error = run_whisper(&failing_whisper(dir.path()), &model, &wav, &failed).unwrap_err();
+        match error {
+            TranscribeError::Failed(message) => {
+                assert!(message.starts_with("whisper-cli failed"), "{message}");
+                assert!(message.contains("boom: bad audio"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transcription_allowance_follows_the_audio() {
+        const MB: u64 = 1024 * 1024;
+        let floor = TRANSCRIBE_FLOOR.as_secs();
+        assert_eq!(transcription_allowance(0, true).as_secs(), floor);
+        // 16 kHz mono PCM: a MB is 33 seconds of audio, worth 3 minutes.
+        assert_eq!(
+            transcription_allowance(10 * MB, true).as_secs(),
+            floor + 10 * 180
+        );
+        // Compressed: a MB holds minutes of audio, worth 20.
+        assert_eq!(
+            transcription_allowance(10 * MB, false).as_secs(),
+            floor + 10 * 1200
+        );
+        // The largest file admitted still comes to an end.
+        let largest = transcription_allowance(MAX_MEDIA_BYTES as u64, false);
+        assert!(largest < Duration::from_secs(7 * 24 * 60 * 60));
+    }
+
+    #[test]
+    fn transcribe_limit_reads_the_variable() {
+        assert_eq!(parse_limit(None, DEMUX_TIMEOUT), Some(DEMUX_TIMEOUT));
+        assert_eq!(parse_limit(Some(" 0 "), DEMUX_TIMEOUT), None);
+        assert_eq!(
+            parse_limit(Some("90"), DEMUX_TIMEOUT),
+            Some(Duration::from_secs(90))
+        );
+        // Not a number of seconds: the defaults stay.
+        for raw in ["", "soon", "-5", "1e3"] {
+            assert_eq!(
+                parse_limit(Some(raw), DEMUX_TIMEOUT),
+                Some(DEMUX_TIMEOUT),
+                "{raw:?}"
+            );
+        }
+        // No overflow in the platforms' clocks.
+        assert_eq!(
+            parse_limit(Some("18446744073709551615"), DEMUX_TIMEOUT),
+            Some(MAX_TOOL_LIMIT)
+        );
+    }
+
+    #[test]
+    fn scratch_dir_is_new_and_private() {
+        let dir = scratch_dir(Path::new("/meetings/standup.mp4")).unwrap();
+        let _guard = ScratchDirGuard { path: dir.clone() };
+        assert!(dir.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        }
     }
 
     /// End-to-end plumbing check, self-gated: runs only on machines with
