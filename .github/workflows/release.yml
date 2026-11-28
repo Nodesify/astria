@@ -141,17 +141,19 @@ jobs:
             target: x86_64-unknown-linux-musl
             platform: linux-x64-musl
             lib: libastria_napi.so
-            # Native build (no cross toolchain needed on x86_64); musl-tools
-            # provides the musl libc link path. No embed: ONNX Runtime ships
-            # no musl prebuilt — same policy as darwin-x64, disclosed via
-            # graph_stats instead of a runtime surprise.
-            setup: sudo apt-get update && sudo apt-get install -y musl-tools
+            # Built inside an Alpine image (see the build step), where the
+            # toolchain is musl. This host cannot produce the artifact.
+            # Emitting a cdylib for the musl target has needed
+            # -crt-static since rustc 1.99 (a static-PIE target drops the
+            # crate type), and that switches off self-contained linking:
+            # the host's default C compiler then links the build host's
+            # glibc, and musl-tools' wrapper cannot resolve the unwinder
+            # rustc asks for instead. Every linux-x64-musl package from
+            # 1.6.0 to 1.7.0 was a glibc binary that Alpine cannot load.
+            # No embed: ONNX Runtime ships no musl prebuilt — same policy
+            # as darwin-x64, disclosed via graph_stats.
+            build-in: rust:1-alpine
             cargo-flags: --no-default-features
-            # rustc 1.99 enabled static-PIE on all musl targets, and a
-            # static-PIE target cannot emit a cdylib ("dropping unsupported
-            # crate type cdylib" -> no .so -> no artifact). Link against
-            # the shared musl libc (musl-tools ships it) to keep cdylib
-            # support. Validated by the musl-probe workflow on this PR.
             rustflags: -C target-feature=-crt-static
           - os: windows-latest
             target: aarch64-pc-windows-msvc
@@ -198,9 +200,38 @@ jobs:
         shell: bash
         run: rm -rf target/${{ matrix.target }}/release/build/ort-sys-* target/${{ matrix.target }}/release/build/ort-sys
       - name: Build native binary
+        if: matrix.build-in == ''
         env:
           NAPI_RS_CLI_VERSION: '3.10.8'
         run: cargo build --release --locked --target ${{ matrix.target }} -p astria-napi ${{ matrix.cargo-flags }}
+      - name: Build native binary (inside Alpine)
+        if: matrix.build-in != ''
+        # The image tracks the latest stable Rust, as the toolchain action
+        # above does. The build gets its own target directory: one restored
+        # from this host's cache can look fresh to cargo and carry a
+        # host-built, glibc-linked library through. The linkage check below
+        # makes that a failure instead of something read off a log. The
+        # build runs as root, so its files are handed to the runner's user.
+        env:
+          IMAGE: ${{ matrix.build-in }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          CARGO_TARGET_DIR: target/alpine-${{ matrix.target }}
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work \
+            -e RUSTFLAGS -e CARGO_TARGET_DIR -e CARGO_TERM_COLOR=always "$IMAGE" sh -ec '
+              apk add --no-cache musl-dev gcc binutils >/dev/null
+              cargo build --release --locked --target ${{ matrix.target }} -p astria-napi ${{ matrix.cargo-flags }}
+              so="$CARGO_TARGET_DIR/${{ matrix.target }}/release/${{ matrix.lib }}"
+              needed=$(readelf -d "$so" | sed -n "s/.*(NEEDED).*\[\(.*\)\]/\1/p")
+              echo "linked against: $(echo $needed | tr "\n" " ")"
+              if echo "$needed" | grep -qx -e "libc.so.6" -e "ld-linux*"; then
+                echo "::error::$so is linked against glibc and cannot load on a musl system"
+                exit 1
+              fi
+              chown -R "$(stat -c %u:%g .)" "$CARGO_TARGET_DIR"
+            '
+          mkdir -p target/${{ matrix.target }}/release
+          mv "$CARGO_TARGET_DIR/${{ matrix.target }}/release/${{ matrix.lib }}" target/${{ matrix.target }}/release/${{ matrix.lib }}
       - name: Copy artifact (Linux/macOS)
         if: runner.os != 'Windows'
         # dist/ is untracked (build output) — create it before the copy
@@ -261,10 +292,11 @@ jobs:
         run: node scripts/check-packed-install.mjs ${{ matrix.platform }}
       - name: Verify packed installation on musl
         if: matrix.alpine == true
-        # --skip-native-smoke: the rustc >= 1.99 cdylib regression tracked by
-        # musl-probe.yml leaves the musl artifact needing ld-linux, which
-        # Alpine does not ship. Packaging and the JS entry are still verified.
-        run: docker run --rm -v "$PWD:/work" -w /work node:22-alpine node scripts/check-packed-install.mjs linux-x64-musl --skip-native-smoke
+        # The full check, native load included: it runs the artifact in the
+        # environment it ships for. The load was skipped for 1.6.0 and
+        # 1.7.0, which is how a glibc-linked binary went out under this
+        # name. git is installed because the doctor report asks for it.
+        run: docker run --rm -v "$PWD:/work" -w /work node:22-alpine sh -c 'apk add --no-cache git >/dev/null && node scripts/check-packed-install.mjs linux-x64-musl'
 
   publish:
     # Tag pushes only (workflow_dispatch runs are rehearsals — see `on:`),

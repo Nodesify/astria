@@ -1,23 +1,23 @@
-# Probe: keeps validating the musl cdylib story. rustc >= 1.99 enabled
-# static-PIE on all musl targets — and a static-PIE target cannot emit a
-# cdylib, so the release's linux-x64-musl leg produced no artifact
-# ("dropping unsupported crate type cdylib") until -crt-static was baked
-# into release.yml. The matrix below encodes both sides of that condition,
-# so this workflow now acts as the canary on release-workflow changes.
+# Probe: keeps validating the musl cdylib story, the way the release builds
+# it — inside an Alpine image, where the toolchain is musl. rustc >= 1.99
+# enabled static-PIE on all musl targets, and a static-PIE target cannot
+# emit a cdylib, so the release leg passes -crt-static. The matrix encodes
+# both sides of that condition, so this workflow stays the canary on
+# release-workflow changes.
+# It also checks what the artifact is linked against and loads it on musl.
+# Until 1.7.0 the release built this leg on the Ubuntu host, where that
+# workaround silently produced a glibc-linked binary; this probe printed
+# the linkage and never read it, and the release's own check skipped the
+# load.
 name: musl probe
 on:
   workflow_dispatch:
-    inputs:
-      rustflags:
-        description: "RUSTFLAGS to test (empty = status quo)"
-        required: false
-        default: "-C target-feature=-crt-static"
   pull_request:
     paths:
       - .github/workflows/musl-probe.yml
       - .github/workflows/release.yml
 
-# Read-only probe: builds and inspects artifacts, never pushes.
+# Read-only probe: builds, inspects and loads artifacts; never pushes.
 permissions:
   contents: read
 
@@ -32,10 +32,7 @@ jobs:
         # the second leg asserts the KNOWN rustc >= 1.99 condition — no
         # cdylib without -crt-static — so it stays green while that holds
         # and turns red the day rustc fixes it. That red is the signal to
-        # drop the -crt-static workaround from release.yml. (The previous
-        # continue-on-error approach kept the workflow green but still
-        # reported the check run as FAILURE — red on every PR hides real
-        # failures.)
+        # drop the -crt-static workaround from release.yml.
         rustflags: ["-C target-feature=-crt-static", ""]
         include:
           - rustflags: ""
@@ -44,13 +41,12 @@ jobs:
       RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@stable # branch ref on purpose: tracks latest stable Rust; not SHA-pinned so updates keep flowing
-        with:
-          targets: x86_64-unknown-linux-musl
-      - name: musl-tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Build (no-default-features, as the release leg does)
-        run: cargo build --release --locked --target x86_64-unknown-linux-musl -p astria-napi --no-default-features
+      - name: Build (no-default-features, as the release leg does, inside Alpine)
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work -e RUSTFLAGS rust:1-alpine sh -ec '
+            apk add --no-cache musl-dev gcc binutils >/dev/null
+            cargo build --release --locked --target x86_64-unknown-linux-musl -p astria-napi --no-default-features
+          '
       - name: Report artifact
         run: |
           echo "RUSTFLAGS='${{ matrix.rustflags }}'"
@@ -60,8 +56,18 @@ jobs:
           else
             test -f target/x86_64-unknown-linux-musl/release/libastria_napi.so
           fi
-      - name: Smoke-load the .so
+      - name: It must be a musl binary, and load as one
         if: matrix.expected-failure != true
         run: |
-          file target/x86_64-unknown-linux-musl/release/libastria_napi.so
-          readelf -d target/x86_64-unknown-linux-musl/release/libastria_napi.so | head -12
+          so=target/x86_64-unknown-linux-musl/release/libastria_napi.so
+          file "$so"
+          readelf -d "$so" | head -12
+          if readelf -d "$so" | grep NEEDED | grep -qE "libc\.so\.6|ld-linux"; then
+            echo "::error::$so is linked against glibc, which a musl system cannot load"
+            exit 1
+          fi
+          docker run --rm -v "$PWD:/work" -w /work node:22-alpine node -e '
+            process.dlopen(module, process.argv[1]);
+            if (typeof module.exports.runPipeline !== "function") throw new Error("native module exports nothing");
+            console.log("loaded in Alpine: " + Object.keys(module.exports).length + " exports");
+          ' "./$so"
