@@ -42,6 +42,9 @@ this file is the per-version summary.
   a command. Every call is now an array of arguments.
 - Fixed: the Pi extension failed to load (`DEFAULT_QUERY_BUDGET is not
   defined`), so none of its tools were registered.
+- Docs site: `minimatch` is pinned to 11.0.9, past CVE-2026-118764 (moderate,
+  a denial of service through a crafted pattern; Dependabot's first alert on
+  this repository). `npm audit` on the site now reports nothing.
 
 ## [1.7.0] — 2026-11-27
 
