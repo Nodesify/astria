@@ -86,6 +86,10 @@ astria hook install|uninstall|status
 
 Installs post-commit, post-checkout, and post-merge hooks. Relevant changes run `update . --quiet`; the hooks do not apply a time-based skip. Post-merge checks the complete `ORIG_HEAD..HEAD` range, so a fast-forward pull includes changes from every incoming commit. Changed graph inputs, including project configuration, can trigger a refresh. Indexing does not run token benchmarks automatically. Errors never break the Git operation. Re-run `astria hook install` after an upgrade to refresh the installed scripts.
 
+Each hook runs the CLI that installed it — the absolute path recorded by `astria hook install` — so nothing is looked up in the repository or on `PATH` when you commit. If that CLI later moves or is removed, the hook says so at the next commit; `astria hook install` re-links it, and `astria hook status` and `astria doctor` report it.
+
+The automations `astria install` writes follow the same rule. The Claude Code `PostToolUse` hook takes `astria` from `PATH` as an absolute path and starts it without a shell: it does not run a `packages/astria-cli/dist/index.js` found in the repository being edited, nor ask `npx` to resolve one there. The Pi extension passes every tool argument as an array, so a question is data and is never parsed as a shell command. A Claude hook or Pi extension written before 1.7.1 is replaced the next time you run `astria install`.
+
 Who should install them: anyone whose AI assistant queries this repo's graph — that's the workflow where staleness silently produces wrong answers. Casual CLI users can skip them without losing anything; `status` still flags a stale graph, and a deliberate `astria update .` refreshes on demand. Hooks are per-machine and per-checkout (only runs on machines where you ran `astria hook install`), and `uninstall` removes them cleanly.
 
 ## Editor guard (`hook-guard`)

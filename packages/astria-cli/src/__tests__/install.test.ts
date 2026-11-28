@@ -9,6 +9,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { pathToFileURL } from 'url';
 
 import {
   injectClaudeHook, removeClaudeHook,
@@ -64,7 +65,18 @@ function testClaudeHook() {
   assert(!settings.hooks.PreToolUse, 'Claude: does not install PreToolUse nags');
   assert(JSON.stringify(hooks).includes('astria'), 'Claude: hooks contain astria');
   assert(!JSON.stringify(hooks).includes('graphify'), 'Claude: hooks carry no graphify name');
-  assert(JSON.stringify(hooks).includes('update .'), 'Claude: hook updates graph');
+  const command: string = hooks[0].hooks[0].command;
+  assert(command.includes("'update','.'"), 'Claude: hook updates the graph');
+  // The repository being edited never chooses what runs after an edit.
+  assert(!command.includes('packages/astria-cli'), 'Claude: no CLI taken from the repository');
+  assert(!command.includes('npx'), 'Claude: nothing resolved by npx from the project');
+  assert(!command.includes('shell:true'), 'Claude: no shell');
+  // One line that means the same in sh, cmd and PowerShell.
+  assert(!/["`$\n\r]/.test(command.slice('node -e "'.length, -1)), 'Claude: script is safe in every shell');
+  // ...and it is JavaScript.
+  let parses = true;
+  try { new Function(command.slice('node -e "'.length, -1)); } catch { parses = false; }
+  assert(parses, 'Claude: script parses as JavaScript');
 
   // idempotent — second inject returns false
   const result2 = injectClaudeHook(dir);
@@ -1058,6 +1070,11 @@ function testPiExtension() {
     assert(content.includes('"tool_result"'), 'Pi: freshness listens on tool_result');
     assert(content.includes('registerCommand("astria"'), 'Pi: /astria command registered');
     assert(content.includes('update .'), 'Pi: refreshes via the update command');
+    // The project never chooses what runs, and a question is data: every
+    // call is an array of arguments, never a command string.
+    assert(!content.includes('"node packages/astria-cli'), 'Pi: no CLI taken from the project');
+    assert(!content.includes('shell: true'), 'Pi: no shell');
+    assert(content.includes('args: (p) => ["query", String(p.question)'), 'Pi: the question is one argument');
 
     assert(injectPiExtension() === false, 'Pi: second inject returns false (idempotent)');
 
@@ -1188,6 +1205,101 @@ function testAuditFixes() {
   assert(unknownThrew, 'audit: unknown platform throws');
 }
 
+// ---- 1.7.1: the project never chooses what runs ----
+
+// A Claude hook written before 1.7.1 took the CLI from inside the repository
+// when one was there, and otherwise asked npx to resolve one in the project.
+// Inject replaces such a hook instead of leaving it in place.
+const CLI_FROM_THE_REPOSITORY = "node -e \"const p='.astria/x';const cli=fs.existsSync(path.join(root,'packages','astria-cli','dist','index.js'))?'node packages/astria-cli/dist/index.js update .':'npx --no-install astria update .'\"";
+
+function testClaudeHookThatTrustedTheRepositoryIsReplaced() {
+  const dir = tmpDir();
+  const settingsPath = path.join(dir, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify({
+    hooks: {
+      PostToolUse: [{ matcher: 'Edit|Write', hooks: [{ type: 'command', command: CLI_FROM_THE_REPOSITORY }] }],
+    },
+  }), 'utf-8');
+
+  assert(injectClaudeHook(dir) === true, 'Claude 1.7.1: inject reports replacing the hook');
+  const after = readJson(settingsPath).hooks.PostToolUse as any[];
+  assert(after.length === 1, 'Claude 1.7.1: the hook is replaced, not duplicated');
+  const text = JSON.stringify(after);
+  assert(!text.includes('npx --no-install') && !text.includes("'node packages/"), 'Claude 1.7.1: nothing is left for the repository to choose');
+  assert(injectClaudeHook(dir) === false, 'Claude 1.7.1: the replaced hook is current');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// The Pi extension used to spell each tool call out as a shell command with
+// the question in it, so a question carrying a backtick or an ampersand was
+// parsed by the shell. Now it is one argument, passed through untouched.
+async function testPiQuestionIsData(): Promise<void> {
+  const dir = tmpDir();
+  const bin = path.join(dir, 'bin');
+  const log = path.join(dir, 'calls.log');
+  // A stand-in for the CLI: it records the arguments it was given.
+  const fakeCli = "require('fs').appendFileSync(" + JSON.stringify(log) + ", JSON.stringify(process.argv.slice(2)) + '\\n');\n";
+  if (process.platform === 'win32') {
+    const entry = path.join(bin, 'node_modules', '@nodesify', 'astria', 'dist', 'index.js');
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.writeFileSync(entry, fakeCli, 'utf-8');
+    fs.writeFileSync(path.join(bin, 'astria.cmd'), '@echo off\r\n', 'utf-8');
+  } else {
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'astria'), fakeCli, 'utf-8');
+    fs.chmodSync(path.join(bin, 'astria'), 0o755);
+  }
+  const project = path.join(dir, 'project');
+  fs.mkdirSync(path.join(project, '.astria'), { recursive: true });
+  assert(injectPiExtension(project) === true, 'Pi data: extension written for the project');
+  const extension = path.join(project, '.pi', 'extensions', 'astria.mjs');
+
+  const savedPath = process.env.PATH;
+  process.env.PATH = bin;
+  try {
+    const registered = await import(pathToFileURL(extension).href);
+    const tools = new Map<string, any>();
+    registered.default({
+      registerTool: (tool: any) => tools.set(tool.name, tool),
+      on: () => {},
+      registerCommand: () => {},
+    });
+    const query = tools.get('astria_query');
+    assert(!!query, 'Pi data: the query tool is registered');
+    // Parsed by a shell on either platform, this creates the marker file.
+    const marker = path.join(dir, 'injected');
+    const question = 'what does `touch ' + marker + '` & echo x > ' + marker + ' mean $(echo y)';
+    await query.execute('call', { question }, undefined, undefined, { cwd: project });
+
+    assert(!fs.existsSync(marker), 'Pi data: nothing in the question ran');
+    assert(fs.existsSync(log), 'Pi data: the CLI was called');
+    // The refresh is detached, so it is still starting when the tool
+    // returns: wait for it to have run.
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline && !(fs.existsSync(log) && fs.readFileSync(log, 'utf-8').includes('"update"'))) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (fs.existsSync(log)) {
+      const calls = fs.readFileSync(log, 'utf-8').trim().split('\n').map((line: string) => JSON.parse(line));
+      assert(calls.some((c: string[]) => c[0] === 'query' && c[1] === question), 'Pi data: the question arrives as one argument, untouched');
+      assert(calls.some((c: string[]) => c.join(' ') === 'update .'), 'Pi data: the graph refresh runs in the background');
+    }
+  } finally {
+    process.env.PATH = savedPath;
+    // The detached refresh works inside the directory: give it a moment to
+    // exit before removing the directory, as Windows requires.
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+  }
+}
+
 // ---- Run all ----
 
 testClaudeHook();
@@ -1210,8 +1322,17 @@ testProjectScopeIsolation();
 testCopilotInstructions();
 testClaudeInstructionsFile();
 testAuditFixes();
+testClaudeHookThatTrustedTheRepositoryIsReplaced();
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) {
-  process.exit(1);
+function finish(): void {
+  console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed > 0) {
+    process.exit(1);
+  }
 }
+
+testPiQuestionIsData().then(finish, (error) => {
+  failed++;
+  console.error(error);
+  finish();
+});

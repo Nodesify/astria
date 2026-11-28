@@ -4,6 +4,48 @@ All notable changes to astria are documented here. Release notes with full
 narrative live on the [docs site blog](https://nodesify.github.io/astria/blog);
 this file is the per-version summary.
 
+## [1.7.1] — 2026-11-28
+
+- Fixed: `@nodesify/astria-linux-x64-musl` failed to load on Alpine Linux and
+  other musl systems, since 1.6.0. The release built it on an Ubuntu host,
+  where the flag that lets rustc 99 and later emit a shared library also
+  switched linking to the host's glibc. The build now runs inside an Alpine
+  container, the binary's dependencies are checked for glibc before it is
+  packed, and the release's install check loads it on musl like on every
+  other platform instead of skipping that step.
+- Security: `ffmpeg` and `whisper-cli` run under a deadline, as `yt-dlp`
+  already did. A media file that stalls a decoder could hold a build open
+  for good. The demux gets ten minutes; transcription gets half an hour plus
+  time proportional to the audio, several times slower than real time, so a
+  long recording with a large model is not cut off. A run that passes its
+  deadline is killed and the file is skipped with a notice.
+  `ASTRIA_TRANSCRIBE_TIMEOUT` overrides both.
+- Security: the directory the transcription tools write into is created
+  fresh for each attempt, readable by its owner only, and removed afterwards.
+  It was world-readable, and a directory of that name that already existed
+  would have been written into.
+- Security: the Git hooks run the CLI that installed them, by the absolute
+  path recorded at install, started with an argument list and no shell. They
+  used to try `packages/astria-cli/dist/index.js` of whatever repository the
+  commit happened in first, then `npx --no-install astria`, which resolves
+  inside the project's own `node_modules`: a repository that shipped a file
+  there had it run on every commit, checkout and merge. A hook whose CLI has
+  moved says so; `astria hook install` re-links it, and `astria hook status`
+  and `astria doctor` report it.
+- Security: the Claude Code `PostToolUse` hook and the Pi extension no
+  longer run a CLI from inside the repository being worked on. The Claude
+  hook takes `astria` from `PATH` as an absolute path, without a shell; a
+  hook written before this release is replaced on the next `astria install`.
+  The Pi extension passed each tool call to a shell as a command string with
+  the question in it, so a question containing a backtick or an
+  ampersand — which an agent can be led to ask by text in a repository — ran
+  a command. Every call is now an array of arguments.
+- Fixed: the Pi extension failed to load (`DEFAULT_QUERY_BUDGET is not
+  defined`), so none of its tools were registered.
+- Docs site: `minimatch` is pinned to 11.0.9, past CVE-2026-118764 (moderate,
+  a denial of service through a crafted pattern; Dependabot's first alert on
+  this repository). `npm audit` on the site now reports nothing.
+
 ## [1.7.0] — 2026-11-27
 
 - Security: file discovery never follows a symbolic link. A repository that
@@ -717,3 +759,5 @@ See the [GitHub releases page](https://github.com/Nodesify/astria/releases).
 [1.5.0]: https://github.com/Nodesify/astria/compare/v1.4.0...v1.5.0
 
 [1.7.0]: https://github.com/Nodesify/astria/compare/v1.6.0...v1.7.0
+
+[1.7.1]: https://github.com/Nodesify/astria/compare/v1.7.0...v1.7.1

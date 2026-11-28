@@ -64,7 +64,7 @@ export function doctorCommand(opts: { graph: string; scope: string; json?: boole
   });
   check('git hooks', () => {
     const hooks = statusGitHooks(path.resolve(opts.graph));
-    add('git hooks', hooks.some(h => /unsafe|legacy|Not a git/.test(h)) ? 'warning' : 'ok', hooks.join('; '));
+    add('git hooks', hooks.some(h => /unsafe|legacy|gone|Not a git/.test(h)) ? 'warning' : 'ok', hooks.join('; '));
   });
   check('graph', () => {
     if (!fs.existsSync(path.join(opts.graph, '.astria', 'db.sqlite'))) { add('graph', 'warning', 'No graph; run astria run . --backend none'); return; }

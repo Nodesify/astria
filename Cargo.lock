@@ -136,7 +136,6 @@ name = "astria-core"
 version = "1.0.0"
 dependencies = [
  "fs2",
- "petgraph",
  "regex",
  "rusqlite",
  "serde",
@@ -247,7 +246,6 @@ dependencies = [
 name = "astria-gws"
 version = "1.0.0"
 dependencies = [
- "astria-core",
  "serde_json",
  "tempfile",
  "ureq",

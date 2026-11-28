@@ -211,7 +211,9 @@ jobs:
         # from this host's cache can look fresh to cargo and carry a
         # host-built, glibc-linked library through. The linkage check below
         # makes that a failure instead of something read off a log. The
-        # build runs as root, so its files are handed to the runner's user.
+        # build runs as root, so everything it creates under target/ is
+        # handed to the runner's user: the build directory, and target/
+        # itself when cargo had to make it — the step below writes into it.
         env:
           IMAGE: ${{ matrix.build-in }}
           RUSTFLAGS: ${{ matrix.rustflags }}
@@ -228,7 +230,7 @@ jobs:
                 echo "::error::$so is linked against glibc and cannot load on a musl system"
                 exit 1
               fi
-              chown -R "$(stat -c %u:%g .)" "$CARGO_TARGET_DIR"
+              chown -R "$(stat -c %u:%g .)" target
             '
           mkdir -p target/${{ matrix.target }}/release
           mv "$CARGO_TARGET_DIR/${{ matrix.target }}/release/${{ matrix.lib }}" target/${{ matrix.target }}/release/${{ matrix.lib }}

@@ -116,13 +116,49 @@ const isInstallerServer = (entry: any): boolean =>
 
 // ---- Claude Code (.claude/settings.json) ----
 
+// Runs after Edit/Write, detached and debounced so editing never waits for a
+// graph rebuild. The statements are joined into one line of JavaScript that
+// contains neither a double quote, a dollar, a backtick nor a newline, so
+// that it means the same thing in sh, cmd and PowerShell: the client runs
+// the command with the user's shell.
+//
+// The CLI is taken from PATH as an absolute path and started without a
+// shell. Until 1.7.1 the hook ran `packages/astria-cli/dist/index.js` of
+// whatever repository was being edited when one existed, and otherwise
+// `npx --no-install astria`, which resolves inside the project's own
+// node_modules: the repository chose what ran after every edit.
+const CLAUDE_POST_UPDATE_SCRIPT = [
+  "const fs=require('fs'),cp=require('child_process'),path=require('path')",
+  "function refresh(root){",
+  "const names=process.platform==='win32'?['astria.cmd']:['astria']",
+  "const cli=(process.env.PATH||'').split(path.delimiter).flatMap(d=>names.map(n=>path.join(d,n))).find(f=>fs.existsSync(f))",
+  "if(!cli)return",
+  "const entry=process.platform==='win32'?path.join(path.dirname(cli),'node_modules','@nodesify','astria','dist','index.js'):cli",
+  "cp.spawn(process.execPath,[entry,'update','.'],{cwd:root,detached:true,stdio:'ignore'}).unref()",
+  "}",
+  "try{",
+  "const root=cp.execSync('git rev-parse --show-toplevel',{encoding:'utf8'}).trim()",
+  "const stamp=path.join(root,'.astria','.posttool-update')",
+  "if(fs.existsSync(stamp)&&Date.now()-fs.statSync(stamp).mtimeMs<120000)process.exit(0)",
+  "fs.mkdirSync(path.dirname(stamp),{recursive:true})",
+  "fs.writeFileSync(stamp,String(Date.now()))",
+  "refresh(root)",
+  "}catch{}",
+].join(';');
+
 const CLAUDE_POST_UPDATE_HOOK = {
   matcher: 'Edit|Write',
   hooks: [{
     type: 'command',
-    // Detached and debounced so editing never waits for a graph rebuild.
-    command: `node -e "const fs=require('fs'),cp=require('child_process'),path=require('path');try{const root=cp.execSync('git rev-parse --show-toplevel',{encoding:'utf8'}).trim();const stamp=path.join(root,'.astria','.posttool-update');if(fs.existsSync(stamp)&&Date.now()-fs.statSync(stamp).mtimeMs<120000)process.exit(0);fs.mkdirSync(path.dirname(stamp),{recursive:true});fs.writeFileSync(stamp,String(Date.now()));const cli=fs.existsSync(path.join(root,'packages','astria-cli','dist','index.js'))?'node packages/astria-cli/dist/index.js update .':'npx --no-install astria update .';cp.spawn(cli,{cwd:root,shell:true,detached:true,stdio:'ignore'}).unref()}catch{}"`,
+    command: `node -e "${CLAUDE_POST_UPDATE_SCRIPT}"`,
   }],
+};
+
+/// A PostToolUse hook this installer wrote before 1.7.1, which let the
+/// repository choose the CLI. It is replaced, not left in place.
+const isUnsafeClaudeHook = (h: any): boolean => {
+  const s: string = JSON.stringify(h?.hooks ?? null);
+  return s.includes('packages/astria-cli/dist/index.js') || s.includes('npx --no-install astria');
 };
 
 export function injectClaudeHook(projectDir: string): boolean {
@@ -138,13 +174,14 @@ export function injectClaudeHook(projectDir: string): boolean {
 
   const post = (data.hooks.PostToolUse || []) as any[];
   const hadLegacyPost = post.some((h: any) => isLegacy(JSON.stringify(h.hooks)));
-  const hadPost = post.some((h: any) => isCurrent(JSON.stringify(h.hooks)));
-  const upgraded = post.filter((h: any) => !isLegacy(JSON.stringify(h.hooks)));
-  if (!hadPost) upgraded.push(CLAUDE_POST_UPDATE_HOOK);
-  data.hooks.PostToolUse = upgraded;
+  const hadUnsafePost = post.some(isUnsafeClaudeHook);
+  const kept = post.filter((h: any) => !isLegacy(JSON.stringify(h.hooks)) && !isUnsafeClaudeHook(h));
+  const hadPost = kept.some((h: any) => isCurrent(JSON.stringify(h.hooks)));
+  if (!hadPost) kept.push(CLAUDE_POST_UPDATE_HOOK);
+  data.hooks.PostToolUse = kept;
   if (Object.keys(data.hooks).length === 0) delete data.hooks;
   writeJson(settingsPath, data);
-  return !hadPost || hadLegacyPre || hadLegacyPost;
+  return !hadPost || hadLegacyPre || hadLegacyPost || hadUnsafePost;
 }
 
 export function removeClaudeHook(projectDir: string): boolean {
@@ -798,15 +835,32 @@ const PI_EXTENSION_JS = `// astria extension for the Pi coding agent.
 // Native tools (pi-idiomatic): astria_query/map/explain/path/affected,
 // backed by the astria CLI. Freshness: write/edit refresh the graph
 // (throttled, detached). /astria: guidance.
-import { spawn } from "node:child_process";
+import { fork, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
-function astriaCli(cwd) {
-  return existsSync(join(cwd, "packages", "astria-cli", "dist", "index.js"))
-    ? "node packages/astria-cli/dist/index.js"
-    : "astria";
+// The CLI as an absolute path found on PATH, and started without a shell
+// from an array of arguments. Until 1.7.1 this preferred
+// packages/astria-cli/dist/index.js of whatever project the agent was
+// working in, and spelled each call out as a shell command with the
+// question in it: the project chose what ran, and a question carrying a
+// backtick or a dollar-parenthesis ran a command of its own.
+function astriaEntry() {
+  const names = process.platform === "win32" ? ["astria.cmd"] : ["astria"];
+  const found = (process.env.PATH || "")
+    .split(delimiter)
+    .flatMap((dir) => names.map((name) => join(dir, name)))
+    .find((file) => existsSync(file));
+  if (!found) return null;
+  // npm's Windows shim is a batch file, which needs a shell; the entry
+  // behind it does not.
+  const entry = process.platform === "win32"
+    ? join(dirname(found), "node_modules", "@nodesify", "astria", "dist", "index.js")
+    : found;
+  return existsSync(entry) ? entry : null;
 }
+
+const NO_CLI = "The astria CLI was not found on PATH. Install it (npm install -g @nodesify/astria) and restart the agent.";
 
 function run(args, cwd) {
   if (!existsSync(join(cwd, ".astria"))) {
@@ -814,8 +868,10 @@ function run(args, cwd) {
       out: 'No astria graph in this project. Build one first: run "astria run ." (creates .astria/ with the knowledge graph).',
     });
   }
+  const entry = astriaEntry();
+  if (!entry) return Promise.resolve({ out: NO_CLI });
   return new Promise((resolve) => {
-    const child = spawn(astriaCli(cwd) + " " + args, { cwd, shell: true });
+    const child = spawn(process.execPath, [entry, ...args], { cwd });
     let out = "";
     let err = "";
     const timer = setTimeout(() => child.kill(), 90000);
@@ -840,7 +896,9 @@ function refreshGraph(cwd, awaitSpawn) {
     const now = Date.now();
     if (now - lastUpdate < 120000) return Promise.resolve(false);
     lastUpdate = now;
-    const child = spawn(astriaCli(cwd) + " update .", { cwd, shell: true, detached: true, stdio: "ignore" });
+    const entry = astriaEntry();
+    if (!entry) return Promise.resolve(false);
+    const child = fork(entry, ["update", "."], { cwd, detached: true, stdio: "ignore" });
     child.unref();
     if (!awaitSpawn) return Promise.resolve(true);
     // Print-mode sessions exit the instant the tool returns — a detached
@@ -856,22 +914,24 @@ function refreshGraph(cwd, awaitSpawn) {
   }
 }
 
+// Each tool spells its call as an array of arguments, never as a command
+// string: a question is data, and must not be parsed by a shell.
 const ASTRIA_TOOLS = [
   {
     name: "astria_query",
     cli: "query",
-    args: (p) => "query " + JSON.stringify(p.question) + " --budget " + (p.budget || DEFAULT_QUERY_BUDGET) + " --graph .",
+    args: (p) => ["query", String(p.question), "--budget", String(p.budget || ${DEFAULT_QUERY_BUDGET}), "--graph", "."],
     description: 'Query the repo knowledge graph with a natural-language question. Ranked nodes carry file:line anchors and edge provenance. Prefer over grep for architecture/cross-module questions. "No confident match" means the vocabulary is absent — rephrase toward symbol names.',
     props: {
       question: { type: "string", description: "Natural-language question about the codebase" },
-      budget: { type: "integer", description: "Max output tokens (default " + DEFAULT_QUERY_BUDGET + ")" },
+      budget: { type: "integer", description: "Max output tokens (default ${DEFAULT_QUERY_BUDGET})" },
     },
     required: ["question"],
   },
   {
     name: "astria_map",
     cli: "map",
-    args: () => "map --budget " + DEFAULT_QUERY_BUDGET + " --graph .",
+    args: () => ["map", "--budget", String(${DEFAULT_QUERY_BUDGET}), "--graph", "."],
     description: "PageRank-ranked repo map with top symbols per file — orient before diving in.",
     props: {},
     required: [],
@@ -879,7 +939,7 @@ const ASTRIA_TOOLS = [
   {
     name: "astria_explain",
     cli: "explain",
-    args: (p) => "explain " + JSON.stringify(p.node) + " --graph .",
+    args: (p) => ["explain", String(p.node), "--graph", "."],
     description: "Explain a symbol: metadata plus its strongest connections with real edge direction and evidence tier.",
     props: { node: { type: "string", description: "Symbol or node name" } },
     required: ["node"],
@@ -887,7 +947,7 @@ const ASTRIA_TOOLS = [
   {
     name: "astria_path",
     cli: "path",
-    args: (p) => "path " + JSON.stringify(p.from) + " " + JSON.stringify(p.to) + " --graph .",
+    args: (p) => ["path", String(p.from), String(p.to), "--graph", "."],
     description: "Shortest connection path between two symbols or concepts, relations per hop.",
     props: { from: { type: "string" }, to: { type: "string" } },
     required: ["from", "to"],
@@ -895,7 +955,7 @@ const ASTRIA_TOOLS = [
   {
     name: "astria_affected",
     cli: "affected",
-    args: (p) => "affected " + JSON.stringify(p.node) + " --depth " + (p.depth || 2) + " --graph .",
+    args: (p) => ["affected", String(p.node), "--depth", String(p.depth || 2), "--graph", "."],
     description: "Blast radius — run BEFORE changing a shared symbol. Hops show evidence tier (RESOLVED = source-extracted call uniquely bound; INFERRED = weaker).",
     props: {
       node: { type: "string", description: "Symbol to assess" },
