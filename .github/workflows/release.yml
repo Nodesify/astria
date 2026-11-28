@@ -4,11 +4,19 @@ on:
   push:
     tags:
       - 'v*'
-  # Dispatch = rehearsal: runs ci + verify + the full build matrix +
-  # rehearse-pack (npm publish --dry-run). Nothing is published — the
-  # publish job only runs on v* tag pushes, so a stray click can never
-  # publish from a branch.
+  # Dispatch = rehearsal by default: runs ci + verify + the full build
+  # matrix + rehearse-pack (npm publish --dry-run), and nothing is published
+  # — the publish job only runs on v* tag pushes, so a stray click can never
+  # publish to npm from a branch.
+  # With registry_only the rehearsal is skipped and server.json on the chosen
+  # ref goes to the MCP Registry instead: that completes a release whose
+  # publish job stopped after npm (v1.7.0's did). It sends nothing to npm.
   workflow_dispatch:
+    inputs:
+      registry_only:
+        description: 'Only publish server.json to the MCP Registry (complete a release whose publish job stopped before that step)'
+        type: boolean
+        default: false
 
 # Least-privilege default: jobs that need more declare it explicitly.
 permissions:
@@ -17,6 +25,9 @@ permissions:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+    # The rehearsal's entry jobs; everything below needs one of them. A
+    # registry-only dispatch skips them, and with them the whole rehearsal.
+    if: ${{ !inputs.registry_only }}
     # ci.yml defaults to contents:read top-level and elevates checks:write
     # only on its audit job; called workflows may downgrade but not elevate
     # the caller's scopes, so this caller must grant checks:write for the
@@ -26,6 +37,7 @@ jobs:
       checks: write
 
   verify:
+    if: ${{ !inputs.registry_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -291,7 +303,17 @@ jobs:
             done
           done
       - name: Install dependencies
-        run: cd packages/astria-cli && npm ci
+        # `npm ci` accepts a lockfile whose platform entries are one version
+        # behind only while that version is not on npm. Once this job has
+        # published them, a rerun stops here (EUSAGE: does not satisfy) with
+        # the Release and the registry still owed — as v1.7.0's did. Refresh
+        # those entries in the workspace and install again.
+        run: |
+          cd packages/astria-cli
+          npm ci || {
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+            npm ci
+          }
       - name: Build CLI
         run: cd packages/astria-cli && npm run build
       - name: Upgrade npm for OIDC
@@ -371,17 +393,19 @@ jobs:
       - name: Wait for npm to serve the published version
         # The MCP Registry validates the published package's mcpName by
         # fetching it from npm, and npm's CDN can 404 a just-published
-        # version for a few seconds (v1.0.10 hit exactly this race).
-        # Poll until the version is visible, then hard-fail if it never is.
+        # version for a while (v1.0.10 hit exactly this race). Poll until the
+        # version is visible, then hard-fail if it never is. Two minutes was
+        # not enough for v1.7.0 — npm served it seconds after the wait ended,
+        # and the Release and the registry publish were both skipped.
         run: |
           version=$(node -p "require('./packages/astria-cli/package.json').version")
-          for i in $(seq 1 24); do
+          for i in $(seq 1 60); do
             if npm view "@nodesify/astria@$version" version > /dev/null 2>&1; then
               echo "npm is serving @nodesify/astria@$version"
               break
             fi
-            echo "npm not serving $version yet (attempt $i/24) — waiting 5s"
-            sleep 5
+            echo "npm not serving $version yet (attempt $i/60) — waiting 10s"
+            sleep 10
           done
           npm view "@nodesify/astria@$version" version > /dev/null
       - name: Prepare Homebrew formula update
@@ -423,27 +447,35 @@ jobs:
         # registry rejects or races (v1.0.9's 403 case mismatch and v1.0.10's
         # npm-CDN race both aborted the job mid-flight and left v1.0.9 with
         # no Release at all). The npm publishes above have already succeeded,
-        # so a failure here only delays the directory listing — re-run this
-        # failed job to retry, every step is idempotent. `login github-oidc`
-        # exchanges the job's OIDC token (id-token: write above) for a
-        # registry token and only permits io.github.<owner>/ namespaces —
-        # server.json must match the org login's exact case (Nodesify).
-        # The publisher is pinned and checksum-verified like the SHA-pinned
-        # actions above: this step runs with the job's OIDC and GitHub
-        # tokens, so a floating releases/latest download would execute
-        # whatever the registry repo most recently shipped. Bump the tag and
-        # sha256 together, deliberately. The publish job is ubuntu-only, so
-        # the linux_amd64 asset is hardcoded.
-        env:
-          MCP_PUBLISHER_TAG: v1.8.1
-          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+        # so a failure here only delays the directory listing. Rerun the
+        # failed job, or dispatch with registry_only: every step is idempotent.
+        uses: ./.github/actions/mcp-publish
+
+  # Manual completion of the publish job's last step, for a release whose
+  # publish job stopped after npm (v1.7.0: npm took a little over two
+  # minutes to serve the version, and the job had waited two). Dispatch with
+  # registry_only on the branch or tag holding the released server.json.
+  # Nothing is built, and nothing goes to npm.
+  publish-registry:
+    if: github.event_name == 'workflow_dispatch' && inputs.registry_only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.14.0'
+      - name: Wait for npm to serve the version
+        # The registry fetches the npm package that server.json names.
         run: |
-          curl -fsSL -o mcp-publisher.tar.gz \
-            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz"
-          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum --check -
-          tar xzf mcp-publisher.tar.gz mcp-publisher
-          ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
+          version=$(node -p "require('./packages/astria-cli/package.json').version")
+          npm view "@nodesify/astria@$version" version
+      - name: Publish to the official MCP Registry
+        uses: ./.github/actions/mcp-publish
 
   # Rehearsal counterpart of `publish` for workflow_dispatch runs: assembles
   # the exact npm packages a release would publish and packs each with
