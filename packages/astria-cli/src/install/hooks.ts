@@ -3,43 +3,84 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { writeTextAtomic, withInstallLock } from './atomic';
 
-const UPDATE_HELPER = `
-const ASTRIA_HOOK_VERSION = '5';
-// Prefer a workspace-local CLI, then a locally-installed package, and only
-// then whatever is on PATH — a stale global install would rebuild the graph
-// with old pipeline code and silently regress the report.
-// update . accepts --quiet since 1.0.7; older CLIs error on the
-// unknown flags, so each invocation style retries in plain form before
-// moving to the next executable. All failures are swallowed: a hook must
-// never break a commit.
-function runAstriaUpdate() {
-  // Always inspect inputs: a recent graph can still have changed configuration
-  // or newly added files outside its previous manifest.
-  const flagged = 'update . --quiet';
-  const attempts = [
-    'node packages/astria-cli/dist/index.js ' + flagged,
-    'node packages/astria-cli/dist/index.js update .',
-    'npx --no-install astria ' + flagged,
-    'npx --no-install astria update .',
-    'astria ' + flagged,
-    'astria update .',
-  ];
-  for (const cmd of attempts) {
-    try {
-      execSync(cmd, { stdio: 'inherit' });
-      return;
-    } catch {
-      // Try the next invocation style.
-    }
+/// Bumped whenever the hook scripts change, so that the installer refreshes
+/// the hooks an earlier release wrote.
+const HOOK_VERSION = '6';
+
+/// Whether two paths name the same file.
+function sameFile(a: string, b: string): boolean {
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return false;
   }
 }
-`;
 
-const POST_COMMIT_SCRIPT = `// astria-hook-start
+/// The CLI entry a hook records and runs. The path this process was invoked
+/// by is preferred when it is the entry next to this file under another
+/// name: a package manager's symlink (`/opt/homebrew/bin/astria`) outlives
+/// the versioned directory it points at, where the real path does not. Any
+/// other invocation — a test runner, a tool that `require`s this module —
+/// gets the entry next to this file.
+function cliEntry(): string {
+  return resolveCliEntry(process.argv[1], path.resolve(__dirname, '..', 'index.js'), sameFile);
+}
+
+/// `cliEntry` with its inputs passed in, so the choice is testable without
+/// process state.
+export function resolveCliEntry(
+  invoked: string | undefined,
+  beside: string,
+  same: (a: string, b: string) => boolean,
+): string {
+  if (invoked && path.isAbsolute(invoked) && same(invoked, beside)) return invoked;
+  return beside;
+}
+
+const VERSION_SENTINEL = `ASTRIA_HOOK_VERSION = '${HOOK_VERSION}'`;
+
+/// The line of a hook script that records the CLI it runs.
+function cliEntryLine(entry: string): string {
+  return `const ASTRIA_CLI_ENTRY = ${JSON.stringify(entry)};`;
+}
+
+/// The CLI a hook script records, or null when it records none (a script
+/// written before 1.7.1).
+function recordedEntry(hookContent: string): string | null {
+  const match = hookContent.match(/^const ASTRIA_CLI_ENTRY = (".*");$/m);
+  return match ? (JSON.parse(match[1]) as string) : null;
+}
+
+function updateHelper(entry: string): string {
+  return `
+const ASTRIA_HOOK_VERSION = '${HOOK_VERSION}';
+// The hook runs the CLI that installed it: the absolute path of its entry,
+// recorded at install time, started with the Node that runs this hook.
+// Nothing is looked up when a commit happens. A path relative to the
+// repository, or a name left to npx or the shell to resolve, lets the
+// repository being committed — or whatever a script has put first on PATH —
+// choose what runs here.
+${cliEntryLine(entry)}
+const { execFileSync } = require('child_process');
+function runAstriaUpdate() {
+  if (!existsSync(ASTRIA_CLI_ENTRY)) {
+    console.error('[astria] the CLI that installed this hook is gone (' + ASTRIA_CLI_ENTRY + ') - run "astria hook install" to re-link it');
+    return;
+  }
+  // --quiet keeps the refresh out of the Git operation's output. A failure
+  // is swallowed: a hook must never break a commit.
+  try {
+    execFileSync(process.execPath, [ASTRIA_CLI_ENTRY, 'update', '.', '--quiet'], { stdio: 'inherit' });
+  } catch {}
+}
+`;
+}
+
+const postCommitScript = (entry: string): string => `// astria-hook-start
 const { execSync } = require('child_process');
 const { existsSync } = require('fs');
 const path = require('path');
-${UPDATE_HELPER}
+${updateHelper(entry)}
 try {
   // No shell redirects here: execSync uses cmd.exe on Windows where
   // "2>/dev/null" fails with "The system cannot find the path specified".
@@ -61,11 +102,11 @@ try {
 // astria-hook-end
 `;
 
-const POST_CHECKOUT_SCRIPT = `// astria-checkout-hook-start
+const postCheckoutScript = (entry: string): string => `// astria-checkout-hook-start
 const { execSync } = require('child_process');
 const { existsSync } = require('fs');
 const path = require('path');
-${UPDATE_HELPER}
+${updateHelper(entry)}
 const branchSwitch = process.argv[3];
 if (branchSwitch !== '1') process.exit(0);
 if (!existsSync('.astria')) process.exit(0);
@@ -84,11 +125,11 @@ try {
 // post-merge runs after true merges and fast-forward merges, including pulls.
 // ORIG_HEAD records the branch tip before the merge, covering every incoming
 // commit in a multi-commit fast-forward. Squash merges refresh on commit.
-const POST_MERGE_SCRIPT = `// astria-merge-hook-start
+const postMergeScript = (entry: string): string => `// astria-merge-hook-start
 const { execSync } = require('child_process');
 const { existsSync } = require('fs');
 const path = require('path');
-${UPDATE_HELPER}
+${updateHelper(entry)}
 if (!existsSync('.astria')) process.exit(0);
 
 try {
@@ -110,7 +151,8 @@ try {
 
 interface HookDef {
   hookName: string;
-  script: string;
+  /// The hook script, for the CLI entry it is to record and run.
+  script: (cliEntry: string) => string;
   startMarker: string;
   endMarker: string;
   // Older releases wrote sections under other markers: 0.3–0.9 shipped the
@@ -128,7 +170,7 @@ const LEGACY_HOOK_PREFIXES = [
 const HOOK_DEFS: HookDef[] = [
   {
     hookName: 'post-commit',
-    script: POST_COMMIT_SCRIPT,
+    script: postCommitScript,
     startMarker: '// astria-hook-start',
     endMarker: '// astria-hook-end',
     legacyMarkers: [
@@ -138,7 +180,7 @@ const HOOK_DEFS: HookDef[] = [
   },
   {
     hookName: 'post-checkout',
-    script: POST_CHECKOUT_SCRIPT,
+    script: postCheckoutScript,
     startMarker: '// astria-checkout-hook-start',
     endMarker: '// astria-checkout-hook-end',
     legacyMarkers: [
@@ -148,7 +190,7 @@ const HOOK_DEFS: HookDef[] = [
   },
   {
     hookName: 'post-merge',
-    script: POST_MERGE_SCRIPT,
+    script: postMergeScript,
     startMarker: '// astria-merge-hook-start',
     endMarker: '// astria-merge-hook-end',
     // No legacy release ever shipped a post-merge hook, so there is no
@@ -233,7 +275,7 @@ function hookPathOrNull(hooksDir: string, hookName: string): string | null {
   return path.join(hooksDir, hookName);
 }
 
-function installHook(hooksDir: string, def: HookDef): string {
+function installHook(hooksDir: string, def: HookDef, entry: string): string {
   const hookPath = hookPathOrNull(hooksDir, def.hookName);
   if (!hookPath) return `${def.hookName}: skipped (unsafe hook name)`;
   if (!fs.existsSync(hooksDir)) {
@@ -249,7 +291,7 @@ function installHook(hooksDir: string, def: HookDef): string {
 
     if (isOwnShebangOnly(content)) {
       // File contained only our legacy section - rewrite fresh in current format
-      writeTextAtomic(hookPath, '#!/usr/bin/env node\n\n' + def.script);
+      writeTextAtomic(hookPath, '#!/usr/bin/env node\n\n' + def.script(entry));
       return hadLegacy
         ? `${def.hookName}: migrated legacy hook to current format`
         : `${def.hookName}: installed`;
@@ -259,14 +301,20 @@ function installHook(hooksDir: string, def: HookDef): string {
       // Refresh the script body when it predates the current template
       // (sentinel: ASTRIA_HOOK_VERSION resolver). Without this, fixed
       // templates would never reach already-installed hooks.
-      if (!content.includes("ASTRIA_HOOK_VERSION = '5'")) {
+      const current = content.includes(VERSION_SENTINEL);
+      // And when it records another CLI: one that has moved away or been
+      // removed (a versioned install directory), or a second install that
+      // the user now runs `hook install` from.
+      if (!current || !content.includes(cliEntryLine(entry))) {
         content = stripMarkerSection(content, def.startMarker, def.endMarker);
         const refreshed =
           content.trim() === '' || SHEBANGS.includes(content.trim())
-            ? '#!/usr/bin/env node\n\n' + def.script
-            : content.trimEnd() + '\n\n' + def.script;
+            ? '#!/usr/bin/env node\n\n' + def.script(entry)
+            : content.trimEnd() + '\n\n' + def.script(entry);
         writeTextAtomic(hookPath, refreshed);
-        return `${def.hookName}: updated script to current version`;
+        return current
+          ? `${def.hookName}: re-linked to this CLI`
+          : `${def.hookName}: updated script to current version`;
       }
       if (hadLegacy) {
         writeTextAtomic(hookPath, content);
@@ -283,13 +331,13 @@ function installHook(hooksDir: string, def: HookDef): string {
       return `${def.hookName}: skipped (existing hook is not a Node script; appending the astria updater would break it — bridge it manually if you want graph refreshes)`;
     }
 
-    writeTextAtomic(hookPath, content.trimEnd() + '\n\n' + def.script);
+    writeTextAtomic(hookPath, content.trimEnd() + '\n\n' + def.script(entry));
     return hadLegacy
       ? `${def.hookName}: appended to existing hook (replaced legacy section)`
       : `${def.hookName}: appended to existing hook`;
   }
 
-  writeTextAtomic(hookPath, '#!/usr/bin/env node\n\n' + def.script);
+  writeTextAtomic(hookPath, '#!/usr/bin/env node\n\n' + def.script(entry));
   try { fs.chmodSync(hookPath, 0o755); } catch { /* Windows */ }
   return `${def.hookName}: installed`;
 }
@@ -318,12 +366,12 @@ function uninstallHook(hooksDir: string, def: HookDef): string {
   return `${def.hookName}: removed`;
 }
 
-function installGitHooksRaw(projectDir: string): string[] {
+function installGitHooksRaw(projectDir: string, entry: string): string[] {
   const gitRoot = getGitRoot(projectDir);
   if (!gitRoot) return ['Not a git repository'];
 
   const hooksDir = getHooksDir(gitRoot);
-  return HOOK_DEFS.map(def => installHook(hooksDir, def));
+  return HOOK_DEFS.map(def => installHook(hooksDir, def, entry));
 }
 
 function uninstallGitHooksRaw(projectDir: string): string[] {
@@ -350,7 +398,12 @@ export function statusGitHooks(projectDir: string): string[] {
     if (fs.existsSync(hookPath)) {
       const content = fs.readFileSync(hookPath, 'utf-8');
       if (content.includes(def.startMarker)) {
-        results.push(`${def.hookName}: installed`);
+        const recorded = recordedEntry(content);
+        if (recorded !== null && !fs.existsSync(recorded)) {
+          results.push(`${def.hookName}: installed, but its CLI is gone - run hook install to re-link it`);
+        } else {
+          results.push(`${def.hookName}: installed`);
+        }
       } else if (hasLegacyMarker(content, def)) {
         results.push(`${def.hookName}: installed (legacy format - run hook install to migrate)`);
       } else {
@@ -368,5 +421,7 @@ export function statusGitHooks(projectDir: string): string[] {
 // recognizes (nodesify-graphify JS hooks, and pre-0.3 shell hooks).
 export { LEGACY_HOOK_PREFIXES };
 
-export function installGitHooks(projectDir: string): string[] { return withInstallLock(() => installGitHooksRaw(projectDir)); }
+/// Install the hooks for the repository around `projectDir`, recording
+/// `entry` as the CLI they run: by default this CLI, see `cliEntry`.
+export function installGitHooks(projectDir: string, entry: string = cliEntry()): string[] { return withInstallLock(() => installGitHooksRaw(projectDir, entry)); }
 export function uninstallGitHooks(projectDir: string): string[] { return withInstallLock(() => uninstallGitHooksRaw(projectDir)); }

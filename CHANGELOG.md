@@ -24,6 +24,24 @@ this file is the per-version summary.
   fresh for each attempt, readable by its owner only, and removed afterwards.
   It was world-readable, and a directory of that name that already existed
   would have been written into.
+- Security: the Git hooks run the CLI that installed them, by the absolute
+  path recorded at install, started with an argument list and no shell. They
+  used to try `packages/astria-cli/dist/index.js` of whatever repository the
+  commit happened in first, then `npx --no-install astria`, which resolves
+  inside the project's own `node_modules`: a repository that shipped a file
+  there had it run on every commit, checkout and merge. A hook whose CLI has
+  moved says so; `astria hook install` re-links it, and `astria hook status`
+  and `astria doctor` report it.
+- Security: the Claude Code `PostToolUse` hook and the Pi extension no
+  longer run a CLI from inside the repository being worked on. The Claude
+  hook takes `astria` from `PATH` as an absolute path, without a shell; a
+  hook written before this release is replaced on the next `astria install`.
+  The Pi extension passed each tool call to a shell as a command string with
+  the question in it, so a question containing a backtick or an
+  ampersand — which an agent can be led to ask by text in a repository — ran
+  a command. Every call is now an array of arguments.
+- Fixed: the Pi extension failed to load (`DEFAULT_QUERY_BUDGET is not
+  defined`), so none of its tools were registered.
 
 ## [1.7.0] — 2026-11-27
 
